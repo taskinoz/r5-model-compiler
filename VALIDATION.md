@@ -1,184 +1,77 @@
-# Titanfall 2 validation — 27 October 2026
+# Apex early-season compiler validation - 6 November 2026
 
-This build is validated against 4,024 distinct retail Titanfall 2 models: all
-602 multiplayer common models and 3,422 unique single-player models. It also has
-authored-input regressions and Northstar runtime checks. This is finite evidence
-for the tested files and features, rather than a guarantee for every possible QC
-or a claim of complete Valve/Respawn studiomdl feature parity.
+This is the first experimental R5 implementation, not a stable release or a claim
+of full Apex model/compiler equivalence. No in-game run or RPak bake was performed.
+Latest retail is installed but is not a compiler target.
 
-Windows x64 MSVC Release executable, with the static C++ runtime:
-`build/r2studiomdl.exe`.
-SHA-256: `9fda259f52d3ef03a3899de1b1ecc6b90f816f9e009554902ee67637fd5ea9bc`.
-
-The reports below live under `test-output/` and are not distributed: they contain
-paths to assets extracted from the user's own installation. Reproduce the runs
-using your own retail corpus; no game models are included in this repository.
+Windows x64 MSVC Release: build/r5studiomdl.exe
+SHA-256: `c5a9b6316f06332bc3a8469a307f9b2d418fdb031070dde573ed63f3188d0dc0`.
 
 ## Automated checks
 
-- Both CTest groups pass: collision hulls and compiler regressions.
-- All 62 Python tests pass through the ordinary and locked `uv run` routes.
-- Regressions cover SMD and binary/keyvalues2 DMX, Blender Source Tools fixtures,
-  local bind scale and inverse binds, Euler poles and quantization endpoints,
-  animation section boundaries, raw/RLE precision, root movement, IK samples,
-  procedural bones, UI panels, followers, skin weights, mesh attributes and LODs.
-- Physics tests cover authored mass centers and damping, per-joint properties and
-  constraints, native surface retention, malformed indices, nearly coplanar hulls,
-  unit-conversion precision, map planes, triangle collision and safe corpus cleanup.
-- A Crowbar-style command-line invocation is covered, including paths with spaces.
-  Crowbar's GUI has not been driven.
-- The clean ZIP is extracted into a new directory, its compiler hash is verified,
-  and all three examples are compiled, decompiled, recompiled and independently
-  validated using the packaged tools.
+- 16 native authored-input regressions pass on Python 3.10 and locked uv/Python 3.14.
+- Both CTest groups pass: inherited convex-hull math and native compiler regressions.
+  The hull test is not Apex physics emission evidence; native physics is rejected.
+- Native tests exercise all four profiles, native structure strides, geometry,
+  weights, material GUID binding, multiple body models, nonascending LOD order,
+  attachments, hitboxes, events with long options, blend descriptor offsets, delta
+  animation, 95-frame section boundaries, full-frame position/rotation/scale values,
+  decompile/recompile geometry, unsupported complex weights and malformed files.
+- Position animation error is checked at 0.001 inches, rotation at 0.0002 radians,
+  scale at 0.0016. Native quantization steps and an explicit 0.01-inch position
+  budget are encoded in the compiler; exceeding representable range fails.
+- Packaging compiles, exports and recompiles three authored examples for all four
+  targets from a clean extraction, using only the ZIP contents. The independent
+  reader checks every stored output animation frame for finite poses and compares
+  render geometry. This check does not assert complete metadata equivalence.
 
-## Complete retail run
+## Installed-asset survey
 
-`test-output/complete-validation-v4/results.json` records fresh decompile, compile
-and summary comparison results. `complete-validation-v4-dense/results.json`
-records the separate, full-frame validation. Every input and rebuilt file is
-stamped; compiler/tool hashes, runtime versions and thresholds are recorded in
-the run manifests. Rebuilt model SHA-256 values are recorded per dense result.
+Raw models were extracted with a local research copy of RSX 2.4.1 from the owner's
+S0-S3 common RPaks, including their patch chains. No reference code or game assets
+are shipped. These counts cover the common RPaks, not every installed map/skin pak.
+Reports: test-output/survey-s0.json through survey-s3.json. Each records its actual
+reader hash; the survey preceded a small reader addition for optional VVC attributes.
 
-Both runs pass **4,024/4,024**, with zero differences, compile failures or exceptions.
-All nine failures from the preceding dense run are fixed, with no newly failing models.
+| Target | Studio structures parsed | Render geometry decoded | Unsupported complex weights | Triangles decoded (all LODs) |
+| --- | ---: | ---: | ---: | ---: |
+| s0 | 360/360 | 251 | 109 | 5,257,101 |
+| s1 | 420/420 | 296 | 124 | 5,630,956 |
+| s2 | 428/428 | 293 | 135 | 6,015,121 |
+| s3 | 581/581 | 390 | 191 | 8,468,331 |
 
-| Coverage | Count |
-| --- | ---: |
-| Animation frames | 1,742,222 |
-| Bone poses | 211,669,360 |
-| Stored IK error samples | 122,472 |
-| Collision triangles | 11,529,379 |
-| Render triangles | 35,054,644 |
-| PHY solids | 3,856 |
-| PHY pieces | 9,410 |
-| Map brushes | 9,400 |
+All reported geometry exclusions are explicit complex-weight rejections; they are
+not passing models. Parsing a studio structure is not a render/animation/runtime
+equivalence result. Complex models are common among characters and animated props.
 
-Maximum animation world-position error is 0.030447 inches; maximum local rotation error
-is 0.002969 degrees. Scale error is zero. Used render positions and attributes match
-exactly; maximum normalized weight error is 1.78813934e-07.
+## Retail render rebuilds
 
+Reports under test-output/render-check-s0 through render-check-s3 test eight named
+models per target: at_gib5, bangalore_rockets_projectile, bird, bullet_rifle,
+caber_shot_thrown, caustic_flask, caustic_mug and concrete_chunk02a.
+Each target has seven passing render rebuilds and one explicit unsupported bird
+model (complex weights): **28 passes, four unsupported; no render differences**.
+These are explicitly --render-only runs. They remove physics/BVH, rigs and sequence
+metadata and do not prove those features. Reports identify exact compiler/tool
+hashes and input hashes. Fixed render thresholds are position 0.0001 inches, normal
+component 0.006, UV 0.00001 and weight 2/32767; none was widened to pass an asset.
+The wider native normal/weight bounds account for their packed representations.
 
-The dense checks cover:
+## Unfinished and unverified
 
-- Bone hierarchy, finite positive bind scale, inverse binds, finite vertex data,
-  normalized skin weights, VTX indices and binary spans.
-- Every stored animation frame and bone: local translation, rotation and scale,
-  hierarchical world position for non-delta animations, exact stored frame
-  movement and legacy records, IK targets and every stored IK error sample.
-- Every oriented render triangle, including position, normal, tangent, UV/UV2,
-  vertex colour and bone weights; material assignments across every skin and LOD.
-- Exact quantized triangle-collision geometry, plus acceleration-tree reachability,
-  bounds and triangle references. The compiler constructs its own tree.
-- PHY solid properties, masses, damping, materials, parents, joint constraints,
-  exclusions, friction and break blocks; closed reciprocal edges and piece geometry.
-- Map-collision ownership, piece counts, vertex clouds and literal face/bevel
-  signed-distance functions over the complete model bounding box.
-- Exact header hull/view bounds and flags, bone flags, bodygroup and logical model
-  names, including named empty bodygroup entries.
+- Native PHY/BVH collision and ragdolls; complex VVD/VVW/VG skinning; procedures;
+  RUI; external animation rigs and sequence assets; root-motion tracks; IK rules;
+  transition nodes; followers. These inputs fail explicitly.
+- RPak packaging/baking, streaming and relocation, material dependency resolution,
+  shader compatibility, animation-rig integration and runtime entity behaviour.
+- Default export preserves only its implemented QC subset. Render comparisons do
+  not cover material GUIDs, skin-family identity, tangents, bounds, arbitrary
+  sequence metadata, procedural behaviour or collision geometry equivalence.
+- Compact retail animation decoding needs wider animation-rig corpus validation.
+  Authored compiler output uses raw native tracks, not those compact modes.
+- Retail and later self-hostable season profiles remain future work. S0-S3 share
+  a header but differ at the vertex-buffer boundary; v54 alone is not a profile.
 
-Thresholds are unchanged from the initial dense validation:
-
-| Measurement | Limit |
-| --- | --- |
-| Animation local/world position | 0.25 inches |
-| Animation local rotation | 0.01 degrees |
-| Animation scale | 0.01 |
-| Render position | 0.001 inches |
-| Render attributes and weights | 0.00001 |
-| PHY / map-brush geometry | 0.01 inches |
-
-Native PHY ledges can be slightly nonconvex. Identical oriented triangle surfaces
-prove exact equality without extending their bounded triangles to infinite
-supporting planes. Map brushes retain their native planes: recomputing a nearly
-collinear face plane from rounded vertices can change its collision region.
-These are explicit source-preservation rules, not increased tolerances.
-
-The previous sampled-summary build passed all 4,024 models but missed real defects:
-bind scale, small skin weights, supplied mesh attributes, one-frame precision,
-Euler branches near 90/180 degrees, animation section boundaries, rigid physics
-transforms and PHY properties. Those defects have regressions and are corrected.
-The first dense run with the preceding compiler found nine remaining failures;
-the new run compares all files again, rather than only those nine.
-Exact metadata checks additionally exposed a 64-byte model name being truncated
-to 63 bytes in `ptpov_test`. The writer now retains the complete fixed-width field;
-the regression and a Northstar prop with a full-width name both pass.
-
-```powershell
-.\build.bat
-Push-Location build; ctest --output-on-failure; Pop-Location
-uv run --locked python -m unittest discover -s tests -p "test_*.py"
-python -I tools\roundtrip.py --compiler build\r2studiomdl.exe --jobs 8 --discard-sources --out test-output\fresh <mp-models> <sp-unique-models>
-python -I tools\validate_corpus.py --report test-output\fresh\results.json --out test-output\dense --jobs 8
-python -I tools\structdiff.py --report test-output\fresh\results.json --out test-output\fields.json
-```
-
-The recorded dense run overlaps compilation by calling the same
-`validate_corpus.check` function as files finish. It checks the final source report
-hash and unchanged tool hashes. The two sequential public commands above reproduce
-the same comparisons without that overlap. Generated exports are pruned only in
-owned work directories; the rebuilt MDLs and checkpoint reports are retained.
-
-## Field differences and limits
-
-The final field audit compares all 4,024 models and has eight differing field paths,
-recorded in `test-output/complete-validation-v4-structdiff.json`. They are:
-
-| Fields | Models | Explanation |
-| --- | ---: | --- |
-| Tree node/leaf counts | 1549 | The compiler constructs a different valid partition; decoded collision triangles and tree bounds are verified |
-| Tree vertex count | 2 | `wf_platform_04_highway` and `prowler_tower_full` need different vertex duplication when rebasing 16-bit leaf indices; decoded geometry is unchanged |
-| Texture ordering and mesh material indices | 2 | `ptpov_test` and `straton_imc_gunship_01_1000x`; every actual material assignment across skins and LODs matches |
-| Skin indices | 1 | The gunship uses the corresponding reordered material indices; resolved skin materials match |
-| Model type and bounding radius | 1 | The retail `ptpov_test` has overlapping structures and nonsensical values; the compiler writes normal empty-model fields |
-
-
-Byte identity is not required. Offsets, checksums, string placement, animation
-encoding, triangulation of newly authored hulls and acceleration-tree layout may
-differ while representing the same tested data. Native collision sidecars retain
-typed geometry, not an opaque compiled PHY block: edge links and trees are rebuilt.
-
-Decompiler preservation options must be removed when editing the corresponding
-source data. Retained motion/IK tracks, model-space mesh data, collision planes,
-native triangulation and mass properties intentionally reproduce the original;
-they cannot infer an editor's intended changes. README.md explains these options.
-
-The corpus does not exhaust all maps, every possible source authoring command,
-every malformed file or every runtime behavior. Full-frame comparisons decode
-stored animations; they do not execute every possible layered sequence, IK state,
-procedural bone or entity interaction in the game. The runtime checks below cover
-representative cases. No threshold was widened to make a model pass.
-
-## Northstar runtime evidence
-
-Final-build evidence is under `test-output/validated-ingame/`:
-
-| Check | Evidence |
-| --- | --- |
-| Static prop | `complete-static.json`: renders and the trace hits its top at 64.0313 inches |
-| Full-width model name | `complete-full-width.json`: a prop retaining all 64 name bytes loads, renders and collides |
-| Physics prop | `complete-physics.json`: falls 100.063 inches and settles |
-| Authored animation | `complete-animated.json`: `bend` moves its probe 16.5428 inches |
-| Bone scale | `complete-scaled.json`: probe distance grows from 10.4883 to 20.0098 inches across five samples |
-| One-frame precision | `complete-precision.json`: one-frame RLE and two-frame control probes agree at logged precision at both times, including 300.1/-100/0.0999602-inch offsets |
-| Procedural control | `complete-axis-visible.json/.png`: the cube rises and rolls with axis interpolation; a control omits the procedural definition |
-| Retail ragdolls | `complete-ragdoll-ref.json/.png`: retail and rebuilt grunts resolve included `ref`, both traces hit, and both form visible collapsed ragdolls; individual joint-limit angles are not measured |
-| Repaired retail hull | `complete-generator.json/.png`: both generators load and render alike; the central trace passes through the opening on both |
-| Viewmodel UI | `complete-viewmodel-final.json/.png`: the final rebuilt R-201 replaces its retail viewmodel and displays the ammo counter |
-
-`final-runtime-byte-verification.json` ties all twelve model/control files to the
-final compiler. Models tested before the last metadata-only compiler change were
-recompiled and proved byte-identical to the mounted test files. The changed R-201
-was tested again with its final bytes.
-
-
-Reports include the SHA-256 of each mounted model, spawn and script status, sampled
-motion when requested, and screenshot/log paths. Server attachment queries do not
-evaluate client-only procedural bones; those require visual control comparisons.
-Viewmodel load checks use explicit `--no-animation` mode when no sequence is
-requested. Models without local sequences can still resolve included animations,
-as the grunt's `ref` test demonstrates.
-
-Earlier runtime checks also established root-motion playback, bone scale, IK,
-quaternion/axis/aim procedural bones, bone followers and viewmodel UI panels.
-These earlier reports are historical evidence, separate from the final-build
-checks listed above.
+Historical TF2 corpus figures under docs/reference and tests/legacy_v53 are not
+R5 evidence. Reports contain local game paths and stay ignored. No release tag or
+claim of full runtime compatibility accompanies this development build.

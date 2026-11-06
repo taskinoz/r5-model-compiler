@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "build/context.h"
+#include "build/anim54.h"
 #include "core/buffer.h"
 #include "core/log.h"
 #include "core/strings.h"
@@ -1500,6 +1501,7 @@ void EncodeAnimations(BuildContext& ctx) {
     int sfMin = ctx.qc.sectionFrames > 0 ? ctx.qc.sectionMinFrames : 120;
     for (auto& a : ctx.anims) {
         CAnimation ca;
+        EncodeNative54(ctx, a, ca);
         ca.name = a.name;
         ca.fps = a.fps;
         // only the bits retail animation descriptors use (looping, snap, delta, all-zeros,

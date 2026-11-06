@@ -1,4 +1,4 @@
-// Serialisers for the v53 model container and its embedded files.
+// Early Apex studio data and season-specific companion buffers.
 #pragma once
 
 #include <cstdint>
@@ -11,7 +11,8 @@ namespace r2c {
 std::vector<uint8_t> WriteVVD(const CompiledModel& m, int checksum);
 std::vector<uint8_t> WriteVVC(const CompiledModel& m, int checksum);
 std::vector<uint8_t> WriteVTX(const CompiledModel& m, int checksum);
-// Full v53 .mdl with VTX/VVD/VVC/PHY embedded.
+// Native v54 studio data, excluding render/physics components.
 std::vector<uint8_t> WriteMDL(const CompiledModel& m);
+std::vector<uint8_t> WriteVG(const CompiledModel& m);
 
 }  // namespace r2c

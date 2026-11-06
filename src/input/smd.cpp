@@ -33,7 +33,7 @@ void BalanceWeights(std::vector<BoneWeight>& w, size_t maxCount) {
             }
     std::stable_sort(w.begin(), w.end(), [](const BoneWeight& a, const BoneWeight& b) { return a.weight > b.weight; });
     while (w.size() > 1 && w.back().weight <= 0.f) w.pop_back();
-    if (w.size() > maxCount) w.resize(maxCount);
+    if (w.size() > maxCount) Fatal("Apex complex skinning (more than three weights per vertex) is not implemented yet");
     float t = 0;
     for (auto& b : w) t += b.weight;
     if (t <= 0) {

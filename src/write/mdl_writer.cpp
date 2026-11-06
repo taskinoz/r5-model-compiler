@@ -1,8 +1,5 @@
-// Titanfall 2 (v53) studiohdr_t writer. Section order follows retail models:
-// header, source files, bones, jiggle bones, attachments, hitbox sets, bone name
-// table, animations, sequences, nodes, bodyparts, IK chains, pose parameters, IK
-// locks, include models, textures, skins, keyvalues, linear bones, per-tri AABB,
-// strings, then the embedded PHY, collision, VTX, VVD and VVC.
+// Early Apex v54 studio data. Vertex data is written to separate components or
+// a VG buffer by the selected season profile; no TF2 embedded-file container.
 #include <algorithm>
 #include <cstring>
 #include <numeric>
@@ -16,9 +13,9 @@ namespace r2c {
 
 namespace {
 
-// studiohdr_t field offsets (v53, 0x2CC bytes)
+// Early Apex studiohdr_t, 0x224 bytes; measured against installed S0-S3 assets.
 enum HdrOff : size_t {
-    H_ID = 0x00, H_VERSION = 0x04, H_CHECKSUM = 0x08, H_SZNAME = 0x0C, H_NAME = 0x10, H_LENGTH = 0x50,
+    H_ID = 0x0, H_VERSION = 0x4, H_CHECKSUM = 0x8, H_SZNAME = 0xC, H_NAME = 0x10, H_LENGTH = 0x50,
     H_EYEPOS = 0x54, H_ILLUMPOS = 0x60, H_HULLMIN = 0x6C, H_HULLMAX = 0x78, H_VIEWMIN = 0x84, H_VIEWMAX = 0x90,
     H_FLAGS = 0x9C, H_NUMBONES = 0xA0, H_BONEINDEX = 0xA4, H_NUMBONECONTROLLERS = 0xA8, H_BONECONTROLLERINDEX = 0xAC,
     H_NUMHITBOXSETS = 0xB0, H_HITBOXSETINDEX = 0xB4, H_NUMLOCALANIM = 0xB8, H_LOCALANIMINDEX = 0xBC,
@@ -26,27 +23,27 @@ enum HdrOff : size_t {
     H_NUMTEXTURES = 0xD0, H_TEXTUREINDEX = 0xD4, H_NUMCDTEXTURES = 0xD8, H_CDTEXTUREINDEX = 0xDC,
     H_NUMSKINREF = 0xE0, H_NUMSKINFAMILIES = 0xE4, H_SKININDEX = 0xE8, H_NUMBODYPARTS = 0xEC, H_BODYPARTINDEX = 0xF0,
     H_NUMLOCALATTACHMENTS = 0xF4, H_LOCALATTACHMENTINDEX = 0xF8, H_NUMLOCALNODES = 0xFC, H_LOCALNODEINDEX = 0x100,
-    H_LOCALNODENAMEINDEX = 0x104, H_LOCALNODEUNK = 0x108, H_FLEXDESCINDEX = 0x10C, H_NUMFLEXCONTROLLERS = 0x110,
-    H_FLEXCONTROLLERINDEX = 0x114, H_NUMFLEXRULES = 0x118, H_FLEXRULEINDEX = 0x11C, H_NUMIKCHAINS = 0x120,
-    H_IKCHAININDEX = 0x124, H_UIPANELCOUNT = 0x128, H_UIPANELOFFSET = 0x12C, H_NUMLOCALPOSEPARAMETERS = 0x130,
-    H_LOCALPOSEPARAMINDEX = 0x134, H_SURFACEPROPINDEX = 0x138, H_KEYVALUEINDEX = 0x13C, H_KEYVALUESIZE = 0x140,
-    H_NUMLOCALIKAUTOPLAYLOCKS = 0x144, H_LOCALIKAUTOPLAYLOCKINDEX = 0x148, H_MASS = 0x14C, H_CONTENTS = 0x150,
-    H_NUMINCLUDEMODELS = 0x154, H_INCLUDEMODELINDEX = 0x158, H_VIRTUALMODEL = 0x15C, H_BONETABLEBYNAMEINDEX = 0x160,
-    H_CONSTDIRLIGHTDOT = 0x164, H_ROOTLOD = 0x165, H_NUMALLOWEDROOTLODS = 0x166, H_FADEDISTANCE = 0x168,
-    H_NUMFLEXCONTROLLERUI = 0x16C, H_FLEXCONTROLLERUIINDEX = 0x170, H_VERTANIMSCALE = 0x174, H_SURFACEPROPLOOKUP = 0x178,
-    H_SOURCEFILENAMEOFFSET = 0x17C, H_NUMSRCBONETRANSFORM = 0x180, H_SRCBONETRANSFORMINDEX = 0x184,
-    H_ILLUMPOSATTACHMENTINDEX = 0x188, H_LINEARBONEINDEX = 0x18C, H_BONEFLEXDRIVERCOUNT = 0x190,
-    H_BONEFLEXDRIVERINDEX = 0x194, H_PERTRIINDEX = 0x198, H_PERTRINODECOUNT = 0x19C, H_PERTRILEAFCOUNT = 0x1A0,
-    H_PERTRIVERTCOUNT = 0x1A4, H_UNKSTRINGOFFSET = 0x1A8, H_VTXOFFSET = 0x1AC, H_VVDOFFSET = 0x1B0, H_VVCOFFSET = 0x1B4,
-    H_PHYOFFSET = 0x1B8, H_VTXSIZE = 0x1BC, H_VVDSIZE = 0x1C0, H_VVCSIZE = 0x1C4, H_PHYSIZE = 0x1C8,
-    H_COLLISIONOFFSET = 0x1CC, H_STATICCOLLISIONCOUNT = 0x1D0, H_BONEFOLLOWERCOUNT = 0x1D4, H_BONEFOLLOWEROFFSET = 0x1D8,
-    H_SIZE = 0x2CC,
+    H_LOCALNODENAMEINDEX = 0x104, H_LOCALNODEUNK = 0x108, H_FLEXDESCINDEX = 0x10C, H_NUMFLEXCONTROLLERS = 0x114,
+    H_FLEXCONTROLLERINDEX = 0x118, H_NUMFLEXRULES = 0x11C, H_FLEXRULEINDEX = 0x120, H_NUMIKCHAINS = 0x124,
+    H_IKCHAININDEX = 0x128, H_UIPANELCOUNT = 0x12C, H_UIPANELOFFSET = 0x130, H_NUMLOCALPOSEPARAMETERS = 0x134,
+    H_LOCALPOSEPARAMINDEX = 0x138, H_SURFACEPROPINDEX = 0x13C, H_KEYVALUEINDEX = 0x140, H_KEYVALUESIZE = 0x144,
+    H_NUMLOCALIKAUTOPLAYLOCKS = 0x148, H_LOCALIKAUTOPLAYLOCKINDEX = 0x14C, H_MASS = 0x150, H_CONTENTS = 0x154,
+    H_NUMINCLUDEMODELS = 0x158, H_INCLUDEMODELINDEX = 0x15C, H_VIRTUALMODEL = 0x160, H_BONETABLEBYNAMEINDEX = 0x164,
+    H_CONSTDIRLIGHTDOT = 0x168, H_ROOTLOD = 0x169, H_NUMALLOWEDROOTLODS = 0x16A, H_FADEDISTANCE = 0x16C,
+    H_NUMFLEXCONTROLLERUI = 0x174, H_FLEXCONTROLLERUIINDEX = 0x178, H_VERTANIMSCALE = 0x17C, H_SURFACEPROPLOOKUP = 0x180,
+    H_SOURCEFILENAMEOFFSET = 0x184, H_NUMSRCBONETRANSFORM = 0x188, H_SRCBONETRANSFORMINDEX = 0x18C,
+    H_ILLUMPOSATTACHMENTINDEX = 0x190, H_LINEARBONEINDEX = 0x194, H_BONEFLEXDRIVERCOUNT = 0x1A4,
+    H_BONEFLEXDRIVERINDEX = 0x1A8, H_PERTRIINDEX = 0x1AC, H_PERTRINODECOUNT = 0x1B0, H_PERTRILEAFCOUNT = 0x1B4,
+    H_PERTRIVERTCOUNT = 0x1B8, H_UNKSTRINGOFFSET = 0x1BC, H_VTXOFFSET = 0x1C0, H_VVDOFFSET = 0x1C4, H_VVCOFFSET = 0x1C8,
+    H_PHYOFFSET = 0x1CC, H_VTXSIZE = 0x1D0, H_VVDSIZE = 0x1D4, H_VVCSIZE = 0x1D8, H_PHYSIZE = 0x1DC,
+    H_COLLISIONOFFSET = 0x1E0, H_STATICCOLLISIONCOUNT = 0x1E4, H_BONEFOLLOWERCOUNT = 0x1E8, H_BONEFOLLOWEROFFSET = 0x1EC,
+    H_SIZE = 0x224,
 };
 
-constexpr size_t kBoneSize = 0xF4, kJiggleSize = 0x78, kAttachSize = 0x5C, kHboxSetSize = 0x0C, kHboxSize = 0x44,
-                 kAnimDescSize = 0x5C, kSeqDescSize = 0xE8, kEventSize = 0x50, kAutoLayerSize = 0x18, kIKLockSize = 0x20,
-                 kBodyPartSize = 0x10, kModelSize = 0x94, kMeshSize = 0x74, kIKChainSize = 0x20, kIKLinkSize = 0x1C, kIKRuleSize = 0x8C,
-                 kPoseParamSize = 0x14, kModelGroupSize = 0x08, kTextureSize = 0x2C, kMovementSize = 0x2C;
+constexpr size_t kBoneSize = 0xB8, kJiggleSize = 0x78, kAttachSize = 0x3C, kHboxSetSize = 0x0C, kHboxSize = 0x2C,
+                 kAnimDescSize = 0x34, kSeqDescSize = 0xD0, kEventSize = 0x110, kAutoLayerSize = 0x18, kIKLockSize = 0x10,
+                 kBodyPartSize = 0x10, kModelSize = 0x88, kMeshSize = 0x5C, kIKChainSize = 0x14, kIKLinkSize = 0x10, kIKRuleSize = 0x8C,
+                 kPoseParamSize = 0x14, kModelGroupSize = 0x08, kTextureSize = 0xC, kMovementSize = 0x2C;
 
 class MdlWriter {
 public:
@@ -85,7 +82,7 @@ private:
 void MdlWriter::WriteHeader() {
     b_.Reserve(H_SIZE);
     b_.PatchAt<uint32_t>(H_ID, 0x54534449);  // IDST
-    Hdr(H_VERSION, 53);
+    Hdr(H_VERSION, 54);
     Str(H_SZNAME, 0, m_.name);
     std::string n = m_.name;
     if (n.size() > 62) n = n.substr(0, 62);  // retail keeps at most 62 characters here (9/9 long names)
@@ -138,37 +135,13 @@ void MdlWriter::WriteBones() {
         f(0x2C, bn.quat.x); f(0x30, bn.quat.y); f(0x34, bn.quat.z); f(0x38, bn.quat.w);
         f(0x3C, bn.rot.x); f(0x40, bn.rot.y); f(0x44, bn.rot.z);
         f(0x48, bn.scale.x); f(0x4C, bn.scale.y); f(0x50, bn.scale.z);
-        f(0x54, bn.posscale.x); f(0x58, bn.posscale.y); f(0x5C, bn.posscale.z);
-        f(0x60, bn.rotscale.x); f(0x64, bn.rotscale.y); f(0x68, bn.rotscale.z);
-        // retail: scalescale is always 1/2048 and qAlignment is always zero
-        f(0x6C, 1.f / 2048); f(0x70, 1.f / 2048); f(0x74, 1.f / 2048);
         for (int r = 0; r < 3; r++)
-            for (int c = 0; c < 4; c++) f(0x78 + (r * 4 + c) * 4, bn.poseToBone.m[r][c]);
-        f(0xA8, 0.f); f(0xAC, 0.f); f(0xB0, 0.f); f(0xB4, 0.f);
-        b_.PatchI32(p + 0xB8, bn.flags);
-        b_.PatchI32(p + 0xBC, bn.proctype);
-        b_.PatchI32(p + 0xC0, 0);  // procindex, patched below
-        b_.PatchI32(p + 0xC4, bn.physicsBone);
-        Str(p + 0xC8, p, bn.surfaceProp);
-        b_.PatchI32(p + 0xCC, bn.contents);
-        b_.PatchI32(p + 0xD0, 0);
-        b_.PatchAt<uint16_t>(p + 0xD4, static_cast<uint16_t>(bn.collisionIndex < 0 ? 0xFFFF : bn.collisionIndex));
-        b_.PatchAt<uint16_t>(p + 0xD6, static_cast<uint16_t>(bn.collisionCount));
-    }
-    b_.Align(4);
-    for (size_t i = 0; i < m_.bones.size(); i++) {
-        const CBone& bn = m_.bones[i];
-        size_t p = base + i * kBoneSize;
-        if (!bn.procData.empty()) {
-            b_.PatchI32(p + 0xC0, Rel(p));
-            b_.Append(bn.procData);
-            continue;
-        }
-        if (bn.jiggle < 0) continue;
-        b_.PatchI32(p + 0xC0, Rel(p));
-        const CJiggle& j = m_.jiggles[bn.jiggle];
-        b_.I32(j.flags);
-        for (float v : j.v) b_.F32(v);
+            for (int c = 0; c < 4; c++) f(0x54 + (r * 4 + c) * 4, bn.poseToBone.m[r][c]);
+        b_.PatchI32(p + 0x94, bn.flags & ~BONE_USED_BY_BONE_MERGE);
+        b_.PatchI32(p + 0xA0, bn.physicsBone);
+        Str(p + 0xA4, p, bn.surfaceProp);
+        b_.PatchI32(p + 0xA8, bn.contents);
+        b_.PatchI32(p + 0xB4, -1);
     }
     b_.Align(4);
     HdrHere(H_BONECONTROLLERINDEX);
@@ -184,7 +157,6 @@ void MdlWriter::WriteAttachments() {
         b_.U32(a.flags);
         b_.I32(a.bone);
         b_.M34(a.local);
-        b_.Zero(32);
     }
 }
 
@@ -209,7 +181,6 @@ void MdlWriter::WriteHitboxes() {
             b_.I32(h.critOverride);
             b_.I32(0);
             Str(q + 0x28, q, h.hitDataGroup);
-            b_.Zero(24);
         }
     }
 }
@@ -226,92 +197,29 @@ void MdlWriter::WriteBoneTable() {
 }
 
 void MdlWriter::WriteAnimations() {
+    // Descriptors are referenced by sequence-relative int32 offsets in v54.
     HdrHere(H_LOCALANIMINDEX);
-    Hdr(H_NUMLOCALANIM, static_cast<int>(m_.animations.size()));
     size_t base = b_.Reserve(kAnimDescSize * m_.animations.size());
-    for (size_t i = 0; i < m_.animations.size(); i++) {
-        const CAnimation& a = m_.animations[i];
+    for (size_t i = 0; i < m_.animations.size(); ++i) {
+        const auto& a = m_.animations[i];
         size_t p = base + i * kAnimDescSize;
-        b_.PatchI32(p + 0x00, -static_cast<int32_t>(p));
-        Str(p + 0x04, p, a.name);
-        b_.PatchAt<float>(p + 0x08, a.fps);
-        b_.PatchI32(p + 0x0C, a.flags);
-        b_.PatchI32(p + 0x10, a.numFrames);
-        if (a.sectionFrames == 0) {
-            b_.Align(16);
+        b_.PatchI32(p, -static_cast<int32_t>(p));
+        Str(p + 4, p, a.name);
+        b_.PatchAt<float>(p + 8, a.fps);
+        b_.PatchI32(p + 12, a.flags);
+        b_.PatchI32(p + 16, a.numFrames);
+        // Native sections include the boundary sample for interpolation.
+        if (a.nativeSections.size() == 1) {
             b_.PatchI32(p + 0x20, Rel(p));
-            b_.Append(a.sections[0]);
+            b_.Append(a.nativeSections[0]);
         } else {
-            b_.PatchI32(p + 0x34, Rel(p));
-            b_.PatchI32(p + 0x38, a.sectionFrames);
-            size_t secTable = b_.Reserve(4 * a.sections.size());
-            for (size_t s = 0; s < a.sections.size(); s++) {
-                b_.Align(16);
-                b_.PatchI32(secTable + s * 4, Rel(p));
-                b_.Append(a.sections[s]);
+            b_.PatchI32(p + 0x2C, Rel(p));
+            b_.PatchI32(p + 0x30, a.sectionFrames);
+            size_t table = b_.Reserve(4 * a.nativeSections.size());
+            for (size_t j = 0; j < a.nativeSections.size(); ++j) {
+                b_.PatchI32(table + 4*j, Rel(p));
+                b_.Append(a.nativeSections[j]);
             }
-            b_.PatchI32(p + 0x20, b_.ReadAt<int32_t>(secTable));
-        }
-        if (!a.movements.empty()) {
-            b_.Align(4);
-            b_.PatchI32(p + 0x14, static_cast<int>(a.movements.size()));
-            b_.PatchI32(p + 0x18, Rel(p));
-            for (auto& mv : a.movements) {
-                b_.I32(mv.endFrame);
-                b_.I32(mv.motionFlags);
-                b_.F32(mv.v0);
-                b_.F32(mv.v1);
-                b_.F32(mv.angle);
-                b_.V3(mv.vector);
-                b_.V3(mv.position);
-            }
-        }
-        if (!a.ikRules.empty()) {
-            // mstudioikrule_t (0x8C) array, then each rule's compressed error block;
-            // retail places this between the animation data and the frame movement
-            b_.Align(4);
-            b_.PatchI32(p + 0x24, static_cast<int>(a.ikRules.size()));
-            b_.PatchI32(p + 0x28, Rel(p));
-            size_t rules = b_.Reserve(kIKRuleSize * a.ikRules.size());
-            for (size_t j = 0; j < a.ikRules.size(); j++) {
-                const CIKRule& r = a.ikRules[j];
-                size_t q = rules + j * kIKRuleSize;
-                b_.PatchI32(q + 0x00, r.index);
-                b_.PatchI32(q + 0x04, r.type);
-                b_.PatchI32(q + 0x08, r.chain);
-                b_.PatchI32(q + 0x0C, r.bone);
-                b_.PatchI32(q + 0x10, r.slot);
-                b_.PatchAt<float>(q + 0x14, r.height);
-                b_.PatchAt<float>(q + 0x18, r.radius);
-                b_.PatchAt<float>(q + 0x1C, r.floor);
-                b_.PatchAt<float>(q + 0x20, r.pos.x);
-                b_.PatchAt<float>(q + 0x24, r.pos.y);
-                b_.PatchAt<float>(q + 0x28, r.pos.z);
-                b_.PatchAt<float>(q + 0x2C, r.q.x);
-                b_.PatchAt<float>(q + 0x30, r.q.y);
-                b_.PatchAt<float>(q + 0x34, r.q.z);
-                b_.PatchAt<float>(q + 0x38, r.q.w);
-                b_.PatchI32(q + 0x40, r.iStart);
-                b_.PatchAt<float>(q + 0x48, r.start);
-                b_.PatchAt<float>(q + 0x4C, r.peak);
-                b_.PatchAt<float>(q + 0x50, r.tail);
-                b_.PatchAt<float>(q + 0x54, r.end);
-                b_.PatchAt<float>(q + 0x58, r.contact);
-                b_.PatchAt<float>(q + 0x5C, r.drop);
-                b_.PatchAt<float>(q + 0x60, r.top);
-                if (!r.attachment.empty()) Str(q + 0x64, q, r.attachment);
-                b_.PatchAt<float>(q + 0x68, r.endHeight);
-                if (!r.compressedError.empty()) {
-                    b_.PatchI32(q + 0x3C, Rel(q));
-                    b_.Append(r.compressedError);
-                    b_.Align(4);
-                }
-            }
-        }
-        if (!a.frameMovement.empty()) {
-            b_.Align(4);
-            b_.PatchI32(p + 0x1C, Rel(p));
-            b_.Append(a.frameMovement);
         }
         b_.Align(4);
     }
@@ -375,9 +283,9 @@ void MdlWriter::WriteSequences() {
             b_.F32(e.cycle);
             b_.I32(e.event);
             b_.I32(e.type);
-            b_.FixedString(e.options, 64);
+            b_.FixedString(e.options, 256);
             b_.I32(0);
-            if (e.type != 0) Str(q + 0x4C, q, e.name);
+            if (e.type != 0) Str(q + 0x10C, q, e.name);
         }
         b_.Align(4);
         // autolayers
@@ -409,12 +317,12 @@ void MdlWriter::WriteSequences() {
             b_.F32(l.posWeight);
             b_.F32(l.localQWeight);
             b_.I32(l.flags);
-            b_.Zero(16);
         }
         b_.Align(4);
         // anim indices
         I(0x3C, Rel(p));
-        for (int16_t ai : s.animIndices) b_.I16(ai);
+        for (int16_t ai : s.animIndices)
+            b_.I32(b_.ReadAt<int32_t>(H_LOCALANIMINDEX) + ai * kAnimDescSize - static_cast<int32_t>(p));
         b_.Align(4);
         // keyvalues
         I(0xAC, Rel(p));
@@ -467,21 +375,22 @@ void MdlWriter::WriteBodyParts() {
             std::string nm = md.name;
             if (nm.size() > 64) nm = nm.substr(nm.size() - 64);
             std::memcpy(&b_.Data()[q], nm.data(), nm.size());
-            b_.PatchAt<float>(q + 0x44, md.boundingRadius);
-            b_.PatchI32(q + 0x48, static_cast<int>(md.meshes.size()));
-            b_.PatchI32(q + 0x50, md.NumVerts());
-            b_.PatchI32(q + 0x54, md.vertexStart * 48);
-            b_.PatchI32(q + 0x58, md.vertexStart * 16);
-            b_.PatchI32(q + 0x7C, md.vertexStart * 4);
-            b_.PatchI32(q + 0x80, md.vertexStart * 8);
+            b_.PatchAt<float>(q + 0x48, md.boundingRadius);
+            b_.PatchI32(q + 0x4C, static_cast<int>(md.meshes.size()));
+            b_.PatchI32(q + 0x54, md.NumVerts());
+            b_.PatchI32(q + 0x58, md.vertexStart * 48);
+            b_.PatchI32(q + 0x5C, md.vertexStart * 16);
+            b_.PatchI32(q + 0x80, md.vertexStart * 4);
+            b_.PatchI32(q + 0x84, md.vertexStart * 8);
         }
         for (size_t mi = 0; mi < bp.models.size(); mi++) {
             auto& md = bp.models[mi];
             size_t q = mbase + mi * kModelSize;
-            b_.PatchI32(q + 0x4C, Rel(q));
+            b_.PatchI32(q + 0x50, Rel(q));
             int voff = 0;
             for (auto& me : md.meshes) {
                 size_t r = b_.Tell();
+                if (b_.ReadAt<int32_t>(0x110) == 0) b_.PatchI32(0x110, static_cast<int32_t>(r));
                 b_.I32(me.material);
                 b_.I32(static_cast<int32_t>(q) - static_cast<int32_t>(r));
                 b_.I32(static_cast<int>(me.verts.size()));
@@ -492,13 +401,11 @@ void MdlWriter::WriteBodyParts() {
                 b_.I32(0);  // modelvertexdata (runtime)
                 for (int l = 0; l < kMaxLods; l++) b_.I32(me.lodVertexCount[l]);
                 b_.Zero(8);   // runtime pointer
-                b_.Zero(24);  // unused
                 voff += static_cast<int>(me.verts.size());
             }
         }
     }
-    // deprecated flex data all point here, as in retail files
-    HdrHere(H_FLEXDESCINDEX);
+    // Deprecated flex offsets.
     HdrHere(H_FLEXCONTROLLERINDEX);
     HdrHere(H_FLEXRULEINDEX);
     HdrHere(H_FLEXCONTROLLERUIINDEX);
@@ -522,7 +429,6 @@ void MdlWriter::WriteIK() {
         for (auto& l : m_.ikChains[i].links) {
             b_.I32(l.bone);
             b_.V3(l.kneeDir);
-            b_.V3(Vec3());
         }
     }
 }
@@ -546,7 +452,6 @@ void MdlWriter::WritePoseParams() {
         b_.F32(l.posWeight);
         b_.F32(l.localQWeight);
         b_.I32(l.flags);
-        b_.Zero(16);
     }
 }
 
@@ -700,8 +605,8 @@ std::vector<uint8_t> MdlWriter::Run() {
     WriteIncludeModels();
     WriteTextures();
     WriteKeyValues();
-    WriteLinearBones();
-    WritePerTri();
+    // The per-bone records are sufficient; no TF2 linear-bone scale arrays.
+
     st_.Write(b_);
     b_.Align(4);
 
@@ -714,41 +619,23 @@ std::vector<uint8_t> MdlWriter::Run() {
     int32_t checksum = static_cast<int32_t>(ck);
     Hdr(H_CHECKSUM, checksum);
 
-    // embedded files: PHY, collision, VTX, VVD, VVC (unaligned, as in retail)
-    if (!m_.physics.phy.empty()) {
-        std::vector<uint8_t> phy = m_.physics.phy;
-        std::memcpy(&phy[12], &checksum, 4);  // phyheader_t::checkSum
-        HdrHere(H_PHYOFFSET);
-        Hdr(H_PHYSIZE, static_cast<int>(phy.size()));
-        b_.Append(phy);
-    }
-    if (!m_.physics.noMapCollision) HdrHere(H_COLLISIONOFFSET);
-    if (!m_.physics.collisionBlock.empty()) b_.Append(m_.physics.collisionBlock);
-    Hdr(H_STATICCOLLISIONCOUNT, m_.physics.staticCollisionCount);
-    // bone followers: int32 bone indices after the collision block, as in retail
-    HdrHere(H_BONEFOLLOWEROFFSET);
-    if (!m_.boneFollowers.empty()) {
-        Hdr(H_BONEFOLLOWERCOUNT, static_cast<int>(m_.boneFollowers.size()));
-        for (int bf : m_.boneFollowers) b_.I32(bf);
-    }
+    size_t componentOffset = 0;
     bool hasMesh = false;
-    for (auto& bp : m_.bodyParts)
-        for (auto& md : bp.models)
-            if (!md.meshes.empty()) hasMesh = true;
+    for (auto& bp : m_.bodyParts) for (auto& md : bp.models)
+        if (!md.meshes.empty()) hasMesh = true;
     if (hasMesh) {
         auto vtx = WriteVTX(m_, checksum);
-        HdrHere(H_VTXOFFSET);
+        Hdr(H_VTXOFFSET, -1);
         Hdr(H_VTXSIZE, static_cast<int>(vtx.size()));
-        b_.Append(vtx);
+        componentOffset += vtx.size();
         auto vvd = WriteVVD(m_, checksum);
-        HdrHere(H_VVDOFFSET);
+        Hdr(H_VVDOFFSET, static_cast<int>(componentOffset));
         Hdr(H_VVDSIZE, static_cast<int>(vvd.size()));
-        b_.Append(vvd);
+        componentOffset += vvd.size();
         if (m_.hasVertexColor || m_.hasUV2) {
             auto vvc = WriteVVC(m_, checksum);
-            HdrHere(H_VVCOFFSET);
+            Hdr(H_VVCOFFSET, static_cast<int>(componentOffset));
             Hdr(H_VVCSIZE, static_cast<int>(vvc.size()));
-            b_.Append(vvc);
         }
     }
     Hdr(H_LENGTH, static_cast<int>(b_.Size()));

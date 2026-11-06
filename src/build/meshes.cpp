@@ -112,7 +112,7 @@ CVertex MakeVertex(const SrcVertex& sv, const std::vector<GBone>& bones,
         if (!found) m.push_back(bw);
     }
     std::stable_sort(m.begin(), m.end(), [](const BoneWeight& a, const BoneWeight& b) { return a.weight > b.weight; });
-    if (m.size() > 3) m.resize(3);
+    if (m.size() > 3) Fatal("Apex complex skinning (more than three weights per vertex) is not implemented yet");
     float t = 0;
     for (auto& x : m) t += x.weight;
     v.numBones = static_cast<int>(m.size());

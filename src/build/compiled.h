@@ -179,6 +179,7 @@ struct CMovement {
 
 // Encoded animation (one or more sections, each a chain of per-bone RLE records).
 struct CAnimation {
+    std::vector<std::vector<uint8_t>> nativeSections;
     std::string name;
     float fps = 30;
     int flags = 0;
