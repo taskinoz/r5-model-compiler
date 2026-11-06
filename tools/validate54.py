@@ -24,7 +24,7 @@ def canonical(render):
     return lods
 
 
-def compare_animation_metadata(model, reference):
+def compare_animation_metadata(model, reference, metrics=None):
     """Compare the exported sequence subset and every decoded blend frame."""
     differences=[]
     def equal(a,b):
@@ -45,6 +45,18 @@ def compare_animation_metadata(model, reference):
         for blend,(desc,rdesc) in enumerate(zip(seq['animations'],ref['animations'])):
             if not equal(model.movements(desc),reference.movements(rdesc)):
                 differences.append(f'sequence {index} blend {blend} movements')
+            fm,rfm=model.frame_movement(desc),reference.frame_movement(rdesc)
+            bad=bool(fm)!=bool(rfm)
+            if fm and rfm:
+                bad=len(fm['samples'])!=len(rfm['samples'])
+                for a,b in zip(fm['samples'],rfm['samples']):
+                    for c,(x,y) in enumerate(zip(a,b)):
+                        error=abs(x-y)
+                        if metrics is not None:
+                            key='position' if c<3 else 'yaw'
+                            metrics[key]=max(metrics[key],error)
+                        if error>(.001 if c<3 else .005): bad=True
+            if bad: differences.append(f'sequence {index} blend {blend} frame movement')
             # noforceloop steers compilation, not playback.
             if (model.get('i',desc+12)&~0x8000) != (reference.get('i',rdesc+12)&~0x8000):
                 differences.append(f'sequence {index} blend {blend} flags')
@@ -84,6 +96,7 @@ def validate(path,target,against=None,*,animation_metadata=False):
         if animation_metadata: m.sequence_metadata(seq)
         for desc in seq['animations']:
             m.movements(desc)
+            m.frame_movement(desc)
             frames=m.animation(desc); result['frames']+=len(frames)
             if not all(math.isfinite(x) for pose in frames for bone in pose for channel in bone for x in channel):
                 raise ValueError('non-finite animation pose')
@@ -104,8 +117,10 @@ def validate(path,target,against=None,*,animation_metadata=False):
         # This comparison deliberately reports only the selected render subset.
         result['scope']='render subset; no physics/BVH/material GUID/sequence metadata equivalence claim'
         if animation_metadata:
-            result['differences']+=compare_animation_metadata(m,ref)
-            result['scope']='render plus supported sequence/IK-chain metadata, piecewise root motion and full-frame blend poses; no physics/BVH/rig/runtime equivalence claim'
+            result['frame_movement_limits']=dict(position=.001,yaw=.005)
+            result['frame_movement_max_error']=dict(position=0.,yaw=0.)
+            result['differences']+=compare_animation_metadata(m,ref,result['frame_movement_max_error'])
+            result['scope']='render plus supported sequence/IK-chain metadata, piecewise/native frame motion and full-frame blend poses; no physics/BVH/rig/runtime equivalence claim'
     return result
 
 

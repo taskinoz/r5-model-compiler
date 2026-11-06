@@ -815,7 +815,7 @@ bool Parser::ParseAnimationToken(QcAnimation& a) {
         a.flags |= STUDIO_LOOPING;
     } else if (StartsWithI(T(), "snap")) {
         a.flags |= STUDIO_SNAP;
-    } else if (StartsWithI(T(), "frame")) {
+    } else if (StartsWithI(T(), "frame") && !Is("framemovement")) {
         a.startFrame = I("start frame");
         a.endFrame = I("end frame");
         a.frameRangeSet = true;
@@ -826,12 +826,28 @@ bool Parser::ParseAnimationToken(QcAnimation& a) {
     } else if (Is("autoik")) {
         a.noAutoIK = false;
     } else if (Is("rm") || Is("rootmotion") || Is("framemovement")) {
+        a.extractFrameMovement = true;
         a.flags |= STUDIO_FRAMEMOVEMENT;
     } else if (Is("delta")) {
         // source frames are already local deltas (a decompiled delta animation); kept
         // out of the flags so it is not copied onto sequences like an authored option
         a.rawDelta = true;
+    } else if (Is("fmstream")) {
+        if (a.hasFmTrack || !a.fmStream.empty()) Fatal("duplicate frame-movement import");
+        std::string name = S("native frame movement stream file");
+        std::string path = ResolveSource(name, "fm54");
+        std::ifstream f(path, std::ios::binary | std::ios::ate);
+        if (!f || f.tellg() < 28 || f.tellg() > 64*1024*1024) Fatal("invalid native frame-movement file");
+        size_t size = static_cast<size_t>(f.tellg()); f.seekg(0);
+        char magic[4]; f.read(magic,4);
+        if (std::string(magic,4) != "FM54") Fatal("invalid native frame-movement magic");
+        f.read(reinterpret_cast<char*>(&a.fmStreamFrames),4);
+        a.fmStream.resize(size-8);
+        f.read(reinterpret_cast<char*>(a.fmStream.data()),size-8);
+        if (!f) Fatal("truncated native frame-movement file");
+        a.flags |= STUDIO_FRAMEMOVEMENT;
     } else if (Is("fmtrack")) {
+        if (a.hasFmTrack || !a.fmStream.empty()) Fatal("duplicate frame-movement import");
         std::string name = S("frame movement track file");
         std::string path = ResolveSource(name, "txt");
         if (path.empty()) Fatal("%s: could not find frame movement track \"%s\"", tk_.Where().c_str(), name.c_str());

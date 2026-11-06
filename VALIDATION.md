@@ -1,17 +1,18 @@
 # Apex early-season compiler validation - 6 November 2026
 
-Experimental development build with piecewise root motion, IK-chain export, native complex skinning and animation metadata round trips. These are offline
+Experimental development build with native frame movement, piecewise root motion,
+IK-chain export, native complex skinning and animation metadata round trips. These are offline
 structure, render and authored-animation checks, not a stable release or proof of
 full Apex model equivalence. No in-game run or RPak bake was performed. Retail and
 later self-hostable seasons remain future targets.
 
 Windows x64 MSVC Release: build/r5studiomdl.exe
-SHA-256: `35e4429f6670f3b804021f5deac207faad048108871f20b381cc790aaab9d459`.
-Independent reader SHA-256: `92a8b40792a230fc31fd49a6df8fce8238396a006696cb79cbb5cd379d078f88`.
+SHA-256: `dda2605247fbb3982d9b60399260a96b36526a7699bf55f2733fd4b2d8bcc26b`.
+Independent reader SHA-256: `2cea934795e6eb113d926dbf9d4d49dc923c062c5547f581af2777f7721f61ce`.
 
 ## Automated checks
 
-- All 38 native regressions pass on ordinary Python 3.10 and locked uv/Python 3.14.
+- All 44 native regressions pass on ordinary Python 3.10 and locked uv/Python 3.14.
 - Both CTest groups pass: convex-hull math and native compiler regressions. The
   inherited hull tests are not Apex physics emission evidence.
 - Complex-skinning tests exercise mixed 1/2/3/4/8/16-influence vertices across all
@@ -23,9 +24,9 @@ Independent reader SHA-256: `92a8b40792a230fc31fd49a6df8fce8238396a006696cb79cbb
 - The earlier geometry, body-group, LOD, attachment, hitbox, event, blend and delta
   checks remain. Full-frame animation checks cover a 95-frame authored sequence,
   section boundaries and position/rotation/scale with unchanged tolerances.
-- The clean ZIP contains five authored examples, including the new two-block root-motion
-  and IK-chain example. All five compile, export, recompile and pass render comparisons
-  on all four targets: 20 package round trips. These also compare supported
+- The clean ZIP contains six authored examples, including native frame movement and two-block
+  piecewise root motion with an IK chain. All six compile, export, recompile and pass render comparisons
+  on all four targets: 24 package round trips. These also compare supported
   animation metadata and every decoded frame in every blend, including the animated
   example's new blend/event. This is not full model or runtime equivalence.
 
@@ -34,8 +35,8 @@ Independent reader SHA-256: `92a8b40792a230fc31fd49a6df8fce8238396a006696cb79cbb
 The compiler now emits the native 44-byte piecewise movement records from explicit
 `$legacymovement` extraction or `movementrecord` imports. Export preserves the
 records and in-place local poses without applying extraction again. Native
-frame-movement streams remain unsupported and explicitly rejected, even when an
-`rm` request is combined with `$legacymovement` (which previously could drop it).
+frame-movement streams use the separate path described below; an `rm` request
+combined with `$legacymovement` is rejected.
 Tests cover 95-frame linear extraction, two imported movement blocks, changed-record
 detection, malformed counts/spans/end frames, duplicate ends and nonfinite values.
 The packaged example also exercises extracted translation/yaw over two blocks.
@@ -56,15 +57,48 @@ sources use noautoik: IK-rule emission and runtime solving are not implemented.
 A separate owned S0 survey decoded 3,301 raw sequence files / 5,701 animation
 descriptors: 2,902 frame-movement pointers and zero piecewise movement records.
 Piecewise motion therefore has layout-reference and authored round-trip evidence,
-not retail root-motion parity. No frame-stream decoder or runtime movement proof
-is implied. Reports are motion-ik-native-survey.json and ik-native-rebuilds.json
+not retail piecewise root-motion parity or runtime movement proof. Reports are motion-ik-native-survey.json and ik-native-rebuilds.json
 under test-output; they record source/compiler/reader hashes. The research-only
 extractor copies and game-derived inputs/outputs are not distributed.
 
 Movement-record and chain floats use the existing metadata tolerance 0.000001.
 The native rig rebuild comparison was exact. No comparison limit was widened.
-motion-ik-validation-manifest.json records source/tool/report/package hashes and
-the automated check counts for this build.
+motion-ik-validation-manifest.json retains the preceding build's source/tool/report/
+package hashes and automated check counts.
+
+## Native frame-movement evidence
+
+The native encoder writes mode-0 scalar packets in 30-frame sections. Extracted
+motion uses the same grid to remove movement from the roots. Tests cover all four
+profiles, 65-frame extraction, section boundary/guard samples, yaw, raw delta clips,
+single-frame/zero channels, fixed text tracks, all 20 packet modes at multiple t
+values, native sidecar import/export, changed-sample detection, conflicting options,
+quantization failure and malformed flags/scales/counts/offsets/packet spans.
+Frame-motion limits are 0.001 inches and 0.005 degrees. No existing limits changed.
+
+All 13,025 streams in extracted owned S0-S3 common sequence assets decode without
+errors (1,292,880 frames). Per-season stream/frame counts:
+
+| Profile | Streams | Frames | Streams with multiple sections |
+| --- | ---: | ---: | ---: |
+| S0 | 2,902 | 288,411 | 955 |
+| S1 | 3,022 | 305,147 | 1,003 |
+| S2 | 2,929 | 281,611 | 950 |
+| S3 | 4,172 | 417,711 | 1,252 |
+
+The survey exercises modes 0..19 and finds no mode-1 signed16 overflows. Every
+stream was imported through the compiler into a zero-pose stub animation. The
+rebuilt movement payload and every decoded movement sample compare exactly.
+This measures compressed-stream preservation, not independently regenerated
+polynomial compression, source bone-animation equivalence, external rig loading,
+RPak baking or in-game root motion. The authored tests separately exercise the new
+mode-0 encoder and extraction.
+
+Local reports `frame-native-survey.json`, `frame-native-imports.json` and
+`frame-render-rebuilds.json` record source/compiler/tool hashes. The same 48 cached
+render sources also pass again with zero render error and no new differences.
+`frame-validation-manifest.json` records final tool, report and package hashes.
+Game-derived reports, sidecars, stub output and extractor copies stay ignored.
 
 ## Animation metadata export
 
@@ -171,7 +205,7 @@ and no new differences. This remains render-only evidence.
 ## Remaining limitations
 
 - Native PHY/BVH collision and ragdolls, procedural bones, RUI, external rigs and
-  sequence assets, native asset-GUID layers, native frame-movement streams, IK rules, transition
+  sequence assets, native asset-GUID layers, IK rules, transition
   nodes and followers. Export also rejects sequence keyvalues, transitions and
   procedural weight fixups, and unknown animation/sequence flags or event types.
 - RPak baking/streaming/relocations, material dependencies, shader compatibility

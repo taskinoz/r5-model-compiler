@@ -78,13 +78,50 @@ yaw in degrees, direction XYZ, cumulative position XYZ). The compiler's explicit
 `$legacymovement` path emits these native records and leaves the residual pose in
 the bone tracks. Direct `movementrecord` import preserves the stored values.
 Checks cover finite values, increasing end frames and frame/file bounds.
-The separate descriptor field at 0x1C points to a frame-movement stream, which is
-not emitted or exported. These are distinct representations.
+The separate descriptor field at 0x1C points to a frame-movement stream. These are
+distinct representations.
 
 The owned S0 raw sequence survey contains 3,301 files / 5,701 animation descriptors:
 2,902 have frame-movement pointers and none have piecewise movement records. Thus
 piecewise emission is supported by consulted native layout notes and authored
 round trips, not by retail movement parity or an in-game playback check.
+
+## Native frame movement
+
+Descriptor flag 0x40000 and the descriptor-relative int32 pointer at 0x1C identify
+frame movement. Early S0-S3 streams begin with four float32 scales (XYZ inches,
+yaw degrees), int32 section-frame count at 16, and stream-relative **int32** section
+offsets at 20. Section count is `(frames-1)/sectionFrames + 1`. A section begins
+with four uint16 section-relative channel offsets; zero means an all-zero channel.
+These are early-profile tables, not later retail packed offsets or TF2 RLE.
+
+Each scalar packet has uint8 mode/count. Mode 0 stores count int16 samples; mode 1
+stores an int16 base followed by count-1 signed byte deltas from that base. Modes
+2..19 store an int16 base and `(mode-2)%6` int16 polynomial coefficients. With
+`t=localFrame/(count-1)` (zero for count 1), coefficients multiply successive
+powers of t. Modes 2..7 have no residuals, 8..13 add packed 2-bit residuals and
+14..19 add packed 4-bit residuals: `2*value - ((1<<bits)-1)`. Arithmetic uses
+float32, including the final scale multiplication. Packet sizes in 16-bit words:
+`1+count`, `2+floor(count/2)`, or
+`2+coefficients+ceil(bits*count/16)` respectively. The last two formulas include
+word padding. Unknown modes, zero counts, invalid scales and out-of-file spans
+are rejected. The native survey found no mode-1 signed16 overflows; imports reject such
+overflows explicitly.
+
+The authored encoder emits mode 0 with 30-frame sections, a next-section sample
+for interpolation, and a duplicate final sample. It fits scales to authored ranges
+rather than inheriting TF2's 128-inch/180-degree floors. Root removal uses exactly
+the encoded quantization grid. Translation/yaw budgets are 0.001 inches/0.005
+degrees; no sample is silently clipped. Delta clips retain their deltas with zero
+extracted motion. Fixed decoded text tracks and validated `FM54` sidecar imports
+are also supported. Sidecars retain the native bytes, including internal padding,
+through the last referenced packet; unreferenced trailing file bytes are excluded.
+This preserves polynomial compression; it does not regenerate it.
+
+Owned S0/S1/S2/S3 raw sequences contain 2,902/3,022/2,929/4,172 movement streams
+(13,025 total) and 288,411/305,147/281,611/417,711 decoded frames (1,292,880 total).
+All modes 0..19 occur. Full decoding and zero-pose stub imports are offline movement
+checks, not animation-rig, RPak or runtime equivalence.
 
 IK chains are 20 bytes: relative name, link type, count, chain-relative link-array
 offset, and a float at 0x10. Links are 16 bytes (bone int32, knee direction XYZ).

@@ -113,16 +113,22 @@ def decompile(path, outdir, target, *, render_only=False):
             if seq['flags'] & ~0xA47BF: raise ValueError('unsupported sequence flags')
             names=[]
             for ai,desc in enumerate(seq['animations']):
-                if any(m.get('i',desc+off) for off in (0x1C,0x24)):
+                if m.get('i',desc+0x24):
                     raise ValueError('animation frame-movement/IK needs a richer native export')
                 flags=m.get('i',desc+12)
-                if flags & ~0x28017: raise ValueError('unsupported animation flags')
+                if flags & ~0x68017: raise ValueError('unsupported animation flags')
                 frames=m.animation(desc); filename=f'anim{si}_{ai}.smd'
                 write_smd(out/filename,m.bones,frames)
                 name=f'r5c_anim_{si}_{ai}'; names.append(name)
                 options=' fps '+format(m.get('f',desc+8),'.9g')+' noautoik'
                 for bit,word in ((1,'loop'),(2,'snap'),(4,'delta'),(0x10,'post'),(0x8000,'noforceloop')):
                     if flags&bit: options+=' '+word
+                movement=m.frame_movement(desc)
+                if movement:
+                    import struct
+                    stream=f'anim{si}_{ai}.fm54'
+                    (out/stream).write_bytes(b'FM54'+struct.pack('<I',len(frames))+movement['payload'])
+                    options+=' fmstream '+qc_quote(stream)
                 # Decoded samples already contain the loop boundary.
                 if flags&1 and not flags&0x8000: options+=' noforceloop'
                 for move in m.movements(desc):

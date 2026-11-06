@@ -212,8 +212,11 @@ struct QcAnimation {
         Vec3 vector, position;
     };
     std::vector<MovementRecord> movementRecords;
-    // "fmtrack file" (r2c extension): a stored frame-movement track (four scales, then
-    // x y z yaw per frame), used as is instead of being extracted from the root bones
+    // Validated FM54 sidecar: native movement bytes and expected frame count.
+    std::vector<uint8_t> fmStream;
+    int fmStreamFrames = 0;
+    bool extractFrameMovement = false;
+    // Decoded fmtrack samples (XYZ inches/yaw degrees) with their fixed scales.
     bool hasFmTrack = false;
     Vec4 fmScales;
     std::vector<Vec4> fmTrack;

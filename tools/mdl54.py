@@ -108,6 +108,52 @@ class Model(Reader):
             self.sequences.append(dict(name=self.string(p+self.get('i',p+4)),flags=self.get('i',p+12),
                                        animations=indices,offset=p))
 
+    def frame_movement(self, descriptor):
+        """Decode early-profile int32 section tables and bound every scalar packet."""
+        self.span(descriptor,0x34)
+        offset=self.get('i',descriptor+0x1C)
+        if bool(offset)!=bool(self.get('i',descriptor+12)&0x40000):
+            raise ValueError('frame-movement flag/pointer mismatch')
+        if not offset: return None
+        frames=self.get('i',descriptor+16)
+        if not 1<=frames<=1000000 or offset<0: raise ValueError('invalid frame-movement descriptor')
+        p=descriptor+offset; scales=self.get('4f',p); sf=self.get('i',p+16)
+        if not 1<=sf<=1000000: raise ValueError('invalid frame-movement section size')
+        if not all(math.isfinite(x) and x>=0 for x in scales): raise ValueError('invalid frame-movement scales')
+        sections=(frames-1)//sf+1; header=20+4*sections; self.span(p,header); end=p+header
+        samples=[]
+        for s in range(sections):
+            off=self.get('i',p+20+4*s)
+            if off<header: raise ValueError('invalid frame-movement section offset')
+            section=p+off; channels=self.get('4H',section); end=max(end,section+8)
+            count=min(sf,frames-s*sf); values=[]
+            for c,off in enumerate(channels):
+                if not off: values.append([0.]*count); continue
+                if off<8: raise ValueError('invalid frame-movement channel offset')
+                q=section+off; covered=0
+                while covered<count:
+                    mode,total,words=self._packet(q)
+                    covered+=total; end=max(end,q+words*2); q+=words*2
+                channel=[self._f32(self._track(section+off,f)*scales[c]) for f in range(count)]
+                if not all(math.isfinite(x) for x in channel): raise ValueError('non-finite frame movement')
+                values.append(channel)
+            samples.extend(zip(*values))
+        return dict(scales=scales,section_frames=sf,samples=samples,payload=self.data[p:end])
+
+    @staticmethod
+    def _f32(value):
+        try: return struct.unpack('<f',struct.pack('<f',value))[0]
+        except OverflowError: raise ValueError('native scalar overflow') from None
+
+    def _packet(self,p):
+        mode,total=self.get('2B',p)
+        if mode>19 or not total: raise ValueError('invalid native scalar packet')
+        extra=(mode-2)%6 if mode>=2 else 0
+        bits=0 if mode<8 else (2 if mode<14 else 4)
+        words=1+total if mode==0 else 2+total//2 if mode==1 else 2+extra+(bits*total+15)//16
+        self.span(p,words*2)
+        return mode,total,words
+
     def movements(self, descriptor):
         """Native piecewise root-motion records; separate from frame-movement streams."""
         self.span(descriptor,0x34); frames=self.get('i',descriptor+16)
@@ -404,8 +450,7 @@ class Model(Reader):
     def _track(self,p,frame):
         # General native mode-0 raw, mode-1 byte deltas and polynomial modes.
         while True:
-            mode,total=self.get('2B',p)
-            if not total: raise ValueError('zero-length animation track')
+            mode,total,words=self._packet(p)
             extra=(mode-2)%6 if mode>=2 else 0
             bits=0 if mode<8 else (2 if mode<14 else 4)
             words=(1+total if mode==0 else 2+(total//2) if mode==1 else 2+extra+(bits*total+15)//16)
@@ -413,12 +458,18 @@ class Model(Reader):
             frame-=total; p+=words*2
         if mode==0: return self.get('h',p+2+frame*2)
         base=self.get('h',p+2)
-        if mode==1: return base+(self.get('b',p+4+frame-1) if frame else 0)
-        t=frame/(total-1) if total>1 else 0.
-        value=base+sum(self.get('h',p+4+i*2)*t**(i+1) for i in range(extra))
+        if mode==1:
+            value=base+(self.get('b',p+4+frame-1) if frame else 0)
+            if not -32768<=value<=32767: raise ValueError('native byte-delta overflow')
+            return value
+        t=self._f32(frame/(total-1)) if total>1 else 0.
+        value=float(base); power=t
+        for i in range(extra):
+            value=self._f32(value+self._f32(self.get('h',p+4+i*2)*power))
+            power=self._f32(power*t)
         if bits:
             packed=self.get('H',p+4+extra*2+(frame*bits//16)*2)
-            value+=2*((packed>>(frame*bits%16))&((1<<bits)-1))-((1<<bits)-1)
+            value=self._f32(value+2*((packed>>(frame*bits%16))&((1<<bits)-1))-((1<<bits)-1))
         return value
 
 

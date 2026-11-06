@@ -7,6 +7,7 @@
 
 #include "build/context.h"
 #include "build/anim54.h"
+#include "build/frame54.h"
 #include "core/buffer.h"
 #include "core/log.h"
 #include "core/strings.h"
@@ -169,23 +170,6 @@ bool SolveIK(int thigh, int kneeBone, int foot, const Vec3& target, std::vector<
     world[kneeBone].SetOrigin(wThigh + kneePos);
     world[foot].SetOrigin(wThigh + ikFoot);
     return true;
-}
-
-// Frame movement scales (retail floors: 128 units, 180 degrees).
-Vec4 FrameMovementScales(const std::vector<Vec4>& fm) {
-    Vec4 out;
-    std::vector<double> vals;
-    for (int c = 0; c < 4; c++) {
-        vals.clear();
-        double maxv = 0;
-        for (auto& v : fm) {
-            double x = (&v.x)[c];
-            maxv = std::max(maxv, std::fabs(x));
-            if (x != 0) vals.push_back(x);
-        }
-        (&out.x)[c] = static_cast<float>(FitScale(vals, maxv, c < 3 ? 128. : 180.));
-    }
-    return out;
 }
 
 }  // namespace
@@ -759,8 +743,14 @@ void BuildContext::BuildAnimations() {
         // translation relative to frame 0; LX/LY/LZ/LZR extraction above produces a
         // fitted path. Either becomes a frame-movement track unless $legacymovement.
         bool exactRootMotion = (a.qc->flags & STUDIO_FRAMEMOVEMENT) && moves.empty() &&
-                               !qc.staticProp && !qc.legacyMovement && !a.qc->hasFmTrack;
-        if (a.qc->hasFmTrack && !qc.staticProp) {
+                               !qc.staticProp && !qc.legacyMovement && !a.qc->hasFmTrack && a.qc->fmStream.empty();
+        if (!a.qc->fmStream.empty()) {
+            if (a.qc->fmStreamFrames != a.numFrames) Fatal("native frame-movement frame count mismatch");
+            ValidateFrameMovement54(a.qc->fmStream, a.numFrames);
+            a.fixedFmScales = true;
+            a.flags |= STUDIO_FRAMEMOVEMENT;
+            moves.clear();
+        } else if (a.qc->hasFmTrack && !qc.staticProp) {
             // a stored track: the roots already exclude it, so neither is changed
             if (static_cast<int>(a.qc->fmTrack.size()) != a.numFrames)
                 Fatal("animation %s: frame movement track has %d frames, the animation %d", a.name.c_str(),
@@ -797,12 +787,15 @@ void BuildContext::BuildAnimations() {
             // Quantize the track as it will be stored, then take exactly that motion out
             // of the root bones so they absorb the quantization error. Extracted linear
             // motion was already removed from the roots, so only the difference is applied.
-            Vec4 fs = FrameMovementScales(a.frameMove);
+            Vec4 fs = NativeFrameScales54(a.frameMove);
+            EncodeFrameMovement54(a.frameMove, fs); // Validate before removing motion.
+            a.fmScales = fs;
+            a.fixedFmScales = true;
             for (int j = 0; j < a.numFrames; j++) {
                 Vec4& v = a.frameMove[j];
                 for (int c = 0; c < 4; c++) {
                     float s = (&fs.x)[c];
-                    (&v.x)[c] = std::clamp(std::round((&v.x)[c] / s), -32768.f, 32767.f) * s;
+                    (&v.x)[c] = std::round((&v.x)[c] / s) * s;
                 }
                 Mat3x4 corr = Invert(AngleMatrix(RadianEuler(0, 0, DegToRad(v.w)), Vec3(v.x, v.y, v.z)));
                 if (!exactRootMotion) corr = Concat(corr, cum[j]);
@@ -1135,31 +1128,6 @@ static std::vector<uint8_t> EncodeChain(const BuildContext& ctx, const WAnim& a,
         buf.PatchAt<uint8_t>(rec + 5, 0);
     }
     return buf.Data();
-}
-
-// mstudioframemovement_t: float scale[4]; short offset[4]; then RLE streams for
-// x, y, z and yaw. Default scales match retail (128/32767 units, 180/32767 degrees).
-static std::vector<uint8_t> EncodeFrameMovement(const std::vector<Vec4>& fm, const Vec4* given = nullptr) {
-    Buffer b;
-    b.Reserve(24);
-    Vec4 scales = given ? *given : FrameMovementScales(fm);
-    for (int c = 0; c < 4; c++) {
-        float scale = (&scales.x)[c];
-        b.PatchAt<float>(c * 4, scale);
-        std::vector<int16_t> vals(fm.size());
-        bool zero = true;
-        for (size_t f = 0; f < fm.size(); f++) {
-            vals[f] = static_cast<int16_t>(scale != 0 ? std::clamp(std::round((&fm[f].x)[c] / scale), -32768.f, 32767.f) : 0.f);
-            if (vals[f]) zero = false;
-        }
-        if (zero) continue;
-        size_t at = b.Tell();
-        if (at > 32767) Fatal("frame movement track too large");
-        b.PatchAt<int16_t>(16 + c * 2, static_cast<int16_t>(at));
-        for (int16_t v : EncodeRLE(vals)) b.I16(v);
-    }
-    b.Align(4);
-    return b.Data();
 }
 
 // ---------------------------------------------------------------------------
@@ -1511,7 +1479,8 @@ void EncodeAnimations(BuildContext& ctx) {
         // only the bits retail animation descriptors use (looping, snap, delta, all-zeros,
         // 0x20000, frame movement); build-time flags such as noforceloop are not stored
         ca.flags = a.flags & (0x1 | 0x2 | 0x4 | 0x20 | 0x20000 | STUDIO_FRAMEMOVEMENT);
-        if (!a.frameMove.empty()) ca.frameMovement = EncodeFrameMovement(a.frameMove, a.fixedFmScales ? &a.fmScales : nullptr);
+        if (!a.qc->fmStream.empty()) ca.frameMovement = a.qc->fmStream;
+        else if (!a.frameMove.empty()) ca.frameMovement = EncodeFrameMovement54(a.frameMove, a.fixedFmScales ? a.fmScales : NativeFrameScales54(a.frameMove));
         else ca.flags &= ~STUDIO_FRAMEMOVEMENT;
         ca.numFrames = a.numFrames;
         ca.movements = a.movements;

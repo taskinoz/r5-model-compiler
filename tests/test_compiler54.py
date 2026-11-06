@@ -145,15 +145,106 @@ class Compiler54(unittest.TestCase):
                                    'movementrecord 0 64 1 1 0 1 0 0 1 0 0\nmovementrecord 0 64 1 1 0 1 0 0 1 0 0')):
             self.run_compiler(self.qc.replace('$sequence idle "mesh.smd"','$sequence idle { "mesh.smd"\n'+records+'\n}'),name=f'bad{i}',ok=False)
 
-    def test_frame_movement_requests_stay_rejected(self):
-        for i,options in enumerate(('rm','rootmotion','framemovement','LX')):
-            qc=self.qc.replace('$sequence idle "mesh.smd"','$sequence idle "mesh.smd" '+options)
-            # Explicit rm must not disappear when legacy extraction is selected.
-            if options=='rm': qc='$legacymovement\n'+qc
-            if options=='LX':
-                write_smd(self.work/'move.smd',self.bones,[self.frames[0],[((1,0,0),(0,0,0),(1,1,1)),self.frames[0][1]]])
-                qc=qc.replace('$sequence idle "mesh.smd"','$sequence idle "move.smd"')
-            self.run_compiler(qc,name=f'reject{i}',ok=False)
+    def test_native_frame_movement_extraction_roundtrip(self):
+        frames=[[((f*.125,0,0),(0,0,0),(1,1,1)),self.frames[0][1]] for f in range(65)]
+        write_smd(self.work/'move.smd',self.bones,frames)
+        for target in PROFILES:
+            for option in ('rm','rootmotion','framemovement','LX'):
+                with self.subTest(target=target,option=option):
+                    qc=self.qc.replace('$sequence idle "mesh.smd"','$sequence idle "move.smd" '+option)
+                    out,_=self.run_compiler(qc,target=target,name=target+option)
+                    m=Model(out,target); desc=m.sequences[0]['animations'][0]; fm=m.frame_movement(desc)
+                    self.assertEqual(len(fm['samples']),65)
+                    for f in (0,29,30,31,59,60,64):
+                        self.assertAlmostEqual(fm['samples'][f][0],f*.125,delta=.001)
+                        self.assertAlmostEqual(m.animation(desc)[f][0][0][0],0,delta=.001)
+                    export=decompile(out,self.work/(target+option+'export'),target)
+                    rebuilt,_=self.run_compiler(export.read_text(),target=target,name=target+option+'rebuilt',extra=['-path',str(export.parent)])
+                    self.assertEqual(validate(rebuilt,target,out,animation_metadata=True)['differences'],[])
+
+    def test_native_frame_yaw_delta_and_boundary_guards(self):
+        frames=[[((0,0,0),(0,math.pi/2,f*.01),(1,1,1)),self.frames[0][1]] for f in range(32)]
+        write_smd(self.work/'turn.smd',self.bones,frames)
+        qc=self.qc.replace('$sequence idle "mesh.smd"','$sequence idle "turn.smd" rm')
+        out,_=self.run_compiler(qc)
+        m=Model(out,'s0');desc=m.sequences[0]['animations'][0];fm=m.frame_movement(desc)
+        self.assertAlmostEqual(fm['samples'][-1][3],math.degrees(.31),delta=.005)
+        p=desc+m.get('i',desc+0x1C);section=p+m.get('i',p+20);channel=m.get('H',section+6)
+        guard=m._track(section+channel,30)*fm['scales'][3]
+        self.assertAlmostEqual(guard,fm['samples'][30][3],delta=.00001)
+        # Raw delta clips retain local deltas and carry a zero movement stream.
+        out,_=self.run_compiler(qc.replace('$sequence idle "turn.smd" rm','$animation turn "turn.smd" rm delta\n$sequence idle turn'),name='delta')
+        m=Model(out,'s0');fm=m.frame_movement(m.sequences[0]['animations'][0])
+        self.assertTrue(all(all(x==0 for x in frame) for frame in fm['samples']))
+        out,_=self.run_compiler(self.qc.replace('$sequence idle "mesh.smd"','$sequence idle "mesh.smd" rm'),name='single')
+        m=Model(out,'s0'); self.assertEqual(m.frame_movement(m.sequences[0]['animations'][0])['samples'],[(0.,0.,0.,0.)])
+
+    def test_native_frame_text_track(self):
+        (self.work/'track.txt').write_text('.01 .01 .01 .01\n1 2 3 4\n')
+        out,_=self.run_compiler(self.qc.replace('$sequence idle "mesh.smd"','$sequence idle "mesh.smd" fmtrack "track.txt"'))
+        m=Model(out,'s0'); fm=m.frame_movement(m.sequences[0]['animations'][0])
+        for x,y in zip(fm['samples'][0],(1,2,3,4)): self.assertAlmostEqual(x,y,delta=.001)
+
+    def test_native_frame_stream_modes_and_malformed_input(self):
+        # Three samples exercise polynomial t=0, .5, 1 and packed residuals.
+        write_smd(self.work/'three.smd',self.bones,self.frames*3)
+        for mode in range(20):
+            extra=(mode-2)%6 if mode>=2 else 0; bits=0 if mode<8 else 2 if mode<14 else 4
+            packet=bytes((mode,3))
+            if mode==0: packet+=struct.pack('<3h',10,11,12)
+            elif mode==1: packet+=struct.pack('<h2b',10,1,-1)
+            else:
+                packet+=struct.pack('<h'+'h'*extra,10,*([2]*extra))
+                if bits: packet+=struct.pack('<H',(1<<bits) | (((1<<bits)-1)<<(2*bits)))
+            payload=struct.pack('<4fi i4H',.001,.001,.001,.001,3,24,8,0,0,0)+packet
+            (self.work/'track.fm54').write_bytes(b'FM54'+struct.pack('<I',3)+payload)
+            qc=self.qc.replace('$sequence idle "mesh.smd"','$sequence idle "three.smd" fmstream "track.fm54"')
+            out,_=self.run_compiler(qc,name=f'mode{mode}')
+            m=Model(out,'s0'); fm=m.frame_movement(m.sequences[0]['animations'][0])
+            if mode==0: expected=[.010,.011,.012]
+            elif mode==1: expected=[.010,.011,.009]
+            else:
+                residual=[-((1<<bits)-1),2-((1<<bits)-1),(1<<bits)-1] if bits else [0,0,0]
+                expected=[(10+sum(2*t**(i+1) for i in range(extra))+r)*.001 for t,r in zip((0,.5,1),residual)]
+            for sample,value in zip(fm['samples'],expected): self.assertAlmostEqual(sample[0],value,delta=1e-6)
+        for i,bad in enumerate((payload[:-1],payload[:32]+bytes((20,1))+payload[34:],payload[:32]+bytes((0,0))+payload[34:])):
+            (self.work/'track.fm54').write_bytes(b'FM54'+struct.pack('<I',3)+bad)
+            self.run_compiler(qc,name=f'badstream{i}',ok=False)
+            fake=Model.__new__(Model); Reader.__init__(fake,struct.pack('<3ifi2i i',0,0,0,0x40000,3,0,0,52)+bytes(20)+bad)
+            with self.assertRaises(ValueError): fake.frame_movement(0)
+
+    def test_native_frame_delta_overflow_rejected(self):
+        write_smd(self.work/'two.smd',self.bones,self.frames*2)
+        payload=struct.pack('<4fii4H',.001,.001,.001,.001,2,24,8,0,0,0)+bytes((1,2))+struct.pack('<hbB',32767,1,0)
+        (self.work/'overflow.fm54').write_bytes(b'FM54'+struct.pack('<I',2)+payload)
+        self.run_compiler(self.qc.replace('$sequence idle "mesh.smd"','$sequence idle "two.smd" fmstream "overflow.fm54"'),ok=False)
+        m=Model.__new__(Model);Reader.__init__(m,payload)
+        with self.assertRaisesRegex(ValueError,'overflow'):m._track(32,1)
+
+    def test_native_frame_metadata_and_bounds(self):
+        (self.work/'track.txt').write_text('.001 .001 .001 .001\n1 0 0 0\n')
+        qc=self.qc.replace('$sequence idle "mesh.smd"','$sequence idle "mesh.smd" fmtrack "track.txt"')
+        out,_=self.run_compiler(qc)
+        (self.work/'track.txt').write_text('.001 .001 .001 .001\n1.1 0 0 0\n')
+        changed,_=self.run_compiler(qc,name='changed')
+        result=validate(changed,'s0',out,animation_metadata=True)
+        self.assertIn('sequence 0 blend 0 frame movement',result['differences'])
+        self.assertAlmostEqual(result['frame_movement_max_error']['position'],.1,delta=.001)
+        m=Model(out,'s0');d=m.sequences[0]['animations'][0];p=d+m.get('i',d+0x1C)
+        original=out.read_bytes()
+        for offset,fmt,value in ((d+12,'i',0),(p,'f',float('nan')),(p,'f',-1.),(p+16,'i',0),(p+20,'i',-1),(p+24,'H',4)):
+            data=bytearray(original);struct.pack_into('<'+fmt,data,offset,value);out.write_bytes(data)
+            with self.assertRaises(ValueError): validate(out,'s0')
+        out.write_bytes(original)
+
+    def test_native_frame_quantization_and_conflicts_rejected(self):
+        (self.work/'track.txt').write_text('1 1 1 1\n.1 0 0 0\n')
+        qc=self.qc.replace('$sequence idle "mesh.smd"','$sequence idle "mesh.smd" fmtrack "track.txt"')
+        self.run_compiler(qc,ok=False)
+        (self.work/'track.txt').write_text('.001 .001 .001 .001\n1 0 0 0\n')
+        for i,changed in enumerate(('$legacymovement\n'+qc,qc.replace('fmtrack','rm fmtrack'),qc.replace('fmtrack','LX fmtrack'),qc.replace('fmtrack','fmtrack "track.txt" fmtrack'))):
+            self.run_compiler(changed,name=f'conflict{i}',ok=False)
+        self.run_compiler('$legacymovement\n'+self.qc.replace('$sequence idle "mesh.smd"','$sequence idle "mesh.smd" rm'),name='legacyrm',ok=False)
 
     def test_ik_chain_roundtrip_all_profiles(self):
         bones=[dict(name='hip',parent=-1),dict(name='twist',parent=0),dict(name='knee',parent=1),dict(name='foot',parent=2)]

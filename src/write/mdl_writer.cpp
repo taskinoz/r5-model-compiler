@@ -219,6 +219,11 @@ void MdlWriter::WriteAnimations() {
                 b_.V3(move.vector); b_.V3(move.position);
             }
         }
+        if (!a.frameMovement.empty()) {
+            b_.Align(4);
+            b_.PatchI32(p + 0x1C, Rel(p));
+            b_.Append(a.frameMovement);
+        }
         // Native sections include the boundary sample for interpolation.
         if (a.nativeSections.size() == 1) {
             b_.PatchI32(p + 0x20, Rel(p));

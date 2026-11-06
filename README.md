@@ -42,11 +42,11 @@ directory so companion sets do not mix.
 
 Implemented: static/skinned meshes (up to sixteen influences per vertex), LODs, body
 groups, attachments, hitboxes, skins, SMD and binary/keyvalues2 DMX input, basic
-sequences/blends/events, piecewise root-motion records, and native position/rotation/scale tracks. VG positions stay
+sequences/blends/events, piecewise root-motion records, native frame movement, and native position/rotation/scale tracks. VG positions stay
 float32; normals/tangents and weights use native packing. Basic IK chain descriptors
 can be compiled, exported and compared, but runtime IK has not been checked.
 
-The compiler rejects physics/collision, procedures, RUI, native frame-movement streams, IK rules,
+The compiler rejects physics/collision, procedures, RUI, IK rules,
 animation layers, transition nodes, followers, external rigs and more than sixteen influences. Some
 inherited QC commands remain unimplemented. No TF2 collision or animation structures
 are presented as native Apex output.
@@ -79,8 +79,26 @@ Records use animation-local frame numbers, normalized-block speed coefficients,
 yaw in degrees and cumulative position in inches. End frames must increase and
 remain within the clip; values must be finite. Export preserves records without
 extracting motion a second time. This is a legacy piecewise path: the surveyed
-S0 sequence assets instead use frame-movement streams. `rm`, `rootmotion`,
-`framemovement` and `fmtrack` remain rejected, including with `$legacymovement`.
+S0 sequence assets instead use frame-movement streams.
+
+For native frame movement, use `rm` (aliases `rootmotion` and `framemovement`)
+on an animation to extract translation and yaw relative to its first frame.
+Without `$legacymovement`, `LX`/`LY`/`LZ`/`LZR` and `walkframe` also produce native
+frame streams. `root_motion/native_triangle.qc` demonstrates this path. Native
+movement cannot be combined with `$legacymovement` or `$staticprop`.
+
+`fmtrack "track.txt"` imports editable movement: four float scales on the first
+line, then X/Y/Z in inches and yaw in degrees for every animation frame. Roots
+must already be in place. Authored streams use native raw scalar packets and
+30-frame sections, including a boundary sample. Quantization must stay within
+0.001 inches and 0.005 degrees; samples that cannot meet this budget fail.
+
+`fmstream "clip.fm54"` imports a validated native stream exported by
+`decompile54.py`. The sidecar contains `FM54`, a little-endian uint32 frame count,
+and the native payload. It preserves compressed polynomial packets without
+re-quantizing them. Imported tracks must match the animation frame count and
+cannot be combined with motion extraction or movement records. Raw stream
+preservation does not imply a polynomial encoder or runtime playback validation.
 
 `$ikchain leg foot links hip knee foot knee 1 0 0 angle_unknown 0.8660254` names
 three explicit links, permitting intervening twist bones to be skipped. Omit
@@ -131,12 +149,13 @@ explicitly discards physics, BVH, rigs and sequence metadata. A render-only pass
 not establish full-model equivalence or runtime compatibility.
 
 Default `roundtrip54.py` runs compare supported animation metadata, piecewise
-movement records, IK-chain fields and every frame
+movement records, native frame streams, IK-chain fields and every frame
 of every blend as well as render geometry. To request the same checks directly,
 use `validate54.py --animation-metadata --against original.rmdl`. Event cycles and
 numeric metadata use an absolute tolerance of 0.000001; full-frame position,
 rotation and scale limits are 0.001 inches, 0.0002 radians and 0.0016 respectively.
-Render-only runs keep their narrower scope. External animation rigs and runtime
+Frame-movement limits are 0.001 inches and 0.005 degrees; validation reports their
+maximum errors separately. Render-only runs keep their narrower scope. External animation rigs and runtime
 event dispatch remain unverified.
 
 The v53 helpers at tools/mdl53.py, decompile53.py and phy.py supply shared binary,
@@ -155,8 +174,8 @@ uv run --locked python -m unittest discover -s tests -p "test_*.py"
 ```
 
 CI follows R1: build, CTest, locked uv tests, packaging and clean-extraction checks.
-The ZIP includes the compiler, native tools, docs and five authored examples. The
-package check compiles and round-trips all five for all four targets, including
+The ZIP includes the compiler, native tools, docs and six authored examples. The
+package check compiles and round-trips all six for all four targets, including
 supported animation metadata and full-frame blend comparisons. Tags vX.Y.Z
 require release-notes/vX.Y.Z.md and a matching pyproject.toml version; the release
 workflow publishes the ZIP and SHA256SUMS. No R5 release has been tagged.
