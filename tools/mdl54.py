@@ -108,6 +108,32 @@ class Model(Reader):
             self.sequences.append(dict(name=self.string(p+self.get('i',p+4)),flags=self.get('i',p+12),
                                        animations=indices,offset=p))
 
+    def movements(self, descriptor):
+        """Native piecewise root-motion records; separate from frame-movement streams."""
+        self.span(descriptor,0x34); frames=self.get('i',descriptor+16)
+        result=[]; last=-1
+        for p in self.array(self.get('i',descriptor+0x14),descriptor+self.get('i',descriptor+0x18),44):
+            end,flags,*values=self.get('2i9f',p)
+            if end<=last or end<0 or end>=frames: raise ValueError('invalid movement end frame')
+            if not all(math.isfinite(x) for x in values): raise ValueError('non-finite movement record')
+            result.append(dict(end_frame=end,flags=flags,v0=values[0],v1=values[1],angle=values[2],
+                               vector=tuple(values[3:6]),position=tuple(values[6:9])))
+            last=end
+        return result
+
+    def ik_chains(self):
+        chains=[]
+        for p in self.array(self.get('i',0x124),self.get('i',0x128),20):
+            links=[]; unknown=self.get('f',p+16)
+            if not math.isfinite(unknown): raise ValueError('non-finite IK chain value')
+            for q in self.array(self.get('i',p+8),p+self.get('i',p+12),16):
+                bone=self.get('i',q); knee=self.get('3f',q+4)
+                if not 0<=bone<len(self.bones): raise ValueError('IK link bone outside skeleton')
+                if not all(math.isfinite(x) for x in knee): raise ValueError('non-finite IK knee direction')
+                links.append(dict(bone=bone,knee=knee))
+            chains.append(dict(name=self.string(p+self.get('i',p)),type=self.get('i',p+4),unknown=unknown,links=links))
+        return chains
+
     def pose_parameters(self):
         result=[]
         for p in self.array(self.get('i',0x134),self.get('i',0x138),20):

@@ -42,11 +42,11 @@ directory so companion sets do not mix.
 
 Implemented: static/skinned meshes (up to sixteen influences per vertex), LODs, body
 groups, attachments, hitboxes, skins, SMD and binary/keyvalues2 DMX input, basic
-sequences/blends/events, and native position/rotation/scale tracks. VG positions stay
+sequences/blends/events, piecewise root-motion records, and native position/rotation/scale tracks. VG positions stay
 float32; normals/tangents and weights use native packing. Basic IK chain descriptors
-can be emitted, but runtime IK has not been checked.
+can be compiled, exported and compared, but runtime IK has not been checked.
 
-The compiler rejects physics/collision, procedures, RUI, root motion, IK rules,
+The compiler rejects physics/collision, procedures, RUI, native frame-movement streams, IK rules,
 animation layers, transition nodes, followers, external rigs and more than sixteen influences. Some
 inherited QC commands remain unimplemented. No TF2 collision or animation structures
 are presented as native Apex output.
@@ -62,6 +62,34 @@ between frames, use `eventcycle <name/id> <cycle> "options"`, where cycle is fin
 and between 0 and 1 inclusive. This stores the native float cycle directly.
 Numeric IDs use legacy event type 0; names use native event type 1024. The animated
 prop example includes a two-way blend and a fractional-cycle event.
+
+## Piecewise root motion and IK chains
+
+Use `$legacymovement` with animation controls `LX`, `LY`, `LZ`, `LZR` or
+`walkframe <end frame> <controls...>` to extract piecewise motion into native
+44-byte movement records. Root bone samples retain the remaining local pose.
+The `root_motion/walking_triangle.qc` example has two movement blocks and an IK chain.
+For exact record import, animation options also accept:
+
+```text
+movementrecord endFrame flags v0 v1 yaw directionX directionY directionZ positionX positionY positionZ
+```
+
+Records use animation-local frame numbers, normalized-block speed coefficients,
+yaw in degrees and cumulative position in inches. End frames must increase and
+remain within the clip; values must be finite. Export preserves records without
+extracting motion a second time. This is a legacy piecewise path: the surveyed
+S0 sequence assets instead use frame-movement streams. `rm`, `rootmotion`,
+`framemovement` and `fmtrack` remain rejected, including with `$legacymovement`.
+
+`$ikchain leg foot links hip knee foot knee 1 0 0 angle_unknown 0.8660254` names
+three explicit links, permitting intervening twist bones to be skipped. Omit
+`links` to use the end bone's parent and grandparent. `knee` stores the first link's
+direction; `angle_unknown` is the stored scalar, not an angle in degrees. Its
+early-Apex default is cos(30 degrees), verified over 326 native chains. Use
+`noautoik` on animations with chains: automatic release rules and explicit IK rules
+are still unsupported. IK locks, asset dependencies and runtime solving are not
+established by chain-field comparisons.
 
 ## Materials and loading
 
@@ -97,12 +125,13 @@ pose parameters/keys, per-blend FPS and flags, numeric/named events, fades, acti
 names/modifiers, bounds and sequence bone weights. Named `$animation` definitions
 keep animation settings separate from sequence playback flags. Exported `seqflags`
 is a compiler extension for those sequence flags; scale/single-frame bits are derived.
-Default mode rejects known unsupported metadata, including sequence layers, IK,
+Default mode rejects known unsupported metadata, including sequence layers, IK rules/locks,
 weight fixups and reference descriptors without embedded clips. `--render-only`
 explicitly discards physics, BVH, rigs and sequence metadata. A render-only pass does
 not establish full-model equivalence or runtime compatibility.
 
-Default `roundtrip54.py` runs compare supported animation metadata and every frame
+Default `roundtrip54.py` runs compare supported animation metadata, piecewise
+movement records, IK-chain fields and every frame
 of every blend as well as render geometry. To request the same checks directly,
 use `validate54.py --animation-metadata --against original.rmdl`. Event cycles and
 numeric metadata use an absolute tolerance of 0.000001; full-frame position,
@@ -126,8 +155,8 @@ uv run --locked python -m unittest discover -s tests -p "test_*.py"
 ```
 
 CI follows R1: build, CTest, locked uv tests, packaging and clean-extraction checks.
-The ZIP includes the compiler, native tools, docs and four authored examples. The
-package check compiles and round-trips all four for all four targets, including
+The ZIP includes the compiler, native tools, docs and five authored examples. The
+package check compiles and round-trips all five for all four targets, including
 supported animation metadata and full-frame blend comparisons. Tags vX.Y.Z
 require release-notes/vX.Y.Z.md and a matching pyproject.toml version; the release
 workflow publishes the ZIP and SHA256SUMS. No R5 release has been tagged.

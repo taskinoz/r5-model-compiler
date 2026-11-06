@@ -34,6 +34,7 @@ def compare_animation_metadata(model, reference):
             return isinstance(a,(int,float)) and isinstance(b,(int,float)) and abs(a-b)<=1e-6
         return a==b
     if not equal(model.pose_parameters(),reference.pose_parameters()): differences.append('pose parameters')
+    if not equal(model.ik_chains(),reference.ik_chains()): differences.append('IK chains')
     if [b['name'] for b in model.bones]!=[b['name'] for b in reference.bones]: differences.append('animation bone identities')
     if len(model.sequences)!=len(reference.sequences): differences.append('sequence count')
     for index,(seq,ref) in enumerate(zip(model.sequences,reference.sequences)):
@@ -42,6 +43,8 @@ def compare_animation_metadata(model, reference):
         for field in a:
             if not equal(a[field],b[field]): differences.append(f'sequence {index} {field}')
         for blend,(desc,rdesc) in enumerate(zip(seq['animations'],ref['animations'])):
+            if not equal(model.movements(desc),reference.movements(rdesc)):
+                differences.append(f'sequence {index} blend {blend} movements')
             # noforceloop steers compilation, not playback.
             if (model.get('i',desc+12)&~0x8000) != (reference.get('i',rdesc+12)&~0x8000):
                 differences.append(f'sequence {index} blend {blend} flags')
@@ -64,6 +67,7 @@ def compare_animation_metadata(model, reference):
 
 def validate(path,target,against=None,*,animation_metadata=False):
     m=Model(path,target); render=m.render() if m.meshes else []
+    m.ik_chains()
     result=dict(model=str(path),target=target,bones=len(m.bones),lods=len(render),
                 triangles=sum(len(me['triangles']) for lod in render for me in lod),frames=0,
                 limits=LIMITS,differences=[],max_error=dict.fromkeys(LIMITS,0.))
@@ -79,6 +83,7 @@ def validate(path,target,against=None,*,animation_metadata=False):
     for seq in m.sequences:
         if animation_metadata: m.sequence_metadata(seq)
         for desc in seq['animations']:
+            m.movements(desc)
             frames=m.animation(desc); result['frames']+=len(frames)
             if not all(math.isfinite(x) for pose in frames for bone in pose for channel in bone for x in channel):
                 raise ValueError('non-finite animation pose')
@@ -100,7 +105,7 @@ def validate(path,target,against=None,*,animation_metadata=False):
         result['scope']='render subset; no physics/BVH/material GUID/sequence metadata equivalence claim'
         if animation_metadata:
             result['differences']+=compare_animation_metadata(m,ref)
-            result['scope']='render plus supported sequence metadata and full-frame blend poses; no physics/BVH/rig/runtime equivalence claim'
+            result['scope']='render plus supported sequence/IK-chain metadata, piecewise root motion and full-frame blend poses; no physics/BVH/rig/runtime equivalence claim'
     return result
 
 

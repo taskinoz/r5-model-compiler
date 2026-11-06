@@ -1,0 +1,18 @@
+version 1
+nodes
+0 "hip" -1
+1 "knee" 0
+2 "foot" 1
+end
+skeleton
+time 0
+0 0 0 4 0 0 0 1 1 1
+1 0 0 -2 0 0 0 1 1 1
+2 0 0 -2 0 0 0 1 1 1
+end
+triangles
+r5c_examples/plain
+0 0 0 0 0 0 1 0 1 1 2 1
+0 2 0 0 0 0 1 1 1 1 2 1
+0 0 2 0 0 0 1 0 0 1 2 1
+end

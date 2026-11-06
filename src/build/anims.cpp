@@ -833,8 +833,12 @@ void BuildContext::BuildAnimations() {
             a.movements.clear();
             int last = -1;
             for (auto& stored : a.qc->movementRecords) {
-                if (stored.endFrame < last || stored.endFrame >= a.numFrames || stored.endFrame < 0)
+                if (stored.endFrame <= last || stored.endFrame >= a.numFrames || stored.endFrame < 0)
                     Fatal("animation %s: invalid movementrecord end frame", a.name.c_str());
+                if (!std::isfinite(stored.v0) || !std::isfinite(stored.v1) || !std::isfinite(stored.angle) ||
+                    !std::isfinite(stored.vector.x) || !std::isfinite(stored.vector.y) || !std::isfinite(stored.vector.z) ||
+                    !std::isfinite(stored.position.x) || !std::isfinite(stored.position.y) || !std::isfinite(stored.position.z))
+                    Fatal("animation %s: non-finite movementrecord", a.name.c_str());
                 CMovement cm;
                 cm.endFrame = stored.endFrame; cm.motionFlags = stored.motionFlags;
                 cm.v0 = stored.v0; cm.v1 = stored.v1; cm.angle = stored.angle;

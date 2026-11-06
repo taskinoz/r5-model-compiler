@@ -36,7 +36,7 @@ def decompile(path, outdir, target, *, render_only=False):
     unsupported=[]
     for label,offset in [('physics',0x1DC),('BVH collision',0x214),('RUI',0x12C),
                          ('procedural bones',0x198),('followers',0x1E8),('include models',0x158),
-                         ('IK chains',0x124),('transition nodes',0xFC)]:
+                         ('IK autoplay locks',0x148),('transition nodes',0xFC)]:
         if m.get('i',offset): unsupported.append(label)
     if any(b['proctype'] for b in m.bones): unsupported.append('bone procedures')
     if unsupported and not render_only:
@@ -59,6 +59,15 @@ def decompile(path, outdir, target, *, render_only=False):
         values=(*b['pos'],*(rotation[i]*180/math.pi for i in (1,2,0)),0,0,0,0,0,0)
         lines+=['$definebone '+qc_quote(b['name'])+' '+qc_quote(parent)+' '+' '.join(format(v,'.9g') for v in values)]
         if any(v!=1 for v in b['scale']): lines[-1]+=' scale '+' '.join(format(v,'.9g') for v in b['scale'])
+    if not render_only:
+        for chain in m.ik_chains():
+            links=chain['links']
+            if chain['type']!=0 or len(links)!=3 or any(any(x!=0 for x in link['knee']) for link in links[1:]):
+                raise ValueError('unsupported IK chain type/link layout')
+            names=[qc_quote(m.bones[link['bone']]['name']) for link in links]
+            lines+=['$ikchain '+qc_quote(chain['name'])+' '+names[-1]+' links '+' '.join(names)+
+                    ' knee '+' '.join(format(x,'.9g') for x in links[0]['knee'])+
+                    ' angle_unknown '+format(chain['unknown'],'.9g')]
     lods=m.render() if m.meshes else [[]]
     vertex_ids={}
     for mi,mesh in enumerate(m.meshes):
@@ -104,8 +113,8 @@ def decompile(path, outdir, target, *, render_only=False):
             if seq['flags'] & ~0xA47BF: raise ValueError('unsupported sequence flags')
             names=[]
             for ai,desc in enumerate(seq['animations']):
-                if any(m.get('i',desc+off) for off in (0x14,0x1C,0x24)):
-                    raise ValueError('animation movement/IK needs a richer native export')
+                if any(m.get('i',desc+off) for off in (0x1C,0x24)):
+                    raise ValueError('animation frame-movement/IK needs a richer native export')
                 flags=m.get('i',desc+12)
                 if flags & ~0x28017: raise ValueError('unsupported animation flags')
                 frames=m.animation(desc); filename=f'anim{si}_{ai}.smd'
@@ -116,6 +125,9 @@ def decompile(path, outdir, target, *, render_only=False):
                     if flags&bit: options+=' '+word
                 # Decoded samples already contain the loop boundary.
                 if flags&1 and not flags&0x8000: options+=' noforceloop'
+                for move in m.movements(desc):
+                    values=(move['v0'],move['v1'],move['angle'],*move['vector'],*move['position'])
+                    options+=' movementrecord '+str(move['end_frame'])+' '+str(move['flags'])+' '+' '.join(format(x,'.9g') for x in values)
                 lines+=['$animation '+qc_quote(name)+' '+qc_quote(filename)+options]
             weightname=f'r5c_weights_{si}'
             lines+=['$weightlist '+qc_quote(weightname)+' {']

@@ -78,6 +78,8 @@ void BuildContext::BuildAttachments() {
 
 void BuildContext::BuildIK() {
     for (auto& c : qc.ikChains) {
+        if (!std::isfinite(c.unk) || !std::isfinite(c.knee.x) || !std::isfinite(c.knee.y) || !std::isfinite(c.knee.z))
+            Fatal("ikchain '%s': non-finite chain value or knee direction", c.name.c_str());
         CIKChain ch;
         ch.name = c.name;
         ch.linkType = 0;

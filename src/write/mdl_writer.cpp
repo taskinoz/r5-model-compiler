@@ -209,6 +209,16 @@ void MdlWriter::WriteAnimations() {
         b_.PatchAt<float>(p + 8, a.fps);
         b_.PatchI32(p + 12, a.flags);
         b_.PatchI32(p + 16, a.numFrames);
+        // Native v8-v10 animation descriptors retain 44-byte piecewise movements.
+        b_.PatchI32(p + 0x14, static_cast<int32_t>(a.movements.size()));
+        if (!a.movements.empty()) {
+            b_.PatchI32(p + 0x18, Rel(p));
+            for (const auto& move : a.movements) {
+                b_.I32(move.endFrame); b_.I32(move.motionFlags);
+                b_.F32(move.v0); b_.F32(move.v1); b_.F32(move.angle);
+                b_.V3(move.vector); b_.V3(move.position);
+            }
+        }
         // Native sections include the boundary sample for interpolation.
         if (a.nativeSections.size() == 1) {
             b_.PatchI32(p + 0x20, Rel(p));

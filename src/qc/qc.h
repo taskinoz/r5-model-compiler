@@ -132,7 +132,7 @@ struct QcIKChain {
     float value = 0, height = 18, floor = 0, radius = 0;
     Vec3 knee;
     Vec3 center;
-    float unk = 0.707f;  // Respawn chain value (cos 45 by default)
+    float unk = 0.8660254f;  // early Apex native rigs: cos(30 degrees)
     // explicit link bones, root first (r2c extension): retail chains can skip twist
     // bones between the shoulder and elbow; default is bone, parent, grandparent
     std::vector<std::string> links;

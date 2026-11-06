@@ -70,6 +70,32 @@ This survey provides no retail animated-event parity evidence. Native autolayers
 reference a uint64 sequence asset GUID, unlike TF2's local sequence index; the
 compiler rejects layers until the native asset dependency path is implemented.
 
+## Piecewise movement and IK chains
+
+Animation descriptors retain a movement count/index at 0x14/0x18. Each record is
+44 bytes: int32 end frame and motion flags, then nine floats (v0, v1, cumulative
+yaw in degrees, direction XYZ, cumulative position XYZ). The compiler's explicit
+`$legacymovement` path emits these native records and leaves the residual pose in
+the bone tracks. Direct `movementrecord` import preserves the stored values.
+Checks cover finite values, increasing end frames and frame/file bounds.
+The separate descriptor field at 0x1C points to a frame-movement stream, which is
+not emitted or exported. These are distinct representations.
+
+The owned S0 raw sequence survey contains 3,301 files / 5,701 animation descriptors:
+2,902 have frame-movement pointers and none have piecewise movement records. Thus
+piecewise emission is supported by consulted native layout notes and authored
+round trips, not by retail movement parity or an in-game playback check.
+
+IK chains are 20 bytes: relative name, link type, count, chain-relative link-array
+offset, and a float at 0x10. Links are 16 bytes (bone int32, knee direction XYZ).
+All 326 chains in 487 installed S0-S3 rigs have type 0, three links and the exact
+float32 value 0.8660253882408142 (cos 30 degrees) at 0x10. This corrects the inherited
+TF2 default. Explicit overrides preserve the raw scalar. The exporter supports
+three explicit links and the first link's knee vector; it rejects other layouts.
+The native rig chain descriptions were independently decoded and rebuilt, with
+bone indices compared through their bone names. This does not produce a native
+RPak rig asset or establish runtime IK/rule/lock equivalence.
+
 ## VG revision 1
 
 Header: 0x100 bytes, magic 0x47567430, revision 1, byte length at 0x0C. Uint64

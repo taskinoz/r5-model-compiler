@@ -148,7 +148,7 @@ struct CIKChain {
     std::string name;
     int linkType = 0;
     std::vector<CIKLink> links;
-    float unk = 0.707f;
+    float unk = 0.8660254f;
 };
 
 struct CIKLock {

@@ -100,6 +100,9 @@ int main(int argc, char** argv) {
         Info("Working on \"%s\"", qc.c_str());
         auto def = ParseQC(qc, opt);
         if(def->collision.present) Fatal("Apex native physics/BVH compilation is not implemented yet");
+        for (const auto& anim : def->animations)
+            if ((anim->flags & STUDIO_FRAMEMOVEMENT) || anim->hasFmTrack)
+                Fatal("Apex native frame-movement streams are not implemented yet; use $legacymovement with LX/LY/LZ/LZR for piecewise motion");
         CompiledModel model = Build(*def);
         model.name = def->modelName;
         if(EndsWithI(model.name,".mdl")) model.name.resize(model.name.size()-4);
@@ -115,8 +118,8 @@ int main(int argc, char** argv) {
         if (!model.uiPanels.empty()) Fatal("Apex RUI compilation is not implemented yet");
         for(auto& bone:model.bones) if(bone.proctype || bone.jiggle>=0)
             Fatal("Apex procedural-bone compilation is not implemented yet");
-        for(auto& anim:model.animations) if(!anim.ikRules.empty() || !anim.frameMovement.empty() || !anim.movements.empty())
-            Fatal("Apex IK rules and root-motion tracks are not implemented yet");
+        for(auto& anim:model.animations) if(!anim.ikRules.empty() || !anim.frameMovement.empty())
+            Fatal("Apex IK rules and native frame-movement streams are not implemented yet");
         if(!model.boneFollowers.empty() || !model.includeModels.empty())
             Fatal("Apex followers and external animation rigs are not implemented yet");
         if(!model.nodeNames.empty()) Fatal("Apex transition nodes are not implemented yet");

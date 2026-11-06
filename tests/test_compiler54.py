@@ -107,6 +107,96 @@ class Compiler54(unittest.TestCase):
         _,run=self.run_compiler(self.qc+'\n$collisionmodel "mesh.smd" { $mass 5 }\n',ok=False)
         self.assertIn('native physics',run.stdout)
 
+    def test_piecewise_root_motion_roundtrip_all_profiles(self):
+        frames=[[((j*.5,0,0),(0,0,0),(1,1,1)),((0,0,2),(0,0,0),(1,1,1))] for j in range(95)]
+        write_smd(self.work/'walk.smd',self.bones,frames)
+        qc=self.qc.replace('$sequence idle "mesh.smd"','$legacymovement\n$sequence walk "walk.smd" LX')
+        for target in PROFILES:
+            out,_=self.run_compiler(qc,target=target,name=target)
+            m=Model(out,target); desc=m.sequences[0]['animations'][0]; moves=m.movements(desc)
+            self.assertEqual(len(moves),1); self.assertEqual(moves[0]['end_frame'],94)
+            self.assertAlmostEqual(moves[0]['position'][0],47,delta=.0001)
+            self.assertAlmostEqual(moves[0]['v0'],47,delta=.0001)
+            self.assertAlmostEqual(moves[0]['v1'],47,delta=.0001)
+            self.assertEqual(moves[0]['flags']&0x40,0x40)
+            self.assertFalse(m.get('i',desc+12)&0x40000); self.assertEqual(m.get('i',desc+0x1C),0)
+            for pose in m.animation(desc): self.assertAlmostEqual(pose[0][0][0],0,delta=.001)
+            export=decompile(out,self.work/(target+'export'),target)
+            rebuilt,_=self.run_compiler(export.read_text(),target=target,name=target+'rebuilt',extra=['-path',str(export.parent)])
+            self.assertEqual(validate(rebuilt,target,out,animation_metadata=True)['differences'],[])
+
+    def test_explicit_movement_records_and_comparison(self):
+        frames=[self.frames[0] for _ in range(9)]
+        write_smd(self.work/'walk.smd',self.bones,frames)
+        qc=self.qc.replace('$sequence idle "mesh.smd"','$sequence walk { "walk.smd"\nmovementrecord 4 64 2 6 30 1 0 0 4 0 0\nmovementrecord 8 128 6 2 60 0 1 0 4 4 0\n}')
+        for target in PROFILES:
+            out,_=self.run_compiler(qc,target=target,name=target)
+            m=Model(out,target); moves=m.movements(m.sequences[0]['animations'][0])
+            self.assertEqual([r['end_frame'] for r in moves],[4,8]); self.assertEqual(moves[1]['angle'],60)
+            export=decompile(out,self.work/(target+'export'),target)
+            rebuilt,_=self.run_compiler(export.read_text(),target=target,name=target+'rebuilt',extra=['-path',str(export.parent)])
+            self.assertEqual(validate(rebuilt,target,out,animation_metadata=True)['differences'],[])
+            changed,_=self.run_compiler(qc.replace('6 2 60','6 2 65'),target=target,name=target+'changed')
+            self.assertIn('sequence 0 blend 0 movements',validate(changed,target,out,animation_metadata=True)['differences'])
+
+    def test_invalid_movement_records_rejected(self):
+        for i,records in enumerate(('movementrecord 1 64 1 1 0 1 0 0 1 0 0',
+                                   'movementrecord 0 64 nan 1 0 1 0 0 1 0 0',
+                                   'movementrecord 0 64 1 1 0 1 0 0 1 0 0\nmovementrecord 0 64 1 1 0 1 0 0 1 0 0')):
+            self.run_compiler(self.qc.replace('$sequence idle "mesh.smd"','$sequence idle { "mesh.smd"\n'+records+'\n}'),name=f'bad{i}',ok=False)
+
+    def test_frame_movement_requests_stay_rejected(self):
+        for i,options in enumerate(('rm','rootmotion','framemovement','LX')):
+            qc=self.qc.replace('$sequence idle "mesh.smd"','$sequence idle "mesh.smd" '+options)
+            # Explicit rm must not disappear when legacy extraction is selected.
+            if options=='rm': qc='$legacymovement\n'+qc
+            if options=='LX':
+                write_smd(self.work/'move.smd',self.bones,[self.frames[0],[((1,0,0),(0,0,0),(1,1,1)),self.frames[0][1]]])
+                qc=qc.replace('$sequence idle "mesh.smd"','$sequence idle "move.smd"')
+            self.run_compiler(qc,name=f'reject{i}',ok=False)
+
+    def test_ik_chain_roundtrip_all_profiles(self):
+        bones=[dict(name='hip',parent=-1),dict(name='twist',parent=0),dict(name='knee',parent=1),dict(name='foot',parent=2)]
+        frame=[((0,0,i),(0,0,0),(1,1,1)) for i in range(4)]
+        tris=[('test/material',[(p,n,uv,[(3,1.)]) for p,n,uv,w in self.tris[0][1]])]
+        write_smd(self.work/'mesh.smd',bones,[frame],tris)
+        qc=self.qc.replace('$sequence idle "mesh.smd"','$sequence idle "mesh.smd" noautoik')
+        qc+='\n$ikchain leg foot links hip knee foot knee .25 -.5 1 angle_unknown .8660254\n'
+        for target in PROFILES:
+            out,_=self.run_compiler(qc,target=target,name=target)
+            m=Model(out,target); chains=m.ik_chains(); self.assertEqual(len(chains),1)
+            self.assertEqual([m.bones[l['bone']]['name'] for l in chains[0]['links']],['hip','knee','foot'])
+            self.assertEqual(chains[0]['links'][0]['knee'],(.25,-.5,1))
+            export=decompile(out,self.work/(target+'export'),target)
+            rebuilt,_=self.run_compiler(export.read_text(),target=target,name=target+'rebuilt',extra=['-path',str(export.parent)])
+            self.assertEqual(validate(rebuilt,target,out,animation_metadata=True)['differences'],[])
+            changed,_=self.run_compiler(qc.replace('.8660254','.5'),target=target,name=target+'changed')
+            self.assertIn('IK chains',validate(changed,target,out,animation_metadata=True)['differences'])
+            default,_=self.run_compiler(qc.replace(' angle_unknown .8660254',''),target=target,name=target+'default')
+            self.assertAlmostEqual(Model(default,target).ik_chains()[0]['unknown'],.8660254,places=7)
+
+    def test_malformed_motion_and_ik_bounds(self):
+        frames=[self.frames[0],self.frames[0]]; write_smd(self.work/'walk.smd',self.bones,frames)
+        qc=self.qc.replace('$sequence idle "mesh.smd"','$sequence walk "walk.smd" movementrecord 1 64 1 1 0 1 0 0 1 0 0')
+        out,_=self.run_compiler(qc); m=Model(out,'s0'); desc=m.sequences[0]['animations'][0]
+        data=bytearray(out.read_bytes()); record=desc+m.get('i',desc+0x18); struct.pack_into('<i',data,record,2); out.write_bytes(data)
+        m=Model(out,'s0')
+        with self.assertRaisesRegex(ValueError,'movement end frame'): m.movements(desc)
+        data=bytearray(out.read_bytes()); struct.pack_into('<i',data,0x124,1); struct.pack_into('<i',data,0x128,len(data)-4); out.write_bytes(data)
+        m=Model(out,'s0')
+        with self.assertRaisesRegex(ValueError,'span outside'): m.ik_chains()
+
+    def test_invalid_ik_source_and_native_links_rejected(self):
+        bones=[dict(name='hip',parent=-1),dict(name='knee',parent=0),dict(name='foot',parent=1)]
+        frame=[((0,0,i),(0,0,0),(1,1,1)) for i in range(3)]
+        write_smd(self.work/'mesh.smd',bones,[frame],self.tris)
+        qc=self.qc.replace('$sequence idle "mesh.smd"','$sequence idle "mesh.smd" noautoik')
+        chain='\n$ikchain leg foot knee 1 0 0 angle_unknown .8660254\n'
+        self.run_compiler(qc+chain.replace('.8660254','nan'),name='nonfinite',ok=False)
+        out,_=self.run_compiler(qc+chain); m=Model(out,'s0'); p=m.get('i',0x128); q=p+m.get('i',p+12)
+        data=bytearray(out.read_bytes()); struct.pack_into('<i',data,q,99); out.write_bytes(data)
+        with self.assertRaisesRegex(ValueError,'outside skeleton'): Model(out,'s0').ik_chains()
+
     def test_animation_metadata_roundtrip_all_profiles(self):
         for i in range(6):
             frames=[[((j*.125+i,0,0),(0,0,j*.01),(1,1,1)),
