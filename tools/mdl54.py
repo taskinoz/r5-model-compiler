@@ -473,6 +473,25 @@ class Model(Reader):
         return value
 
 
+class SequenceAsset(Model):
+    """Standalone native sequence data interpreted with its owning rig."""
+    def __init__(self,path,rig):
+        self.path=Path(path); self.target=rig.target; self.rig=rig
+        Reader.__init__(self,self.path.read_bytes()); self.span(0,0xD0)
+        self.bones=rig.bones; self.meshes=[]; self.materials=[]
+        indices=[self.get('i',p) for p in self.array(self.get('i',0x38),self.get('i',0x3C),4)]
+        for p in indices: self.span(p,0x34)
+        self.sequences=[dict(name=self.string(self.get('i',4)),flags=self.get('i',12),animations=indices,offset=0)]
+        self.name=self.sequences[0]['name']
+        self.sequence_metadata(self.sequences[0])
+        for p in indices:
+            self.frame_movement(p); self.movements(p)
+            self.animation(p)
+
+    def pose_parameters(self): return self.rig.pose_parameters()
+    def ik_chains(self): return self.rig.ik_chains()
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('model'); parser.add_argument('--target',choices=PROFILES,required=True)

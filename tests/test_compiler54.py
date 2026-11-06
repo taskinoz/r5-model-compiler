@@ -1,6 +1,8 @@
 """Native v54 authored-input regressions; historical TF2 tests are separate."""
 from pathlib import Path
 import math
+import json
+from unittest.mock import patch
 import os
 import struct
 import subprocess
@@ -10,7 +12,7 @@ import unittest
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'tools'))
-from mdl54 import Model, Reader, PROFILES
+from mdl54 import Model, Reader, PROFILES, SequenceAsset
 from decompile54 import decompile, write_smd
 from validate54 import validate, compare_animation_metadata
 
@@ -41,6 +43,70 @@ class Compiler54(unittest.TestCase):
         if ok: self.assertEqual(run.returncode,0,run.stdout+run.stderr)
         else: self.assertNotEqual(run.returncode,0); self.assertFalse(out.exists())
         return out,run
+
+    def test_external_rig_and_sequence_assets(self):
+        frames=[[((f*.1,0,0),(0,0,0),(1,1,1)),self.frames[0][1]] for f in range(65)]
+        write_smd(self.work/'move.smd',self.bones,frames)
+        qc=self.qc.replace('$sequence idle "mesh.smd"','$sequence idle "mesh.smd"\n$sequence walk { "move.smd" rm\neventcycle "AE_MARKER" .375 "mark"\n}')
+        for target in PROFILES:
+            with self.subTest(target=target):
+                original,_=self.run_compiler(qc,target=target,name=target+'embedded')
+                out,_=self.run_compiler(qc,target=target,name=target+'external',extra=['--external-assets'])
+                model,ref=Model(out,target),Model(original,target)
+                rig=Model(out.with_suffix('.rrig'),target)
+                self.assertEqual(model.sequences[0]['name'],'ref');self.assertEqual(model.sequences[0]['animations'],[])
+                self.assertEqual(rig.bones,ref.bones);self.assertEqual(rig.sequences,[])
+                self.assertEqual(validate(out,target,original)['differences'],[])
+                for i,seq in enumerate(ref.sequences):
+                    asset=SequenceAsset(out.with_suffix(f'.seq{i}.rseq'),rig)
+                    expected=ref.sequences; ref.sequences=[seq]
+                    self.assertEqual(compare_animation_metadata(asset,ref),[])
+                    ref.sequences=expected
+                    self.assertTrue(all(asset.get('i',d)==0 for d in asset.sequences[0]['animations']))
+
+    def test_package_native_asset_dependencies_and_stale_sequences(self):
+        from pack54 import package
+        out,_=self.run_compiler(target='s3',extra=['--external-assets','--material-guid','test/material=123456789abcdef0'])
+        # A stale second file is deliberately present after recompiling one sequence.
+        out.with_suffix('.seq1.rseq').write_bytes(out.with_suffix('.seq0.rseq').read_bytes())
+        calls=[]
+        def repak(command,**kwargs):
+            build=json.loads(Path(command[1]).read_text()); calls.append(build)
+            self.assertEqual([f['_type'] for f in build['files']],['arig','mdl_'])
+            rig,model=build['files']
+            self.assertEqual(model['$animrigs'],[rig['_path']])
+            self.assertEqual(len(rig['$sequences']),1)
+            source=Path(build['assetsDir'])
+            asset=SequenceAsset(source/rig['$sequences'][0],Model(source/rig['_path'],'s3'))
+            self.assertEqual(asset.name,'idle')
+            for suffix in ('.rpak','.starpak'):
+                (Path(build['outputDir'])/(build['name']+suffix)).write_bytes(b'new artifact')
+            return subprocess.CompletedProcess(command,0,'packed','')
+        with patch('pack54.subprocess.run',side_effect=repak):
+            report=package([out],self.work/'pak','r5c_test',self.compiler,'s3')
+        self.assertEqual(report['models'][0]['labels'],['idle'])
+        self.assertEqual(len(calls),1)
+        alias,_=self.run_compiler(self.qc.replace('test/model.rmdl','TEST/model.rmdl'),target='s3',name='alias',extra=['--external-assets','--material-guid','test/material=123456789abcdef0'])
+        with self.assertRaisesRegex(ValueError,'duplicate model asset path'):
+            package([out,alias],self.work/'duplicate','r5c_test',self.compiler,'s3')
+        # A process that exits zero but writes nothing must not reuse old artifacts.
+        with patch('pack54.subprocess.run',return_value=subprocess.CompletedProcess([],0,'','')):
+            with self.assertRaisesRegex(ValueError,'did not produce'):
+                package([out],self.work/'pak','r5c_test',self.compiler,'s3')
+        self.assertEqual((self.work/'pak/r5c_test.rpak').read_bytes(),b'new artifact')
+        out.with_suffix('.assetset').write_text('R5AS1\ns2\n1\n')
+        with self.assertRaisesRegex(ValueError,'target/magic'):
+            package([out],self.work/'bad','r5c_test',self.compiler,'s3')
+
+    def test_package_rejects_unbound_materials_and_unsafe_paths(self):
+        from pack54 import package, asset_path
+        help_run=subprocess.run([sys.executable,'-I',str(ROOT/'tools/pack54.py'),'--help'],capture_output=True,text=True)
+        self.assertEqual(help_run.returncode,0,help_run.stderr)
+        out,_=self.run_compiler(target='s3',extra=['--external-assets'])
+        with self.assertRaisesRegex(ValueError,'nonzero GUID'):
+            package([out],self.work/'pak','r5c_test',self.compiler,'s3')
+        for path in ('../escape.rmdl','a/../b.rmdl','a/./b.rmdl','a//b.rmdl','/a.rmdl','C:/a.rmdl','a\x00.rmdl'):
+            with self.subTest(path=path),self.assertRaises(ValueError): asset_path(path)
 
     def test_explicit_profiles_and_retail_rejection(self):
         for target in (None,'retail','s4','53'):
@@ -305,6 +371,11 @@ class Compiler54(unittest.TestCase):
                 out,_=self.run_compiler(qc,target=target,name=target)
                 m=Model(out,target); meta=m.sequence_metadata(m.sequences[0])
                 self.assertEqual(meta['grid'],(3,2)); self.assertEqual(meta['posekeys'],[-2,0,3,-1,1])
+                external,_=self.run_compiler(qc,target=target,name=target+'assets',extra=['--external-assets'])
+                rig=Model(external.with_suffix('.rrig'),target)
+                asset=SequenceAsset(external.with_suffix('.seq0.rseq'),rig)
+                self.assertEqual(compare_animation_metadata(asset,m),[])
+                self.assertEqual(rig.pose_parameters(),m.pose_parameters())
                 self.assertEqual(meta['events'][0]['event'],1004)
                 self.assertAlmostEqual(meta['events'][1]['cycle'],.123456789,places=7)
                 source=decompile(out,self.work/(target+'export'),target)

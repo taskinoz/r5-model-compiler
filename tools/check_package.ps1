@@ -20,6 +20,10 @@ try {
         & python -I (Join-Path $work 'tools\roundtrip54.py') --target $target --compiler $exe --out (Join-Path $work "roundtrip\$target") @models
         if ($LASTEXITCODE) { throw "Packaged $target examples did not round-trip." }
     }
+    foreach ($tool in @('pack54.py','ingame54.py')) {
+        & python -I (Join-Path $work "tools\$tool") --help | Out-Null
+        if ($LASTEXITCODE) { throw "Packaged $tool did not start." }
+    }
     Write-Output 'Package check passed: six examples, four targets, 24 round trips.'
 } finally {
     $resolvedWork = [IO.Path]::GetFullPath($work)

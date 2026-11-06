@@ -185,3 +185,26 @@ profiles; no legacy VTX/VVD is generated as an intermediate for those profiles.
 
 Native Apex PHY/BVH remain unimplemented; TF2's collision writer is not a valid
 substitute. These layout/geometry checks do not establish runtime compatibility.
+
+
+## Standalone rigs and sequences
+
+`--external-assets` separates a compiled set into a render model with one empty
+`ref` sequence, a full native studio-header `.rrig` containing the shared skeleton,
+attachments, hitboxes, IK chains and pose parameters, and one `.rseq` per sequence.
+Each RSEQ starts with its 0xD0 sequence descriptor at byte zero. Its animation
+reference table contains int32 offsets relative to that descriptor. Each referenced
+0x34 animation descriptor has a zero base-pointer field; the other pointers remain
+descriptor-relative. All 7,789 inspected installed S3 animation descriptors had a
+zero animation base field. The writer keeps per-blend timing, native pose tracks,
+piecewise/frame movement, events and sequence weights in the standalone asset.
+Authored regressions compare embedded and standalone metadata and every decoded
+frame across all four profiles, including a 3x2 blend grid and pose keys.
+
+The local S3 RePak integration uses RPak version 8, model asset version 10, rig
+version 4 and sequence version 7. The model lists the rig dependency; the rig lists
+its sequences. VG bytes go to a mandatory streaming file. The `.assetset` file is
+a compiler packaging manifest, not an engine asset: ASCII `R5AS1`, target, sequence
+count, each on a separate line. It prevents stale numbered sequence assets from
+being accidentally linked after recompilation. These facts establish the packaged
+asset structure; live rig resolution and streaming still require a runtime test.

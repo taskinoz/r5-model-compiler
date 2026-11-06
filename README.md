@@ -7,8 +7,8 @@ assets. This is the experimental R5 sibling of
 
 **This is an initial development compiler, not a validated replacement for
 Respawn's asset bakery.** Native render data and basic animation are implemented.
-Native Apex physics/BVH, procedural bones and external animation
-rigs are unfinished. There is no in-game validation yet. See [VALIDATION.md](VALIDATION.md).
+Native Apex physics/BVH and procedural bones are unfinished. External rig/sequence
+output and an S3 RePak wrapper are available; runtime validation is pending. See [VALIDATION.md](VALIDATION.md).
 No game assets, game binaries or extraction tools are distributed.
 
 ## Targets
@@ -47,7 +47,7 @@ float32; normals/tangents and weights use native packing. Basic IK chain descrip
 can be compiled, exported and compared, but runtime IK has not been checked.
 
 The compiler rejects physics/collision, procedures, RUI, IK rules,
-animation layers, transition nodes, followers, external rigs and more than sixteen influences. Some
+animation layers, transition nodes, followers, QC include-model rig imports and more than sixteen influences. Some
 inherited QC commands remain unimplemented. No TF2 collision or animation structures
 are presented as native Apex output.
 
@@ -111,9 +111,16 @@ established by chain-field comparisons.
 
 ## Materials and loading
 
-These are **model components**, not a loadable RPak. A matching-season asset packager/
-baker and material assets are still required. `-game` chooses an output directory;
-it does not inject a model, build an RPak or launch Apex.
+Default output contains model components. `--external-assets` additionally writes a
+`.rrig` skeleton, numbered `.seqN.rseq` sequence assets and a `.assetset` manifest.
+The render model contains the native empty `ref` sequence; animations are linked
+through the external rig. The manifest records the target and sequence count so
+stale sequence files cannot enter the package. This output is available for all
+four profiles. Importing arbitrary existing rig dependencies through QC is still
+unsupported.
+
+`-game` chooses an output directory. The explicit packaging and runtime tools below
+perform the additional steps. Existing material assets are required.
 
 Bind a material to an existing asset with a repeatable option:
 
@@ -122,7 +129,41 @@ Bind a material to an existing asset with a repeatable option:
 ```
 
 Unbound slots contain zero GUIDs for a downstream packager to resolve. Binding does
-not create a material or validate RPak dependencies. Nothing modifies the installs.
+not create a material or validate RPak dependencies.
+
+For S3 / R5R, use a compatible, separately installed RePak:
+
+```powershell
+.\build\r5studiomdl.exe --target s3 --external-assets --material-guid models/electricalboxes/pipesmulti=0123456789abcdef -o out\box.rmdl examples\static_prop\box.qc
+python -I tools\pack54.py --target s3 --repak "C:\Tools\RePak\repak.exe" --out out\pak --name r5c_models out\box.rmdl
+```
+
+Replace the example GUID with an asset available in the target game. Every
+material slot must have a nonzero binding. The wrapper validates the component set,
+stages model/rig/sequence asset paths, invokes RePak and writes a hashed report.
+It produces an RPak v8 with model v10, rig v4 and sequence v7 assets plus the
+mandatory streaming file. RePak and game data are not included in this repository.
+A successful bake alone does not establish runtime compatibility. S0/S1/S2 RPak
+packaging is not implemented by this wrapper.
+
+The experimental Windows harness prepares a separate R5R directory and records
+spawns, every sequence lookup, playback/movement samples, optional `probe`
+attachments and a screenshot:
+
+```powershell
+python -I tools\ingame54.py --game "F:\Games\R5R" --runtime "F:\Games\R5C-Test" --pak out\pak\r5c_models.rpak
+```
+
+Use a new directory on the same volume as R5R. Large assets use hard links or
+directory junctions; configs, platform scripts and mods are copied. The harness
+requires the package report, checks package hashes, uses offline settings and a
+loopback SDK netconsole, and refuses to start alongside another game process.
+It exits nonzero for startup failures, missing spawns/sequences or incomplete
+samples. The report and netconsole log are written in the isolated directory.
+`--keep-open` leaves that test game open for inspection. Windows security prompts
+must be handled manually. The first local attempt stopped at a firewall prompt;
+no in-game model validation is claimed yet. Movement samples and screenshots need
+review before claiming geometry or root-motion equivalence.
 
 ## Inspect, export and validate
 
@@ -155,7 +196,7 @@ use `validate54.py --animation-metadata --against original.rmdl`. Event cycles a
 numeric metadata use an absolute tolerance of 0.000001; full-frame position,
 rotation and scale limits are 0.001 inches, 0.0002 radians and 0.0016 respectively.
 Frame-movement limits are 0.001 inches and 0.005 degrees; validation reports their
-maximum errors separately. Render-only runs keep their narrower scope. External animation rigs and runtime
+maximum errors separately. Render-only runs keep their narrower scope. External asset bytes are covered by authored regressions; runtime rig loading and
 event dispatch remain unverified.
 
 The v53 helpers at tools/mdl53.py, decompile53.py and phy.py supply shared binary,

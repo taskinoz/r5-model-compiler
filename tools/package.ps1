@@ -16,7 +16,7 @@ foreach ($name in @('README.md','LICENSE','VALIDATION.md')) {
 Copy-Item -LiteralPath (Join-Path $projectRoot 'examples') -Destination $package -Recurse
 New-Item -ItemType Directory -Path (Join-Path $package 'docs'),(Join-Path $package 'tools') | Out-Null
 Copy-Item -LiteralPath (Join-Path $projectRoot 'docs\mdl-v54-format.md') -Destination (Join-Path $package 'docs')
-foreach ($tool in @('mdl54.py','decompile54.py','validate54.py','survey54.py','roundtrip54.py',
+foreach ($tool in @('mdl54.py','decompile54.py','validate54.py','survey54.py','roundtrip54.py','pack54.py','ingame54.py',
                     'mdl53.py','decompile53.py','phy.py')) {
     Copy-Item -LiteralPath (Join-Path $projectRoot "tools\$tool") -Destination (Join-Path $package 'tools')
 }

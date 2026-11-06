@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cstring>
 #include <numeric>
+#include <map>
+#include <filesystem>
 
 #include "core/buffer.h"
 #include "core/log.h"
@@ -49,16 +51,21 @@ class MdlWriter {
 public:
     explicit MdlWriter(const CompiledModel& m, bool vertexGroup) : m_(m), vertexGroup_(vertexGroup) {}
     std::vector<uint8_t> Run();
+    std::vector<uint8_t> RunSequence();
 
 private:
     const CompiledModel& m_;
     bool vertexGroup_;
+    bool standaloneSequence_ = false;
+    size_t animationBase_ = 0;
+    struct AnimationRef { size_t field, sequence; int index; };
+    std::vector<AnimationRef> animationRefs_;
     Buffer b_;
     StringTable st_;
 
     void Str(size_t field, size_t base, const std::string& s) { st_.Add(field, base, s); }
-    void Hdr(size_t off, int32_t v) { b_.PatchI32(off, v); }
-    void HdrHere(size_t off) { b_.PatchI32(off, static_cast<int32_t>(b_.Tell())); }
+    void Hdr(size_t off, int32_t v) { if (!standaloneSequence_) b_.PatchI32(off, v); }
+    void HdrHere(size_t off) { Hdr(off, static_cast<int32_t>(b_.Tell())); }
     int32_t Rel(size_t from) const { return static_cast<int32_t>(b_.Tell() - from); }
 
     void WriteHeader();
@@ -201,10 +208,11 @@ void MdlWriter::WriteAnimations() {
     // Descriptors are referenced by sequence-relative int32 offsets in v54.
     HdrHere(H_LOCALANIMINDEX);
     size_t base = b_.Reserve(kAnimDescSize * m_.animations.size());
+    animationBase_ = base;
     for (size_t i = 0; i < m_.animations.size(); ++i) {
         const auto& a = m_.animations[i];
         size_t p = base + i * kAnimDescSize;
-        b_.PatchI32(p, -static_cast<int32_t>(p));
+        b_.PatchI32(p, standaloneSequence_ ? 0 : -static_cast<int32_t>(p));
         Str(p + 4, p, a.name);
         b_.PatchAt<float>(p + 8, a.fps);
         b_.PatchI32(p + 12, a.flags);
@@ -337,8 +345,10 @@ void MdlWriter::WriteSequences() {
         b_.Align(4);
         // anim indices
         I(0x3C, Rel(p));
-        for (int16_t ai : s.animIndices)
-            b_.I32(b_.ReadAt<int32_t>(H_LOCALANIMINDEX) + ai * kAnimDescSize - static_cast<int32_t>(p));
+        for (int16_t ai : s.animIndices) {
+            animationRefs_.push_back({b_.Tell(), p, ai});
+            b_.I32(static_cast<int32_t>(animationBase_ + ai * kAnimDescSize) - static_cast<int32_t>(p));
+        }
         b_.Align(4);
         // keyvalues
         I(0xAC, Rel(p));
@@ -605,6 +615,17 @@ void MdlWriter::WritePerTri() {
     b_.Align(4);
 }
 
+std::vector<uint8_t> MdlWriter::RunSequence() {
+    standaloneSequence_ = true;
+    WriteSequences();
+    WriteAnimations();
+    for (const auto& ref : animationRefs_)
+        b_.PatchI32(ref.field, static_cast<int32_t>(animationBase_ + ref.index * kAnimDescSize) - static_cast<int32_t>(ref.sequence));
+    st_.Write(b_);
+    b_.Align(4);
+    return b_.Data();
+}
+
 std::vector<uint8_t> MdlWriter::Run() {
     WriteHeader();
     WriteSourceFiles();
@@ -667,5 +688,36 @@ std::vector<uint8_t> MdlWriter::Run() {
 }  // namespace
 
 std::vector<uint8_t> WriteMDL(const CompiledModel& m, bool vertexGroup) { return MdlWriter(m, vertexGroup).Run(); }
+
+std::vector<uint8_t> WriteSequence54(const CompiledModel& model, size_t index) {
+    if (index >= model.sequences.size()) Fatal("sequence index outside model");
+    CompiledModel subset;
+    subset.sequences.push_back(model.sequences[index]);
+    std::map<int, int> indices;
+    for (auto& ai : subset.sequences[0].animIndices) {
+        auto found = indices.find(ai);
+        if (found == indices.end()) {
+            int mapped = static_cast<int>(subset.animations.size());
+            indices.emplace(ai, mapped);
+            subset.animations.push_back(model.animations.at(ai));
+            ai = static_cast<int16_t>(mapped);
+        } else ai = static_cast<int16_t>(found->second);
+    }
+    return MdlWriter(subset, false).RunSequence();
+}
+
+std::vector<uint8_t> WriteRig54(const CompiledModel& model) {
+    CompiledModel rig;
+    rig.name = std::filesystem::path(model.name).replace_extension().u8string() + ".rrig";
+    rig.bones = model.bones;
+    rig.jiggles = model.jiggles;
+    rig.attachments = model.attachments;
+    rig.hitboxSets = model.hitboxSets;
+    rig.ikChains = model.ikChains;
+    rig.poseParams = model.poseParams;
+    rig.surfaceProp = model.surfaceProp;
+    rig.sourceFiles = model.sourceFiles;
+    return WriteMDL(rig, true);
+}
 
 }  // namespace r2c

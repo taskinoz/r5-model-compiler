@@ -26,6 +26,7 @@ static void Usage() {
         "usage: r5studiomdl --target <s0|s1|s2|s3> [options] <file.qc>\n"
         "  --target       required season; s0/s1 use VTX/VVD, s2/s3 use VG rev1\n"
         "  --material-guid <name=hex> bind a material to an existing RPak asset\n"
+        "  --external-assets emit a native rig and standalone sequence assets alongside the model\n"
         "  --list-targets show supported compiler profiles\n"
         "  -game <dir>     game/mod directory; output is written to <dir>/models/<$modelname>\n"
         "  -o <file>       write the .mdl to this exact path\n"
@@ -39,6 +40,7 @@ static void Usage() {
 int main(int argc, char** argv) {
     std::string qc, game, outFile, outDir, target;
     std::map<std::string,uint64_t> materials;
+    bool externalAssets = false;
     QcOptions opt;
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
@@ -56,6 +58,7 @@ int main(int argc, char** argv) {
                 std::puts("s0  MDL54 / mdl_ v8 / VTX7 + VVD4\ns1  MDL54 / mdl_ v8 / VTX7 + VVD4\ns2  MDL54 / mdl_ v9 / VG rev1\ns3  MDL54 / mdl_ v10 / VG rev1\nretail: planned; unavailable");
                 return 0;
             }
+            else if (l == "--external-assets") externalAssets = true;
             else if (l == "--material-guid") {
                 auto value=next(); auto eq=value.find('=');
                 if(eq==std::string::npos) { std::fprintf(stderr,"ERROR: material binding needs name=hex\n"); return 1; }
@@ -132,7 +135,17 @@ int main(int argc, char** argv) {
         if(!model.nodeNames.empty()) Fatal("Apex transition nodes are not implemented yet");
         for (const auto& seq : model.sequences) if (!seq.layers.empty())
             Fatal("Apex asset-GUID animation layers are not implemented yet");
-        std::vector<uint8_t> mdl = WriteMDL(model,target=="s2" || target=="s3");
+        CompiledModel renderModel;
+        if (externalAssets) {
+            renderModel = model;
+            renderModel.animations.clear();
+            renderModel.sequences.clear();
+            CSequence ref;
+            ref.label = "ref";
+            ref.weights.assign(model.bones.size(), 1.f);
+            renderModel.sequences.push_back(ref);
+        }
+        std::vector<uint8_t> mdl = WriteMDL(externalAssets ? renderModel : model,target=="s2" || target=="s3");
         auto read32=[&](size_t p) { int32_t v; std::memcpy(&v,mdl.data()+p,4); return v; };
         int checksum=read32(8);
         int textures=read32(0xD4);
@@ -174,6 +187,15 @@ int main(int argc, char** argv) {
             stream.write(reinterpret_cast<const char*>(data.data()),std::streamsize(data.size()));
             if(!stream) Fatal("failed writing %s",path.u8string().c_str());
         };
+        if (externalAssets) {
+            write(".rrig", WriteRig54(model));
+            std::string assetSet = "R5AS1\n" + target + "\n" + std::to_string(model.sequences.size()) + "\n";
+            write(".assetset", std::vector<uint8_t>(assetSet.begin(), assetSet.end()));
+            for (size_t si=0; si<model.sequences.size(); ++si) {
+                std::string extension = ".seq" + std::to_string(si) + ".rseq";
+                write(extension.c_str(), WriteSequence54(model, si));
+            }
+        }
         if(!vg.empty()) write(".vg",vg);
         else if(read32(0x1D0)>0) {
             write(".dx11.vtx",WriteVTX(model,checksum));
