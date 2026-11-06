@@ -36,7 +36,7 @@ def decompile(path, outdir, target, *, render_only=False):
     unsupported=[]
     for label,offset in [('physics',0x1DC),('BVH collision',0x214),('RUI',0x12C),
                          ('procedural bones',0x198),('followers',0x1E8),('include models',0x158),
-                         ('IK chains',0x124),('pose parameters',0x134)]:
+                         ('IK chains',0x124),('transition nodes',0xFC)]:
         if m.get('i',offset): unsupported.append(label)
     if any(b['proctype'] for b in m.bones): unsupported.append('bone procedures')
     if unsupported and not render_only:
@@ -48,6 +48,11 @@ def decompile(path, outdir, target, *, render_only=False):
     if name.startswith('mdl/'): name=name[4:]
     lines+=['$modelname '+qc_quote(name), '$cdmaterials ""', '$origin 0 0 0 -90']
     if m.get('i',0x9C)&16: lines+=['$staticprop']
+    if not render_only:
+        for pose in m.pose_parameters():
+            if pose['flags'] & ~1: raise ValueError('unsupported pose parameter flags')
+            option=' loop '+format(pose['loop'],'.9g') if pose['flags']&1 else ''
+            lines+=['$poseparameter '+qc_quote(pose['name'])+' '+format(pose['start'],'.9g')+' '+format(pose['end'],'.9g')+option]
     for b in m.bones:
         parent=m.bones[b['parent']]['name'] if b['parent']>=0 else ''
         rotation=b['rot']
@@ -91,14 +96,56 @@ def decompile(path, outdir, target, *, render_only=False):
     if not render_only:
         for si,seq in enumerate(m.sequences):
             p=seq['offset']
-            if len(seq['animations'])!=1 or m.get('i',p+0x18) or m.get('i',p+0x94) or m.get('i',p+0xA4):
-                raise ValueError('blends/events/layers/IK locks need a richer native export')
-            desc=seq['animations'][0]; frames=m.animation(desc)
-            filename=f'anim{si}.smd'; write_smd(out/filename,m.bones,frames)
-            options=' fps '+format(m.get('f',desc+8),'.9g')
-            if seq['flags']&1: options+=' loop'
-            if seq['flags']&4: options+=' delta'
-            lines+=['$sequence '+qc_quote(seq['name'])+' '+qc_quote(filename)+options]
+            # These fields have no supported source representation in this exporter.
+            if any(m.get('i',p+off) for off in (0x40,0x64,0x70,0x74,0x78,0x88,0x8C,0x90,0x94,0xA4,0xB0,0xCC)) or any(m.get('f',p+off) for off in (0x7C,0x80,0x84)):
+                raise ValueError('sequence nodes/layers/IK/keyvalues need a richer native export')
+            meta=m.sequence_metadata(seq)
+            if not seq['animations']: raise ValueError('reference-pose sequence without an embedded animation is not yet exportable')
+            if seq['flags'] & ~0xA47BF: raise ValueError('unsupported sequence flags')
+            names=[]
+            for ai,desc in enumerate(seq['animations']):
+                if any(m.get('i',desc+off) for off in (0x14,0x1C,0x24)):
+                    raise ValueError('animation movement/IK needs a richer native export')
+                flags=m.get('i',desc+12)
+                if flags & ~0x28017: raise ValueError('unsupported animation flags')
+                frames=m.animation(desc); filename=f'anim{si}_{ai}.smd'
+                write_smd(out/filename,m.bones,frames)
+                name=f'r5c_anim_{si}_{ai}'; names.append(name)
+                options=' fps '+format(m.get('f',desc+8),'.9g')+' noautoik'
+                for bit,word in ((1,'loop'),(2,'snap'),(4,'delta'),(0x10,'post'),(0x8000,'noforceloop')):
+                    if flags&bit: options+=' '+word
+                # Decoded samples already contain the loop boundary.
+                if flags&1 and not flags&0x8000: options+=' noforceloop'
+                lines+=['$animation '+qc_quote(name)+' '+qc_quote(filename)+options]
+            weightname=f'r5c_weights_{si}'
+            lines+=['$weightlist '+qc_quote(weightname)+' {']
+            lines+=['  '+qc_quote(b['name'])+' '+format(w,'.9g') for b,w in zip(m.bones,meta['weights'])]
+            lines+=['}', '$sequence '+qc_quote(seq['name'])+' {','  '+' '.join(qc_quote(n) for n in names),
+                    '  seqflags '+str(seq['flags']&~0xA0000),'  seqweights '+qc_quote(weightname),
+                    '  blendwidth '+str(meta['grid'][0]),
+                    '  fadein '+format(meta['fade'][0],'.9g')+' fadeout '+format(meta['fade'][1],'.9g'),
+                    '  bbox '+' '.join(format(x,'.9g') for x in meta['bounds']),
+                    '  ikresetmask '+str(meta['ik_reset'])+' unk_c4 '+str(meta['unknown_c4'])]
+            if meta['activity']: lines+=['  activity '+qc_quote(meta['activity'])+' '+str(meta['activity_weight'])]
+            poses=m.pose_parameters()
+            for axis,index in enumerate(meta['params']):
+                if index>=0:
+                    lines+=['  blend '+qc_quote(poses[index]['name'])+' '+format(meta['start'][axis],'.9g')+' '+format(meta['end'][axis],'.9g')]
+                elif axis==0 and meta['params'][1]>=0: raise ValueError('unsupported second-axis-only blend')
+            if meta['posekeys']: lines+=['  posekeys '+str(len(meta['posekeys']))+' '+' '.join(format(x,'.9g') for x in meta['posekeys'])]
+            if seq['flags']&0x80:
+                index=meta['cycle_pose']
+                if not 0<=index<len(poses): raise ValueError('invalid cycle pose index')
+                lines+=['  posecycle '+qc_quote(poses[index]['name'])]
+            for modifier in meta['modifiers']:
+                lines+=['  activitymodifier '+qc_quote(modifier['name'])+(' negate' if modifier['negate'] else '')]
+            for event in meta['events']:
+                if event['type'] not in (0,1024): raise ValueError('unsupported event type')
+                name=str(event['event']) if not event['type'] else event['name']
+                if event['type'] and (not name or name[0].isdigit() or event['event']): raise ValueError('unsupported named event identity')
+                timing='event '+qc_quote(name)+' 0' if event['cycle'] is None else 'eventcycle '+qc_quote(name)+' '+format(event['cycle'],'.9g')
+                lines+=['  '+timing+' '+qc_quote(event['options'])]
+            lines+=['}']
     else:
         write_smd(out/'bind.smd',m.bones,[skeleton])
         lines+=['$sequence idle "bind.smd"']

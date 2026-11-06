@@ -937,10 +937,15 @@ void Parser::CmdSequence(bool declare) {
         return i;
     };
     ForEachOption([&]() -> bool {
-        if (Is("event")) {
+        if (Is("event") || Is("eventcycle")) {
             QcEvent e;
+            e.explicitCycle = Is("eventcycle");
             e.name = S("event name");
-            e.frame = I("event frame");
+            if (e.explicitCycle) {
+                e.cycle = F("event cycle");
+                if (!std::isfinite(e.cycle) || e.cycle < 0 || e.cycle > 1)
+                    Fatal("%s: event cycle must be finite and in [0, 1]", tk_.Where().c_str());
+            } else e.frame = I("event frame");
             if (Avail()) {
                 tk_.Get(false);
                 if (T() == "}" && !tk_.Cur().quoted)
@@ -976,6 +981,10 @@ void Parser::CmdSequence(bool declare) {
         }
         if (Is("snap")) {
             seq.flags |= STUDIO_SNAP;
+            return true;
+        }
+        if (Is("seqflags")) {
+            seq.flags = I("sequence flags");
             return true;
         }
         if (Is("blendwidth")) {

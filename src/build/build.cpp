@@ -352,7 +352,9 @@ void BuildContext::BuildSequences() {
         for (auto& e : qs.events) {
             CEvent ce;
             int k = first.numFrames - 1;
-            if (e.frame <= k)
+            if (e.explicitCycle)
+                ce.cycle = e.cycle;
+            else if (e.frame <= k)
                 // studiomdl divides by numframes - 1: a one-frame clip's events get 0/0
                 // (x86's negative quiet NaN), as retail stores them
                 ce.cycle = k > 0 ? e.frame / static_cast<float>(k) : -std::numeric_limits<float>::quiet_NaN();

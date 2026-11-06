@@ -1,17 +1,17 @@
 # Apex early-season compiler validation - 6 November 2026
 
-Experimental development build with native complex skinning. These are offline
+Experimental development build with native complex skinning and animation metadata round trips. These are offline
 structure, render and authored-animation checks, not a stable release or proof of
 full Apex model equivalence. No in-game run or RPak bake was performed. Retail and
 later self-hostable seasons remain future targets.
 
 Windows x64 MSVC Release: build/r5studiomdl.exe
-SHA-256: `a76eeac4276876b6c16aa733d527dec1ad9370a7cdfd3e4e06e2400658eb7e58`.
-Independent reader SHA-256: `1b1a802bb67bf816176c3916be5bde24d54f423e197cf89b104652b2f2c662eb`.
+SHA-256: `92bf3756708684731af2ad7ca8842cf60457bfb8bde2c1f5a63124a52626b1e3`.
+Independent reader SHA-256: `8db7260dc6ab2f7fa6a4b84addac63b75a0083668cfc0af3405b6e810e48a1c9`.
 
 ## Automated checks
 
-- All 22 native regressions pass on ordinary Python 3.10 and locked uv/Python 3.14.
+- All 31 native regressions pass on ordinary Python 3.10 and locked uv/Python 3.14.
 - Both CTest groups pass: convex-hull math and native compiler regressions. The
   inherited hull tests are not Apex physics emission evidence.
 - Complex-skinning tests exercise mixed 1/2/3/4/8/16-influence vertices across all
@@ -25,8 +25,38 @@ Independent reader SHA-256: `1b1a802bb67bf816176c3916be5bde24d54f423e197cf89b104
   section boundaries and position/rotation/scale with unchanged tolerances.
 - The clean ZIP contains four authored examples, including the new four-influence
   animated quad. All four compile, export, recompile and pass render comparisons
-  on all four targets: 16 package round trips. The reader also checks every stored
-  output animation frame for finite poses. This is not full metadata equivalence.
+  on all four targets: 16 package round trips. These now also compare supported
+  animation metadata and every decoded frame in every blend, including the animated
+  example's new blend/event. This is not full model or runtime equivalence.
+
+## Animation metadata export
+
+Native export now preserves rectangular blend grids, pose parameters/keys, per-blend
+FPS and flags, sequence bone weights, bounds, fades, activity names/modifiers, and
+numeric/named events. A new eventcycle source option retains fractional normalized
+timing without rounding it to an integer frame. Exported sequence playback flags
+remain separate from the named animations' flags.
+
+Regressions cover a 3x2 grid with nonuniform pose keys, 35-frame sectioned tracks,
+independent blend FPS/frame counts/loop flags, custom bone weights, long event
+options, fractional cycles, single-frame NaN events and delta tracks. Negative
+checks detect changed timing/poses/events, malformed grids, invalid cycles,
+unterminated options and unsupported event types. Layers now fail explicitly:
+the inherited TF2 layer layout is not valid native asset-GUID data.
+
+The metadata comparator uses absolute 0.000001 for float metadata and checks
+every blend frame at the existing authored-animation limits: 0.001 inches for
+position, 0.0002 radians for Euler rotation (modulo a full turn), and 0.0016 for
+scale. noforceloop is excluded from animation flag comparison because it controls
+compilation. No previous threshold was increased.
+
+The installed-asset descriptor survey decoded 390/454/469/649 sequences in S0/S1/S2/S3
+with zero errors (animation-metadata-survey.json under test-output). All have zero
+embedded blends, a 1x1 grid and no events or pose parameters. Reference descriptors
+may omit the single-frame flag. They are not animation clips and export rejects
+them rather than generating invented playback. Consequently authored data supplies
+the blend/event round-trip evidence; this survey does not prove retail animation,
+external-rig, event-dispatch or runtime equivalence.
 
 ## Installed-asset survey
 
@@ -41,6 +71,8 @@ These are the installed S0-S3 common RPaks and patch chains, not every map/skin 
 | s2 | 428/428 | 11,918,028 | 0 |
 | s3 | 581/581 | 17,811,900 | 0 |
 
+The geometry survey above is retained evidence from the preceding complex-skinning
+build (`a76eeac4...`), reader `1b1a802b...`; it was not rerun for this metadata change.
 Reports are complex-native-survey-s0.json / s1.json and complex-survey-s2.json /
 s3.json under test-output. They identify the actual reader hash. All vertex weight
 spans, counts, bone indices and normalized sums are checked while decoding. A
@@ -86,10 +118,20 @@ complex-render-s3. complex-validation-manifest.json records the compiler, reader
 source/tool hashes, report hashes and all selected input companion hashes. Game
 data, research tools and rebuilt assets stay ignored and are not distributed.
 
+The animation-metadata build recompiled the same 48 sources: 12/12 pass per profile,
+with zero measured position/normal/UV/weight error and no newly differing models.
+These remain render-only checks. Reports are animation-render-s0 through s3;
+animation-validation-manifest.json identifies compiler/tool/report hashes and
+links the preceding input-companion manifest. The final validator also rechecks
+those rebuilt files after its blend-count comparison was added; results are in
+animation-render-revalidation.json. No corpus tool changed during a run.
+
 ## Remaining limitations
 
 - Native PHY/BVH collision and ragdolls, procedural bones, RUI, external rigs and
-  sequence assets, root-motion tracks, IK rules, transition nodes and followers.
+  sequence assets, native asset-GUID layers, root-motion tracks, IK rules, transition
+  nodes and followers. Export also rejects sequence keyvalues, transitions and
+  procedural weight fixups, and unknown animation/sequence flags or event types.
 - RPak baking/streaming/relocations, material dependencies, shader compatibility
   and runtime entity behaviour remain unverified. Output components still require
   a matching-season packager. No runtime compatibility claim accompanies this build.

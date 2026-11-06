@@ -27,7 +27,7 @@ def run(paths,target,compiler,out,render_only=False,jobs=1):
             command=[str(compiler),'--target',target,'-quiet','-o',str(rebuilt),str(qc)]
             process=subprocess.run(command,capture_output=True,text=True,timeout=180)
             if process.returncode: raise RuntimeError(process.stdout+process.stderr)
-            result.update(status='pass',validation=validate(rebuilt,target,path))
+            result.update(status='pass',validation=validate(rebuilt,target,path,animation_metadata=not render_only))
             if result['validation']['differences']: result['status']='differ'
         except Exception as e: result.update(status='error',error=str(e))
         return result

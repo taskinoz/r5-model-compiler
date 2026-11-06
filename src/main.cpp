@@ -120,6 +120,8 @@ int main(int argc, char** argv) {
         if(!model.boneFollowers.empty() || !model.includeModels.empty())
             Fatal("Apex followers and external animation rigs are not implemented yet");
         if(!model.nodeNames.empty()) Fatal("Apex transition nodes are not implemented yet");
+        for (const auto& seq : model.sequences) if (!seq.layers.empty())
+            Fatal("Apex asset-GUID animation layers are not implemented yet");
         std::vector<uint8_t> mdl = WriteMDL(model,target=="s2" || target=="s3");
         auto read32=[&](size_t p) { int32_t v; std::memcpy(&v,mdl.data()+p,4); return v; };
         int checksum=read32(8);

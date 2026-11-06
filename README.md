@@ -47,7 +47,7 @@ float32; normals/tangents and weights use native packing. Basic IK chain descrip
 can be emitted, but runtime IK has not been checked.
 
 The compiler rejects physics/collision, procedures, RUI, root motion, IK rules,
-transition nodes, followers, external rigs and more than sixteen influences. Some
+animation layers, transition nodes, followers, external rigs and more than sixteen influences. Some
 inherited QC commands remain unimplemented. No TF2 collision or animation structures
 are presented as native Apex output.
 
@@ -56,6 +56,12 @@ Models needing more than three influences automatically use native VVD/VVW for
 S0/S1 or the VG extra-weight buffer for S2/S3. Packed weights sum to one; a ratio
 that cannot fit the native quantization budget fails explicitly. See the
 `complex_skinning/weighted_quad.qc` example for an animated four-influence mesh.
+
+Sequence blocks accept `event <name/id> <integer frame> "options"`. For an event
+between frames, use `eventcycle <name/id> <cycle> "options"`, where cycle is finite
+and between 0 and 1 inclusive. This stores the native float cycle directly.
+Numeric IDs use legacy event type 0; names use native event type 1024. The animated
+prop example includes a two-way blend and a fractional-cycle event.
 
 ## Materials and loading
 
@@ -86,9 +92,23 @@ python -I tools\survey54.py --target s0 extracted\models --geometry --out test-o
 ```
 
 `decompile54.py` exports QC, keyvalues2 DMX meshes with preserved corner identities,
-and SMD animations. Default mode rejects known unsupported metadata. `--render-only`
+and SMD animations. Supported animation export includes rectangular blend grids,
+pose parameters/keys, per-blend FPS and flags, numeric/named events, fades, activity
+names/modifiers, bounds and sequence bone weights. Named `$animation` definitions
+keep animation settings separate from sequence playback flags. Exported `seqflags`
+is a compiler extension for those sequence flags; scale/single-frame bits are derived.
+Default mode rejects known unsupported metadata, including sequence layers, IK,
+weight fixups and reference descriptors without embedded clips. `--render-only`
 explicitly discards physics, BVH, rigs and sequence metadata. A render-only pass does
 not establish full-model equivalence or runtime compatibility.
+
+Default `roundtrip54.py` runs compare supported animation metadata and every frame
+of every blend as well as render geometry. To request the same checks directly,
+use `validate54.py --animation-metadata --against original.rmdl`. Event cycles and
+numeric metadata use an absolute tolerance of 0.000001; full-frame position,
+rotation and scale limits are 0.001 inches, 0.0002 radians and 0.0016 respectively.
+Render-only runs keep their narrower scope. External animation rigs and runtime
+event dispatch remain unverified.
 
 The v53 helpers at tools/mdl53.py, decompile53.py and phy.py supply shared binary,
 math and source-export utilities. Their TF2 commands and historical tests/docs are
@@ -98,7 +118,7 @@ not Apex validation.
 
 ```powershell
 .\build.bat
-ctest --test-dir build --output-on-failure
+Push-Location build; ctest --output-on-failure; Pop-Location
 python -m unittest discover -s tests -p "test_*.py"
 uv run --locked python -m unittest discover -s tests -p "test_*.py"
 .\tools\package.ps1
@@ -107,7 +127,8 @@ uv run --locked python -m unittest discover -s tests -p "test_*.py"
 
 CI follows R1: build, CTest, locked uv tests, packaging and clean-extraction checks.
 The ZIP includes the compiler, native tools, docs and four authored examples. The
-package check compiles and round-trips all four for all four targets. Tags vX.Y.Z
+package check compiles and round-trips all four for all four targets, including
+supported animation metadata and full-frame blend comparisons. Tags vX.Y.Z
 require release-notes/vX.Y.Z.md and a matching pyproject.toml version; the release
 workflow publishes the ZIP and SHA256SUMS. No R5 release has been tagged.
 

@@ -226,6 +226,8 @@ struct QcAnimation {
 struct QcEvent {
     std::string name;
     int frame = 0;
+    bool explicitCycle = false;
+    float cycle = 0;
     std::string options;
 };
 

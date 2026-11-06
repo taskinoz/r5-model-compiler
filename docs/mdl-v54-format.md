@@ -46,6 +46,30 @@ and a trailing final-frame section. The independent reader also handles document
 constant half-vector/quaternion and compact modes; those need wider rig validation.
 TF2 quantization vectors are absent from native v54 bones.
 
+The 0xD0 sequence descriptor stores a rectangular blend grid at 0x44/0x48,
+pose parameter indices at 0x4C/0x50, starts at 0x54/0x58 and ends at 0x5C/0x60.
+Pose keys (pointer at 0xA0) contain width + height float32 values, axis 0 first.
+The bone-weight list (0x9C) has one float per studio bone. Activity modifiers use
+eight-byte records (relative name, negate byte, padding), counted at 0xBC.
+Pose parameter records are 20 bytes: relative name, flags, start, end and loop.
+These layouts were consulted in the native reference and checked on authored
+round trips. Common retail models expose no pose parameters or embedded blends.
+
+Events are 0x110 bytes: float32 cycle, int32 ID, int32 type, 256 bytes of terminated
+options and an event-relative name offset at 0x10C. The compiler emits numeric
+events as type 0 and named events as type 1024. `eventcycle` writes a normalized
+float directly, avoiding integer-frame rounding on export. Legacy frame-zero
+events on a one-frame authored clip retain the existing NaN cycle representation;
+the reader represents that cycle as None for comparison and exports it as frame 0.
+Other nonfinite cycles and unknown event types are rejected by the export path.
+
+All 1,962 sequence descriptors in the 1,789 extracted common models have zero
+embedded blends and a 1x1 grid, including reference descriptors both with and
+without flag 0x80000. They are decoded as descriptors, not fabricated as clips.
+This survey provides no retail animated-event parity evidence. Native autolayers
+reference a uint64 sequence asset GUID, unlike TF2's local sequence index; the
+compiler rejects layers until the native asset dependency path is implemented.
+
 ## VG revision 1
 
 Header: 0x100 bytes, magic 0x47567430, revision 1, byte length at 0x0C. Uint64

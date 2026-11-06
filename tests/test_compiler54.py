@@ -12,6 +12,7 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'tools'))
 from mdl54 import Model, Reader, PROFILES
 from decompile54 import decompile, write_smd
+from validate54 import validate, compare_animation_metadata
 
 
 class Compiler54(unittest.TestCase):
@@ -105,6 +106,100 @@ class Compiler54(unittest.TestCase):
     def test_unsupported_native_physics_rejected(self):
         _,run=self.run_compiler(self.qc+'\n$collisionmodel "mesh.smd" { $mass 5 }\n',ok=False)
         self.assertIn('native physics',run.stdout)
+
+    def test_animation_metadata_roundtrip_all_profiles(self):
+        for i in range(6):
+            frames=[[((j*.125+i,0,0),(0,0,j*.01),(1,1,1)),
+                     ((0,i*.1,2),(0,j*.002,0),(1,1,1))] for j in range(35)]
+            write_smd(self.work/f'blend{i}.smd',self.bones,frames)
+        qc=self.qc.split('$sequence')[0]
+        qc+='$poseparameter move_x -2 3\n$poseparameter move_y -1 1 loop 2\n'
+        qc+='$sequence blend {\n'+' '.join(f'"blend{i}.smd"' for i in range(6))+'\n'
+        qc+='blendwidth 3 blend move_x -2 3 blend move_y -1 1\nposekeys 5 -2 0 3 -1 1\n'
+        qc+='fps 20 fadein .125 fadeout .375 snap hidden activity ACT_IDLE 3\n'
+        qc+='activitymodifier "armed" negate\nevent 1004 17 "'+'x'*200+'"\n'
+        qc+='eventcycle AE_TEST .123456789 "named event"\n}\n'
+        for target in PROFILES:
+            with self.subTest(target=target):
+                out,_=self.run_compiler(qc,target=target,name=target)
+                m=Model(out,target); meta=m.sequence_metadata(m.sequences[0])
+                self.assertEqual(meta['grid'],(3,2)); self.assertEqual(meta['posekeys'],[-2,0,3,-1,1])
+                self.assertEqual(meta['events'][0]['event'],1004)
+                self.assertAlmostEqual(meta['events'][1]['cycle'],.123456789,places=7)
+                source=decompile(out,self.work/(target+'export'),target)
+                rebuilt,_=self.run_compiler(source.read_text(),target=target,name=target+'rebuilt',extra=['-path',str(source.parent)])
+                self.assertEqual(validate(rebuilt,target,out,animation_metadata=True)['differences'],[])
+
+    def test_event_cycles_reject_invalid_values(self):
+        for i,value in enumerate(('-0.1','1.1','nan','inf')):
+            qc=self.qc.replace('$sequence idle "mesh.smd"',f'$sequence idle {{ "mesh.smd" eventcycle AE_TEST {value} "" }}')
+            self.run_compiler(qc,name=f'invalid{i}',ok=False)
+
+    def test_animation_metadata_detects_event_changes(self):
+        qc=self.qc.replace('$sequence idle "mesh.smd"','$sequence idle { "mesh.smd" eventcycle AE_TEST .25 "hello" }')
+        out,_=self.run_compiler(qc)
+        changed,_=self.run_compiler(qc.replace('.25','.5'),name='changed')
+        self.assertIn('sequence 0 events',validate(changed,'s0',out,animation_metadata=True)['differences'])
+
+    def test_named_blends_keep_independent_timing_flags_and_weights(self):
+        for i,count in enumerate((4,7)):
+            frames=[[((j*.1,0,0),(0,0,0),(1,1,1)),((0,0,2+j*.125),(0,0,0),(1,1,1))] for j in range(count)]
+            write_smd(self.work/f'track{i}.smd',self.bones,frames)
+        qc=self.qc.split('$sequence')[0]
+        qc+='$animation slow "track0.smd" fps 12 loop noforceloop\n$animation fast "track1.smd" fps 24\n'
+        qc+='$weightlist mask { "root" .3 "arm" .7 }\n$sequence blend { slow fast blend speed 0 1 hidden seqweights mask }\n'
+        for target in ('s0','s3'):
+            out,_=self.run_compiler(qc,target=target,name=target)
+            source=decompile(out,self.work/(target+'export'),target)
+            rebuilt,_=self.run_compiler(source.read_text(),target=target,name=target+'rebuilt',extra=['-path',str(source.parent)])
+            self.assertEqual(validate(rebuilt,target,out,animation_metadata=True)['differences'],[])
+            # Geometry stays identical when only the animation's source changes.
+            changedqc=qc.replace('slow fast','fast fast')
+            changed,_=self.run_compiler(changedqc,target=target,name=target+'changed')
+            differences=validate(changed,target,out,animation_metadata=True)['differences']
+            self.assertIn('sequence 0 blend 0 poses',differences)
+            self.assertIn('sequence 0 blend 0 fps',differences)
+
+    def test_malformed_sequence_metadata_rejected(self):
+        out,_=self.run_compiler()
+        data=bytearray(out.read_bytes()); m=Model(out,'s0'); p=m.sequences[0]['offset']
+        struct.pack_into('<i',data,p+0x44,2); out.write_bytes(data)
+        m=Model(out,'s0')
+        with self.assertRaisesRegex(ValueError,'blend grid'): m.sequence_metadata(m.sequences[0])
+
+    def test_reference_descriptor_is_not_an_embedded_clip(self):
+        out,_=self.run_compiler(); m=Model(out,'s0'); data=bytearray(out.read_bytes())
+        p=m.sequences[0]['offset']; struct.pack_into('<i',data,p+0x38,0); out.write_bytes(data)
+        reference=m; m=Model(out,'s0'); self.assertEqual(m.sequence_metadata(m.sequences[0])['grid'],(1,1))
+        self.assertIn('sequence 0 blend count',compare_animation_metadata(m,reference))
+        with self.assertRaisesRegex(ValueError,'without an embedded animation'):
+            decompile(out,self.work/'refexport','s0')
+
+    def test_single_frame_events_and_delta_roundtrip(self):
+        write_smd(self.work/'delta.smd',self.bones,[[((.5,0,0),(0,0,.2),(0,0,0)),((0,.2,0),(.1,0,0),(0,0,0))]])
+        qc=self.qc.replace('$sequence idle "mesh.smd"','$sequence idle { "mesh.smd" event 1004 0 "one frame" }')
+        qc+='\n$sequence delta "delta.smd" delta\n'
+        for target in ('s0','s3'):
+            out,_=self.run_compiler(qc,target=target,name=target)
+            source=decompile(out,self.work/(target+'export'),target)
+            rebuilt,_=self.run_compiler(source.read_text(),target=target,name=target+'rebuilt',extra=['-path',str(source.parent)])
+            self.assertEqual(validate(rebuilt,target,out,animation_metadata=True)['differences'],[])
+
+    def test_native_layers_fail_instead_of_emitting_source_layout(self):
+        self.run_compiler(self.qc+'\n$sequence layered { "mesh.smd" addlayer idle }\n',ok=False)
+
+    def test_malformed_events_and_unsupported_types_rejected(self):
+        qc=self.qc.replace('$sequence idle "mesh.smd"','$sequence idle { "mesh.smd" eventcycle AE_TEST .25 "hello" }')
+        out,_=self.run_compiler(qc); m=Model(out,'s0'); p=m.sequences[0]['offset']
+        event=p+m.get('i',p+0x1C); original=out.read_bytes()
+        data=bytearray(original); struct.pack_into('<f',data,event,2); out.write_bytes(data)
+        m=Model(out,'s0')
+        with self.assertRaisesRegex(ValueError,'event cycle'): m.sequence_metadata(m.sequences[0])
+        data=bytearray(original); struct.pack_into('<i',data,event+8,1025); out.write_bytes(data)
+        with self.assertRaisesRegex(ValueError,'event type'): decompile(out,self.work/'badtype','s0')
+        data=bytearray(original); data[event+12:event+0x10C]=b'x'*256; out.write_bytes(data)
+        m=Model(out,'s0')
+        with self.assertRaisesRegex(ValueError,'event options'): m.sequence_metadata(m.sequences[0])
 
     def test_attachments_native_stride(self):
         qc=self.qc+'\n$attachment "a" "arm" 1 2 3 rotate 0 20 0\n$attachment "b" "root" 3 2 1\n'

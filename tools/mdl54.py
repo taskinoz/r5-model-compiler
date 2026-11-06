@@ -108,6 +108,53 @@ class Model(Reader):
             self.sequences.append(dict(name=self.string(p+self.get('i',p+4)),flags=self.get('i',p+12),
                                        animations=indices,offset=p))
 
+    def pose_parameters(self):
+        result=[]
+        for p in self.array(self.get('i',0x134),self.get('i',0x138),20):
+            values=self.get('3f',p+8)
+            if not all(math.isfinite(x) for x in values): raise ValueError('non-finite pose parameter')
+            result.append(dict(name=self.string(p+self.get('i',p)),flags=self.get('i',p+4),
+                               start=values[0],end=values[1],loop=values[2]))
+        return result
+
+    def sequence_metadata(self, seq):
+        """Decode studio metadata independently of QC/export support."""
+        p=seq['offset']; dimensions=self.get('2i',p+0x44)
+        # Installed common models include a 1x1 "ref" descriptor with no embedded
+        # blends, both with and without STUDIO_SINGLEFRAME. It is not a clip.
+        reference_pose=not seq['animations'] and dimensions==(1,1)
+        if min(dimensions)<1 or (dimensions[0]*dimensions[1]!=len(seq['animations']) and not reference_pose):
+            raise ValueError('invalid sequence blend grid')
+        params=self.get('2i',p+0x4C); poses=self.pose_parameters()
+        if any(i < -1 or i >= len(poses) for i in params): raise ValueError('invalid sequence pose index')
+        events=[]
+        for q in self.array(self.get('i',p+0x18),p+self.get('i',p+0x1C),0x110):
+            options=self.data[q+12:q+0x10C]
+            if b'\0' not in options: raise ValueError('unterminated event options')
+            cycle=self.get('f',q); kind=self.get('i',q+8)
+            # The native compiler's frame-zero event in a one-frame clip is NaN.
+            single=all(self.get('i',a+16)==1 for a in seq['animations'])
+            if not (math.isfinite(cycle) and 0<=cycle<=1) and not (single and math.isnan(cycle)):
+                raise ValueError('invalid event cycle')
+            events.append(dict(cycle=None if math.isnan(cycle) else cycle,event=self.get('i',q+4),type=kind,
+                               name=self.string(q+self.get('i',q+0x10C)) if kind else '',
+                               options=options.split(b'\0')[0].decode('utf-8',errors='strict')))
+        keycount=sum(dimensions) if self.get('i',p+0xA0) else 0
+        keys=[self.get('f',q) for q in self.array(keycount,p+self.get('i',p+0xA0),4)]
+        weights=[self.get('f',q) for q in self.array(len(self.bones),p+self.get('i',p+0x9C),4)]
+        modifiers=[]
+        for q in self.array(self.get('i',p+0xBC),p+self.get('i',p+0xB8),8):
+            modifiers.append(dict(name=self.string(q+self.get('i',q)),negate=bool(self.get('B',q+4))))
+        result=dict(name=seq['name'],flags=seq['flags'],activity=self.string(p+self.get('i',p+8)),
+                    activity_weight=self.get('i',p+0x14),grid=dimensions,params=params,
+                    start=self.get('2f',p+0x54),end=self.get('2f',p+0x5C),
+                    fade=self.get('2f',p+0x68),bounds=self.get('6f',p+0x20),
+                    posekeys=keys,weights=weights,events=events,modifiers=modifiers,
+                    cycle_pose=self.get('i',p+0xB4),ik_reset=self.get('i',p+0xC0),unknown_c4=self.get('i',p+0xC4))
+        numbers=(*keys,*weights,*result['start'],*result['end'],*result['fade'],*result['bounds'])
+        if not all(math.isfinite(x) for x in numbers): raise ValueError('non-finite sequence metadata')
+        return result
+
     def render(self):
         if PROFILES[self.target][1] == 'vg1':
             return self._vg()

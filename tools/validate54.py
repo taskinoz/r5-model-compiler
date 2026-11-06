@@ -24,7 +24,45 @@ def canonical(render):
     return lods
 
 
-def validate(path,target,against=None):
+def compare_animation_metadata(model, reference):
+    """Compare the exported sequence subset and every decoded blend frame."""
+    differences=[]
+    def equal(a,b):
+        if isinstance(a,dict) and isinstance(b,dict): return a.keys()==b.keys() and all(equal(a[k],b[k]) for k in a)
+        if isinstance(a,(list,tuple)) and isinstance(b,(list,tuple)): return len(a)==len(b) and all(equal(x,y) for x,y in zip(a,b))
+        if isinstance(a,float) or isinstance(b,float):
+            return isinstance(a,(int,float)) and isinstance(b,(int,float)) and abs(a-b)<=1e-6
+        return a==b
+    if not equal(model.pose_parameters(),reference.pose_parameters()): differences.append('pose parameters')
+    if [b['name'] for b in model.bones]!=[b['name'] for b in reference.bones]: differences.append('animation bone identities')
+    if len(model.sequences)!=len(reference.sequences): differences.append('sequence count')
+    for index,(seq,ref) in enumerate(zip(model.sequences,reference.sequences)):
+        if len(seq['animations'])!=len(ref['animations']): differences.append(f'sequence {index} blend count')
+        a,b=model.sequence_metadata(seq),reference.sequence_metadata(ref)
+        for field in a:
+            if not equal(a[field],b[field]): differences.append(f'sequence {index} {field}')
+        for blend,(desc,rdesc) in enumerate(zip(seq['animations'],ref['animations'])):
+            # noforceloop steers compilation, not playback.
+            if (model.get('i',desc+12)&~0x8000) != (reference.get('i',rdesc+12)&~0x8000):
+                differences.append(f'sequence {index} blend {blend} flags')
+            if abs(model.get('f',desc+8)-reference.get('f',rdesc+8))>1e-6:
+                differences.append(f'sequence {index} blend {blend} fps')
+            frames,rframes=model.animation(desc),reference.animation(rdesc)
+            bad=len(frames)!=len(rframes)
+            for frame,rframe in zip(frames,rframes):
+                if len(frame)!=len(rframe): bad=True; break
+                for bone,rbone in zip(frame,rframe):
+                    for channel,(values,rvalues) in enumerate(zip(bone,rbone)):
+                        for x,y in zip(values,rvalues):
+                            if not math.isfinite(x) or not math.isfinite(y): bad=True; continue
+                            error=abs(x-y)
+                            if channel==1: error=abs((x-y+math.pi)%(2*math.pi)-math.pi)
+                            if error>(.001,.0002,.0016)[channel]: bad=True
+            if bad: differences.append(f'sequence {index} blend {blend} poses')
+    return differences
+
+
+def validate(path,target,against=None,*,animation_metadata=False):
     m=Model(path,target); render=m.render() if m.meshes else []
     result=dict(model=str(path),target=target,bones=len(m.bones),lods=len(render),
                 triangles=sum(len(me['triangles']) for lod in render for me in lod),frames=0,
@@ -39,6 +77,7 @@ def validate(path,target,against=None):
                         raise ValueError('invalid skin weights')
                     if abs(sum(w for _,w in v['weights'])-1)>1e-5: raise ValueError('unnormalized skin weights')
     for seq in m.sequences:
+        if animation_metadata: m.sequence_metadata(seq)
         for desc in seq['animations']:
             frames=m.animation(desc); result['frames']+=len(frames)
             if not all(math.isfinite(x) for pose in frames for bone in pose for channel in bone for x in channel):
@@ -59,12 +98,16 @@ def validate(path,target,against=None):
                 if result['max_error'][key]>limit: result['differences'].append(key)
         # This comparison deliberately reports only the selected render subset.
         result['scope']='render subset; no physics/BVH/material GUID/sequence metadata equivalence claim'
+        if animation_metadata:
+            result['differences']+=compare_animation_metadata(m,ref)
+            result['scope']='render plus supported sequence metadata and full-frame blend poses; no physics/BVH/rig/runtime equivalence claim'
     return result
 
 
 if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__); p.add_argument('model')
     p.add_argument('--target',required=True,choices=PROFILES); p.add_argument('--against'); p.add_argument('--out')
-    a=p.parse_args(); result=validate(a.model,a.target,a.against); text=json.dumps(result,indent=2)+'\n'
+    p.add_argument('--animation-metadata',action='store_true')
+    a=p.parse_args(); result=validate(a.model,a.target,a.against,animation_metadata=a.animation_metadata); text=json.dumps(result,indent=2)+'\n'
     if a.out: Path(a.out).write_text(text)
     print(text); raise SystemExit(bool(result['differences']))
