@@ -47,11 +47,12 @@ constexpr size_t kBoneSize = 0xB8, kJiggleSize = 0x78, kAttachSize = 0x3C, kHbox
 
 class MdlWriter {
 public:
-    explicit MdlWriter(const CompiledModel& m) : m_(m) {}
+    explicit MdlWriter(const CompiledModel& m, bool vertexGroup) : m_(m), vertexGroup_(vertexGroup) {}
     std::vector<uint8_t> Run();
 
 private:
     const CompiledModel& m_;
+    bool vertexGroup_;
     Buffer b_;
     StringTable st_;
 
@@ -623,7 +624,7 @@ std::vector<uint8_t> MdlWriter::Run() {
     bool hasMesh = false;
     for (auto& bp : m_.bodyParts) for (auto& md : bp.models)
         if (!md.meshes.empty()) hasMesh = true;
-    if (hasMesh) {
+    if (hasMesh && !vertexGroup_) {
         auto vtx = WriteVTX(m_, checksum);
         Hdr(H_VTXOFFSET, -1);
         Hdr(H_VTXSIZE, static_cast<int>(vtx.size()));
@@ -636,6 +637,12 @@ std::vector<uint8_t> MdlWriter::Run() {
             auto vvc = WriteVVC(m_, checksum);
             Hdr(H_VVCOFFSET, static_cast<int>(componentOffset));
             Hdr(H_VVCSIZE, static_cast<int>(vvc.size()));
+            componentOffset += vvc.size();
+        }
+        if(m_.HasComplexWeights()) {
+            auto vvw=WriteVVW(m_,checksum);
+            Hdr(0x21C,static_cast<int>(componentOffset));
+            Hdr(0x220,static_cast<int>(vvw.size()));
         }
     }
     Hdr(H_LENGTH, static_cast<int>(b_.Size()));
@@ -644,6 +651,6 @@ std::vector<uint8_t> MdlWriter::Run() {
 
 }  // namespace
 
-std::vector<uint8_t> WriteMDL(const CompiledModel& m) { return MdlWriter(m).Run(); }
+std::vector<uint8_t> WriteMDL(const CompiledModel& m, bool vertexGroup) { return MdlWriter(m, vertexGroup).Run(); }
 
 }  // namespace r2c

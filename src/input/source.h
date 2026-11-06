@@ -9,10 +9,9 @@
 #include <vector>
 
 #include "core/math.h"
+#include "core/weights.h"
 
 namespace r2c {
-
-constexpr int kMaxWeightsPerVertex = 3;  // Titanfall 2 VVD/VTX limit
 
 struct SrcBone {
     std::string name;

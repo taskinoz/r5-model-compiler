@@ -22,8 +22,8 @@ struct VertKey {
     Vec3 pos, normal;
     Vec2 uv;
     int nb;
-    int bone[3];
-    float w[3];
+    int bone[kMaxWeightsPerVertex];
+    float w[kMaxWeightsPerVertex];
     Vec2 uv2;
     uint8_t col[4];
 };
@@ -112,7 +112,7 @@ CVertex MakeVertex(const SrcVertex& sv, const std::vector<GBone>& bones,
         if (!found) m.push_back(bw);
     }
     std::stable_sort(m.begin(), m.end(), [](const BoneWeight& a, const BoneWeight& b) { return a.weight > b.weight; });
-    if (m.size() > 3) Fatal("Apex complex skinning (more than three weights per vertex) is not implemented yet");
+    if (m.size() > kMaxWeightsPerVertex) Fatal("too many skin influences after LOD bone replacement");
     float t = 0;
     for (auto& x : m) t += x.weight;
     v.numBones = static_cast<int>(m.size());

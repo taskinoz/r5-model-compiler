@@ -110,9 +110,19 @@ std::vector<uint8_t> WriteVVD(const CompiledModel& m, int checksum) {
     b.Align(16);
     if (fixups.empty()) b.PatchI32(fixupStartPos, 64);
     b.PatchI32(vertStartPos, static_cast<int>(b.Tell()));
+    const bool complex=m.HasComplexWeights();
+    int extraIndex=0;
     ForEachVertex(m, [&](const CModel&, const CMesh& me, size_t i) {
         const CVertex& v = me.verts[i];
-        for (int k = 0; k < 3; k++) b.F32(k < v.numBones ? v.weight[k] : 0.f);
+        if(complex) {
+            auto packed=PackWeights(v.weight,v.numBones);
+            for(int k=0;k<3;++k) b.I16(k<v.numBones?packed[k]:0);
+            b.I16(0);
+            b.I32(extraIndex);
+            extraIndex+=std::max(0,v.numBones-3);
+        } else {
+            for (int k = 0; k < 3; k++) b.F32(k < v.numBones ? v.weight[k] : 0.f);
+        }
         for (int k = 0; k < 3; k++) b.U8(k < v.numBones ? v.bone[k] : 0);
         b.U8(static_cast<uint8_t>(v.numBones));
         b.V3(v.pos);
@@ -146,6 +156,20 @@ std::vector<uint8_t> WriteVVC(const CompiledModel& m, int checksum) {
     b.Align(16);
     b.PatchI32(uvPos, static_cast<int>(b.Tell()));
     ForEachVertex(m, [&](const CModel&, const CMesh& me, size_t i) { b.V2(me.verts[i].uv2); });
+    return b.Data();
+}
+
+std::vector<uint8_t> WriteVVW(const CompiledModel& m, int checksum) {
+    Buffer b;
+    b.I32(checksum); b.I32(1);
+    b.I32(TotalVerts(m));
+    for(int lod=1;lod<kMaxLods;++lod) b.I32(0);
+    b.I32(44);
+    ForEachVertex(m,[&](const CModel&,const CMesh& mesh,size_t index) {
+        const auto& v=mesh.verts[index];
+        const auto packed=PackWeights(v.weight,v.numBones);
+        for(int i=3;i<v.numBones;++i) { b.I16(packed[i]); b.I16(v.bone[i]); }
+    });
     return b.Data();
 }
 
@@ -261,8 +285,9 @@ std::vector<uint32_t> OptimizeTriangleOrder(const std::vector<uint32_t>& idx, si
     return out;
 }
 
-VStripGroup BuildStripGroup(const CMesh& mesh, const std::vector<uint32_t>& lodIdx, bool staticProp) {
+VStripGroup BuildStripGroup(const CMesh& mesh, const std::vector<uint32_t>& lodIdx, bool staticProp, bool complex) {
     VStripGroup sg;
+    if(complex) sg.flags=0;
     std::vector<uint32_t> idx = OptimizeTriangleOrder(lodIdx, mesh.verts.size());
     std::map<uint32_t, uint16_t> remap;
     std::vector<int> palette;  // hardware bone -> global bone
@@ -271,6 +296,7 @@ VStripGroup BuildStripGroup(const CMesh& mesh, const std::vector<uint32_t>& lodI
     for (uint32_t mv : idx) {
         auto it = remap.find(mv);
         if (it == remap.end()) {
+            if(mv>65535) Fatal("VTX source vertex index exceeds uint16 range");
             const CVertex& v = mesh.verts[mv];
             VVert vv;
             vv.origMeshVertID = static_cast<uint16_t>(mv);
@@ -278,6 +304,7 @@ VStripGroup BuildStripGroup(const CMesh& mesh, const std::vector<uint32_t>& lodI
             for (int b = 0; b < 3; b++) {
                 if (b < v.numBones) {
                     int g = v.bone[b];
+                    if(complex) { vv.boneID[b]=static_cast<uint8_t>(g); continue; }
                     auto h = hw.find(g);
                     int id;
                     if (h == hw.end()) {
@@ -310,7 +337,7 @@ VStripGroup BuildStripGroup(const CMesh& mesh, const std::vector<uint32_t>& lodI
     strip.numBones = 0;
     if (!staticProp) {
         for (auto& vv : sg.verts) strip.numBones = std::max<int>(strip.numBones, vv.numBones);
-        for (size_t i = 0; i < palette.size(); i++) strip.boneStateChanges.push_back({static_cast<int>(i), palette[i]});
+        if(!complex) for (size_t i = 0; i < palette.size(); i++) strip.boneStateChanges.push_back({static_cast<int>(i), palette[i]});
     }
     sg.strips.push_back(strip);
     return sg;
@@ -323,9 +350,10 @@ std::vector<uint8_t> WriteVTX(const CompiledModel& m, int checksum) {
     // header
     b.I32(7);
     b.I32(24);
-    b.U16(160);
-    b.U16(9);
-    b.I32(3);
+    const bool complex=m.HasComplexWeights();
+    b.U16(complex?256:160);
+    b.U16(complex?48:9);
+    b.I32(complex?16:3);
     b.I32(checksum);
     b.I32(m.numLods);
     size_t matRepPos = b.Reserve(4);
@@ -353,7 +381,7 @@ std::vector<uint8_t> WriteVTX(const CompiledModel& m, int checksum) {
                 for (auto& me : md.meshes) {
                     MeshOut meo;
                     if (l < static_cast<int>(me.lods.size()) && !me.lods[l].indices.empty())
-                        meo.groups.push_back(BuildStripGroup(me, me.lods[l].indices, (m.flags & 0x10) != 0));  // STUDIOHDR_FLAGS_STATIC_PROP
+                        meo.groups.push_back(BuildStripGroup(me, me.lods[l].indices, (m.flags & 0x10) != 0, complex));
                     mo.lods[l].meshes.push_back(std::move(meo));
                 }
             }

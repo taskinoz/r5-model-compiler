@@ -55,10 +55,46 @@ legacy weights (0x80), strips (0x90). Meshes are 0x48 bytes. LODs are eight byte
 uint16 first mesh/count and a float switch point. Studio mesh IDs select LOD meshes.
 
 The writer keeps positions as float32, uses identity bone mapping, native packed
-normal/tangent and up to three influences, optional RGBA/UV2, and float32 UV0. Normal
+normal/tangent and up to sixteen influences, optional RGBA/UV2, and float32 UV0. Normal
 packing uses major-axis index/sign and two nine-bit component ratios; tangent uses
 a ten-bit angle plus handedness. Each mesh has triangle-list indices and one strip.
 Runtime handling of auxiliary VG fields has not been verified.
 
-Complex VVD/VVW/VG weights are detected but rejected. Native Apex PHY/BVH remain
-unimplemented; TF2's collision writer is not a valid substitute.
+## Complex skinning
+
+Studio flag 0x4000 selects the complex-weight layout for the entire model. The
+compiler sets it automatically when any vertex needs more than three influences.
+All influences survive source import, bone remapping and LOD unification. Counts
+above 16 fail. Early profiles still use a maximum of 256 bones.
+
+Packed values are signed int16 `q`, with weight `(q + 1) / 32768`. Every complex
+VVD vertex in the installed S0/S1 common assets satisfies `sum(q) + count = 32768`:
+5,651,844 encoded vertices, with influence counts from 1 through 16. This rule also
+reconstructs all 10,989 bird vertices identically from S0 VVD/VVW and S3 VG, using
+the original VTX vertex mapping. The writer apportions integer units while keeping
+their sum at 32768, retains a positive unit per positive influence, and rejects a
+weight ratio that exceeds the existing 2/32767 component error budget.
+
+For S0/S1, the 48-byte VVD vertex keeps its size. The first 12 bytes become three
+int16 weights, an int16 padding field, and an int32 extra-weight array index.
+The three uint8 bone IDs and uint8 influence count remain at offsets 12 and 15.
+Even vertices with at most three influences use packed values when the model flag
+is set. A VVW companion has a 44-byte header (checksum, version 1, eight LOD count
+slots, data offset), followed by int16 weight/bone pairs for influences 4..16.
+The first count slot is the VVD vertex count; the other seven are zero. VVW follows
+VTX, VVD and optional VVC in the header's component offset space (0x21C/0x220).
+Native complex VTX uses direct VVD bone IDs, no hardware palette state changes,
+and maximum strip/face/vertex bone counts of 256/48/16.
+
+VG keeps an eight-byte weight/index block. In complex mode it contains the first
+packed weight, a uint16 index into the mesh's extra-weight array, first/last bone
+IDs, one unused byte, and the influence count minus one. Middle influences use
+four-byte weight/bone records at the group's extra-weight offset plus the mesh's
+byte offset; the vertex index is measured in records. The last weight is one minus
+the decoded explicit weights. Simple VG similarly uses an implicit final weight.
+Repeated middle-weight lists share storage. An unshareable list whose starting
+index exceeds 65535 fails rather than wrapping. Header VVW spans are zero in VG
+profiles; no legacy VTX/VVD is generated as an intermediate for those profiles.
+
+Native Apex PHY/BVH remain unimplemented; TF2's collision writer is not a valid
+substitute. These layout/geometry checks do not establish runtime compatibility.

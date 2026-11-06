@@ -8,7 +8,7 @@ try {
     $built = (Get-FileHash -LiteralPath (Join-Path $projectRoot 'build\r5studiomdl.exe')).Hash
     if ((Get-FileHash -LiteralPath $exe).Hash -ne $built) { throw 'Packaged executable hash mismatch.' }
     $examples = @(Get-ChildItem -LiteralPath (Join-Path $work 'examples') -Recurse -Filter '*.qc')
-    if ($examples.Count -ne 3) { throw 'Expected exactly three authored examples.' }
+    if ($examples.Count -ne 4) { throw 'Expected exactly four authored examples.' }
     foreach ($target in @('s0','s1','s2','s3')) {
         $models = @()
         foreach ($qc in $examples) {
@@ -20,7 +20,7 @@ try {
         & python -I (Join-Path $work 'tools\roundtrip54.py') --target $target --compiler $exe --out (Join-Path $work "roundtrip\$target") @models
         if ($LASTEXITCODE) { throw "Packaged $target examples did not round-trip." }
     }
-    Write-Output 'Package check passed: three examples, four targets, 12 round trips.'
+    Write-Output 'Package check passed: four examples, four targets, 16 round trips.'
 } finally {
     $resolvedWork = [IO.Path]::GetFullPath($work)
     $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())

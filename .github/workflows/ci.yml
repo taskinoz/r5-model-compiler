@@ -48,7 +48,7 @@ jobs:
           uv run --locked python -m unittest discover -s tests -p "test_*.py"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
-      # The release ZIP, checked from a fresh extraction: the three examples compile,
+      # The release ZIP, checked from a fresh extraction: all authored examples compile,
       # decompile and recompile with the packaged executable and tools.
       - name: Package
         shell: pwsh

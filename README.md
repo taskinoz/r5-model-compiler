@@ -7,7 +7,7 @@ assets. This is the experimental R5 sibling of
 
 **This is an initial development compiler, not a validated replacement for
 Respawn's asset bakery.** Native render data and basic animation are implemented.
-Native Apex physics/BVH, complex skinning, procedural bones and external animation
+Native Apex physics/BVH, procedural bones and external animation
 rigs are unfinished. There is no in-game validation yet. See [VALIDATION.md](VALIDATION.md).
 No game assets, game binaries or extraction tools are distributed.
 
@@ -18,7 +18,7 @@ format. Profiles describe the surveyed installed builds, not every hotfix in a s
 
 | Target | Asset generation | Output |
 | --- | --- | --- |
-| `s0` | early v54 / `mdl_` v8 | `.rmdl`, `.dx11.vtx`, `.vvd`, optional `.vvc` |
+| `s0` | early v54 / `mdl_` v8 | `.rmdl`, `.dx11.vtx`, `.vvd`, optional `.vvc` / `.vvw` |
 | `s1` | early v54 / `mdl_` v8 | same component formats |
 | `s2` | early v54 / `mdl_` v9 | `.rmdl`, `.vg` revision 1 |
 | `s3` | early v54 / `mdl_` v10 | `.rmdl`, `.vg` revision 1 |
@@ -40,16 +40,22 @@ The siblings' `-game`, `-outdir`, `-path`, `-quiet`, `-verbose`, `-nop4` and Cro
 arguments remain available. Output uses `.rmdl`. Keep each target in its own output
 directory so companion sets do not mix.
 
-Implemented: static/skinned meshes (up to three influences per vertex), LODs, body
+Implemented: static/skinned meshes (up to sixteen influences per vertex), LODs, body
 groups, attachments, hitboxes, skins, SMD and binary/keyvalues2 DMX input, basic
 sequences/blends/events, and native position/rotation/scale tracks. VG positions stay
 float32; normals/tangents and weights use native packing. Basic IK chain descriptors
 can be emitted, but runtime IK has not been checked.
 
 The compiler rejects physics/collision, procedures, RUI, root motion, IK rules,
-transition nodes, followers, external rigs and more than three influences. Some
+transition nodes, followers, external rigs and more than sixteen influences. Some
 inherited QC commands remain unimplemented. No TF2 collision or animation structures
 are presented as native Apex output.
+
+SMD and DMX retain positive influences through bone remapping and LOD processing.
+Models needing more than three influences automatically use native VVD/VVW for
+S0/S1 or the VG extra-weight buffer for S2/S3. Packed weights sum to one; a ratio
+that cannot fit the native quantization budget fails explicitly. See the
+`complex_skinning/weighted_quad.qc` example for an animated four-influence mesh.
 
 ## Materials and loading
 
@@ -100,8 +106,8 @@ uv run --locked python -m unittest discover -s tests -p "test_*.py"
 ```
 
 CI follows R1: build, CTest, locked uv tests, packaging and clean-extraction checks.
-The ZIP includes the compiler, native tools, docs and three authored examples. The
-package check compiles and round-trips all three for all four targets. Tags vX.Y.Z
+The ZIP includes the compiler, native tools, docs and four authored examples. The
+package check compiles and round-trips all four for all four targets. Tags vX.Y.Z
 require release-notes/vX.Y.Z.md and a matching pyproject.toml version; the release
 workflow publishes the ZIP and SHA256SUMS. No R5 release has been tagged.
 

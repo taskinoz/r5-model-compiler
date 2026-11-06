@@ -114,8 +114,7 @@ class Model(Reader):
         return self._components()
 
     def _components(self):
-        if self.get('i',0x9C)&0x4000:
-            raise ValueError('complex VVD/VVW weights not implemented')
+        complex_weights=bool(self.get('i',0x9C)&0x4000)
         d=Reader(self.path.with_suffix('.vvd').read_bytes())
         if d.get('4s',0)!=b'IDSV' or d.get('i',4)!=4:
             raise ValueError('expected VVD4')
@@ -123,6 +122,14 @@ class Model(Reader):
             raise ValueError('VVD checksum mismatch')
         count=d.get('i',16); start=d.get('i',56)
         d.span(start,count*48)
+        extra_weights=None
+        if complex_weights:
+            extra_weights=Reader(self.path.with_suffix('.vvw').read_bytes())
+            if extra_weights.get('i',0)!=self.get('i',8) or extra_weights.get('i',4)!=1:
+                raise ValueError('VVW checksum/version mismatch')
+            extra_start=extra_weights.get('i',40)
+            if extra_start<44: raise ValueError('VVW data overlaps header')
+            extra_weights.span(extra_start,0)
         colors=None
         if self.get('i',0x1D8):
             colors=Reader(self.path.with_suffix('.vvc').read_bytes())
@@ -131,8 +138,21 @@ class Model(Reader):
         verts=[]
         for p in d.array(count,start,48):
             weights=d.get('3f',p); bones=d.get('3B',p+12); n=d.get('B',p+15)
+            if not 1<=n<=16: raise ValueError('VVD influence count outside 1..16')
+            if complex_weights:
+                quantized=d.get('3h',p)
+                influences=list(zip(bones[:min(n,3)],((q+1)/32768 for q in quantized[:min(n,3)])))
+                base=d.get('i',p+8)
+                if base<0: raise ValueError('negative VVD extra-weight index')
+                for j in range(max(0,n-3)):
+                    q,bone=extra_weights.get('2h',extra_start+(base+j)*4)
+                    influences.append((bone,(q+1)/32768))
+            else:
+                if n>3: raise ValueError('VVD has extra influences without a VVW layout flag')
+                influences=list(zip(bones[:n],weights[:n]))
+            self._check_weights(influences)
             vertex=dict(pos=d.get('3f',p+16),normal=d.get('3f',p+28),uv=d.get('2f',p+40),
-                        weights=list(zip(bones[:n],weights[:n])))
+                        weights=influences)
             if colors:
                 index=(p-start)//48
                 if self.get('i',0x9C)&0x1000000:
@@ -176,15 +196,16 @@ class Model(Reader):
         return lods
 
     def _vg(self):
-        if self.get('i',0x9C)&0x4000:
-            raise ValueError('complex VG weights not implemented')
+        complex_weights=bool(self.get('i',0x9C)&0x4000)
         d=Reader(self.path.with_suffix('.vg').read_bytes())
         if d.get('I',0)!=0x47567430 or d.get('i',4)!=1:
             raise ValueError('expected VG revision 1')
         if d.get('i',12)>len(d.data): raise ValueError('VG length outside file')
         mo,mc=d.get('2Q',0x20); io,ic=d.get('2Q',0x30); vo,vs=d.get('2Q',0x40)
         lo,lc=d.get('2Q',0x70); bo,bc=d.get('2Q',0x10)
+        eo,es=d.get('2Q',0x50)
         d.span(mo,mc*72); d.span(io,ic*2); d.span(vo,vs); d.span(lo,lc*8)
+        d.span(eo,es); d.span(bo,bc)
         lods=[]
         for lp in d.array(lc,lo,8):
             first,count=d.get('2H',lp); meshes=[]
@@ -193,6 +214,9 @@ class Model(Reader):
                 if mid>=first+count or mid>=mc: raise ValueError('VG mesh outside LOD')
                 p=mo+mid*72
                 flags=d.get('Q',p); off,stride,n=d.get('3I',p+8)
+                mesh_extra,mesh_extra_size=d.get('2i',p+24)
+                if mesh_extra<0 or mesh_extra_size<0 or mesh_extra+mesh_extra_size>es:
+                    raise ValueError('VG mesh extra-weight span outside buffer')
                 if not flags:
                     meshes.append(dict(material=native['material'],triangles=[])); continue
                 vertices=[]
@@ -207,10 +231,30 @@ class Model(Reader):
                     else: raise ValueError('unsupported VG position representation')
                     weights=[(0,1.)]
                     if flags&0x5000:
-                        a,b=d.get('2H',cursor); bones=d.get('3B',cursor+4); extra=d.get('B',cursor+7); cursor+=8
-                        if extra>2: raise ValueError('complex VG weights not implemented')
-                        values=(a,b,32767-a-b) if extra==2 else ((a,32767-a) if extra else (32767,))
-                        weights=[(d.get('B',bo+i) if bc else i,w/32767) for i,w in zip(bones,values)]
+                        a=d.get('h',cursor); b=d.get('H',cursor+2)
+                        bones=d.get('3B',cursor+4); extra=d.get('B',cursor+7); cursor+=8
+                        if extra>15: raise ValueError('VG influence count exceeds 16')
+                        if not complex_weights and extra>2: raise ValueError('VG has extra influences without layout flag')
+                        weights=[]
+                        if extra:
+                            weights.append((bones[0],(a+1)/32768))
+                            if complex_weights:
+                                needed=max(0,extra-1)
+                                if needed and (b+needed)*4>mesh_extra_size:
+                                    raise ValueError('VG extra-weight index outside mesh span')
+                                for index in range(needed):
+                                    packed,bone=d.get('2h',eo+mesh_extra+(b+index)*4)
+                                    weights.append((bone,(packed+1)/32768))
+                                last=bones[1]
+                            else:
+                                if extra==2: weights.append((bones[1],(b+1)/32768))
+                                last=bones[extra]
+                            weights.append((last,1-sum(w for _,w in weights)))
+                        else: weights=[(bones[0],1.)]
+                        if bc:
+                            if any(i<0 or i>=bc for i,_ in weights): raise ValueError('VG bone-map index outside table')
+                            weights=[(d.get('B',bo+i),w) for i,w in weights]
+                    self._check_weights(weights)
                     normal=unpack_normal(d.get('I',cursor)); cursor+=4
                     color=d.get('4B',cursor) if flags&16 else (255,255,255,255)
                     if flags&16: cursor+=4
@@ -229,6 +273,12 @@ class Model(Reader):
                 meshes.append(dict(material=native['material'],triangles=faces))
             lods.append(meshes)
         return lods
+
+    def _check_weights(self,weights):
+        if not 1<=len(weights)<=16: raise ValueError('invalid influence count')
+        if any(b<0 or b>=len(self.bones) or not math.isfinite(w) or w<0 for b,w in weights):
+            raise ValueError('invalid bone index or weight')
+        if abs(sum(w for _,w in weights)-1)>1e-5: raise ValueError('unnormalized skin weights')
 
     def animation(self, descriptor):
         p=descriptor; self.span(p,52)

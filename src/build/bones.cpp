@@ -588,10 +588,10 @@ void BuildContext::RemapVertices() {
                 Vec3 t = Normalize(tdest) * Length(Vec3(v.tangent.x,v.tangent.y,v.tangent.z));
                 o.tangent = {t.x, t.y, t.z, v.tangent.w};
             }
-            // keep the strongest three (merging may have changed order)
+            // Bone merging can change weight order, but must retain every influence.
             std::stable_sort(o.weights.begin(), o.weights.end(),
                              [](const BoneWeight& a, const BoneWeight& b) { return a.weight > b.weight; });
-            if (o.weights.size() > 3) o.weights.resize(3);
+            if (o.weights.size() > kMaxWeightsPerVertex) Fatal("too many skin influences after bone remapping");
             float t = 0;
             for (auto& w : o.weights) t += w.weight;
             if (t > 0)

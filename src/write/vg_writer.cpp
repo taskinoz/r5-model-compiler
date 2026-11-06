@@ -4,6 +4,7 @@
 #include "core/log.h"
 #include <algorithm>
 #include <cmath>
+#include <map>
 
 namespace r2c {
 namespace {
@@ -31,7 +32,8 @@ uint32_t Normal(const CVertex& v) {
 }
 }
 std::vector<uint8_t> WriteVG(const CompiledModel& m) {
-    Buffer out, vertices, indices, strips;
+    Buffer out, vertices, indices, strips, extraWeights;
+    const bool complex=m.HasComplexWeights();
     out.Reserve(0x100);
     out.PatchI32(0,0x47567430); out.PatchI32(4,1);
     size_t meshCount=0;
@@ -58,21 +60,45 @@ std::vector<uint8_t> WriteVG(const CompiledModel& m) {
             out.PatchAt<uint64_t>(p,flags);
             out.PatchI32(p+8,int(vertices.Size())); out.PatchI32(p+12,stride);
             out.PatchI32(p+16,count);
+            size_t extraBase=extraWeights.Size();
+            std::map<std::vector<int16_t>,uint16_t> extraLookup;
+            out.PatchI32(p+24,int(extraBase));
             out.PatchI32(p+32,int(indices.Size()/2)); out.PatchI32(p+36,int(tris.size()));
             out.PatchI32(p+48,int(strips.Size()/0x23)); out.PatchI32(p+52,1);
             for(uint32_t i=0;i<count;++i) {
                 const auto& v=mesh.verts[i]; vertices.V3(v.pos);
                 if(weights) {
-                    int w0=int(std::lround(v.weight[0]*32767));
-                    int w1=v.numBones>1?std::min(32767-w0,int(std::lround(v.weight[1]*32767))):0;
-                    vertices.U16(uint16_t(w0)); vertices.U16(uint16_t(w1));
-                    for(int j=0;j<3;++j) vertices.U8(v.bone[j]);
+                    const auto packed=PackWeights(v.weight,v.numBones);
+                    vertices.I16(packed[0]);
+                    if(complex) {
+                        std::vector<int16_t> middle;
+                        for(int j=1;j<v.numBones-1;++j) {
+                            middle.push_back(packed[j]); middle.push_back(v.bone[j]);
+                        }
+                        uint16_t index=0;
+                        if(!middle.empty()) {
+                            auto found=extraLookup.find(middle);
+                            if(found!=extraLookup.end()) index=found->second;
+                            else {
+                                size_t next=(extraWeights.Size()-extraBase)/4;
+                                if(next>65535) Fatal("VG mesh extra-weight index exceeds uint16 range");
+                                index=uint16_t(next); extraLookup.emplace(middle,index);
+                                for(int16_t value:middle) extraWeights.I16(value);
+                            }
+                        }
+                        vertices.U16(index);
+                        vertices.U8(v.bone[0]); vertices.U8(v.bone[v.numBones-1]); vertices.U8(0);
+                    } else {
+                        vertices.I16(v.numBones>1?packed[1]:0);
+                        for(int j=0;j<3;++j) vertices.U8(v.bone[j]);
+                    }
                     vertices.U8(uint8_t(v.numBones-1));
                 }
                 vertices.U32(Normal(v));
                 if(m.hasVertexColor) vertices.Bytes(v.color,4);
                 vertices.V2(v.uv); if(m.hasUV2) vertices.V2(v.uv2);
             }
+            out.PatchI32(p+28,int(extraWeights.Size()-extraBase));
             for(uint32_t i:tris) {
                 if(i>=count) Fatal("VG triangle index outside LOD vertex span");
                 indices.U16(uint16_t(i));
@@ -88,6 +114,7 @@ std::vector<uint8_t> WriteVG(const CompiledModel& m) {
     pair(0x20,meshes,ordinal); pair(0x70,lods,m.numLods);
     pair(0x30,out.Size(),indices.Size()/2); out.Append(indices); out.Align(4);
     pair(0x40,out.Size(),vertices.Size()); out.Append(vertices); out.Align(4);
+    if(extraWeights.Size()) { pair(0x50,out.Size(),extraWeights.Size()); out.Append(extraWeights); out.Align(4); }
     pair(0x90,out.Size(),strips.Size()/0x23); out.Append(strips);
     out.PatchI32(12,int(out.Size()));
     return out.Data();

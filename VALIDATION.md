@@ -1,77 +1,103 @@
 # Apex early-season compiler validation - 6 November 2026
 
-This is the first experimental R5 implementation, not a stable release or a claim
-of full Apex model/compiler equivalence. No in-game run or RPak bake was performed.
-Latest retail is installed but is not a compiler target.
+Experimental development build with native complex skinning. These are offline
+structure, render and authored-animation checks, not a stable release or proof of
+full Apex model equivalence. No in-game run or RPak bake was performed. Retail and
+later self-hostable seasons remain future targets.
 
 Windows x64 MSVC Release: build/r5studiomdl.exe
-SHA-256: `c5a9b6316f06332bc3a8469a307f9b2d418fdb031070dde573ed63f3188d0dc0`.
+SHA-256: `a76eeac4276876b6c16aa733d527dec1ad9370a7cdfd3e4e06e2400658eb7e58`.
+Independent reader SHA-256: `1b1a802bb67bf816176c3916be5bde24d54f423e197cf89b104652b2f2c662eb`.
 
 ## Automated checks
 
-- 16 native authored-input regressions pass on Python 3.10 and locked uv/Python 3.14.
-- Both CTest groups pass: inherited convex-hull math and native compiler regressions.
-  The hull test is not Apex physics emission evidence; native physics is rejected.
-- Native tests exercise all four profiles, native structure strides, geometry,
-  weights, material GUID binding, multiple body models, nonascending LOD order,
-  attachments, hitboxes, events with long options, blend descriptor offsets, delta
-  animation, 95-frame section boundaries, full-frame position/rotation/scale values,
-  decompile/recompile geometry, unsupported complex weights and malformed files.
-- Position animation error is checked at 0.001 inches, rotation at 0.0002 radians,
-  scale at 0.0016. Native quantization steps and an explicit 0.01-inch position
-  budget are encoded in the compiler; exceeding representable range fails.
-- Packaging compiles, exports and recompiles three authored examples for all four
-  targets from a clean extraction, using only the ZIP contents. The independent
-  reader checks every stored output animation frame for finite poses and compares
-  render geometry. This check does not assert complete metadata equivalence.
+- All 22 native regressions pass on ordinary Python 3.10 and locked uv/Python 3.14.
+- Both CTest groups pass: convex-hull math and native compiler regressions. The
+  inherited hull tests are not Apex physics emission evidence.
+- Complex-skinning tests exercise mixed 1/2/3/4/8/16-influence vertices across all
+  four profiles, preservation through SMD and DMX, all sixteen bone usage flags,
+  VVD/VVW checksums/offsets, multiple meshes/LODs with VVC, malformed weight spans,
+  excess-influence rejection, small positive weights and quantization-budget failure.
+  A mesh with 4,803 sixteen-influence vertices checks shared VG extra-weight data
+  beyond the capacity of a naive uint16-indexed per-vertex table.
+- The earlier geometry, body-group, LOD, attachment, hitbox, event, blend and delta
+  checks remain. Full-frame animation checks cover a 95-frame authored sequence,
+  section boundaries and position/rotation/scale with unchanged tolerances.
+- The clean ZIP contains four authored examples, including the new four-influence
+  animated quad. All four compile, export, recompile and pass render comparisons
+  on all four targets: 16 package round trips. The reader also checks every stored
+  output animation frame for finite poses. This is not full metadata equivalence.
 
 ## Installed-asset survey
 
-Raw models were extracted with a local research copy of RSX 2.4.1 from the owner's
-S0-S3 common RPaks, including their patch chains. No reference code or game assets
-are shipped. These counts cover the common RPaks, not every installed map/skin pak.
-Reports: test-output/survey-s0.json through survey-s3.json. Each records its actual
-reader hash; the survey preceded a small reader addition for optional VVC attributes.
+All 1,789 studio structures and render geometry decode: 49,593,673 triangles
+across all LODs, including the 559 models previously excluded for complex skinning.
+These are the installed S0-S3 common RPaks and patch chains, not every map/skin pak.
 
-| Target | Studio structures parsed | Render geometry decoded | Unsupported complex weights | Triangles decoded (all LODs) |
-| --- | ---: | ---: | ---: | ---: |
-| s0 | 360/360 | 251 | 109 | 5,257,101 |
-| s1 | 420/420 | 296 | 124 | 5,630,956 |
-| s2 | 428/428 | 293 | 135 | 6,015,121 |
-| s3 | 581/581 | 390 | 191 | 8,468,331 |
+| Target | Models decoded | Render triangles (all LODs) | Errors |
+| --- | ---: | ---: | ---: |
+| s0 | 360/360 | 9,477,600 | 0 |
+| s1 | 420/420 | 10,386,145 | 0 |
+| s2 | 428/428 | 11,918,028 | 0 |
+| s3 | 581/581 | 17,811,900 | 0 |
 
-All reported geometry exclusions are explicit complex-weight rejections; they are
-not passing models. Parsing a studio structure is not a render/animation/runtime
-equivalence result. Complex models are common among characters and animated props.
+Reports are complex-native-survey-s0.json / s1.json and complex-survey-s2.json /
+s3.json under test-output. They identify the actual reader hash. All vertex weight
+spans, counts, bone indices and normalized sums are checked while decoding. A
+successful decode does not establish animation-rig or runtime equivalence.
+
+The original research extractor copied VVD bytes into VVC files for some S0/S1
+assets. Strict VVC checks exposed 114/118 bad exports. The local-only research
+copy was corrected to read the native vvcOffset, then both corpora were extracted
+again into separate complex-native-s0/s1 folders. The final surveys above use those
+corrected components. No comparison was relaxed, no game installation was modified,
+and the extractor modification is not distributed.
+
+## Weight encoding evidence
+
+All 5,651,844 VVD vertices in S0/S1 complex-layout files have influence counts from
+1 through 16 and satisfy sum(stored values) + count = 32768. Native packed weights
+therefore decode as (stored + 1) / 32768. An independent byte-level comparison of
+the original S0 VVD/VVW and S3 VG bird data reconstructs the same bone/weight values
+for all 10,989 vertices, using the original VTX mapping. The VG final influence is
+the remainder after decoded explicit weights, not after the raw stored integers.
+Evidence: weight-facts.txt and complex-cross-format.json under test-output.
 
 ## Retail render rebuilds
 
-Reports under test-output/render-check-s0 through render-check-s3 test eight named
-models per target: at_gib5, bangalore_rockets_projectile, bird, bullet_rifle,
-caber_shot_thrown, caustic_flask, caustic_mug and concrete_chunk02a.
-Each target has seven passing render rebuilds and one explicit unsupported bird
-model (complex weights): **28 passes, four unsupported; no render differences**.
-These are explicitly --render-only runs. They remove physics/BVH, rigs and sequence
-metadata and do not prove those features. Reports identify exact compiler/tool
-hashes and input hashes. Fixed render thresholds are position 0.0001 inches, normal
-component 0.006, UV 0.00001 and weight 2/32767; none was widened to pass an asset.
-The wider native normal/weight bounds account for their packed representations.
+Each profile rebuilds the earlier eight-model sample plus pilot_heavy_gibraltar,
+pilot_light_support, pilot_light_wraith and pilot_heavy_caustic. These exercise
+10/13/14/16 influences, larger skeletons, multiple materials and LODs. All 48 pass.
+The previous four unsupported bird cases now pass; no earlier passing model newly
+differs. Maximum measured errors across these runs:
 
-## Unfinished and unverified
+- position: 0
+- normal: 0
+- uv: 0
+- weight: 0
 
-- Native PHY/BVH collision and ragdolls; complex VVD/VVW/VG skinning; procedures;
-  RUI; external animation rigs and sequence assets; root-motion tracks; IK rules;
-  transition nodes; followers. These inputs fail explicitly.
-- RPak packaging/baking, streaming and relocation, material dependency resolution,
-  shader compatibility, animation-rig integration and runtime entity behaviour.
-- Default export preserves only its implemented QC subset. Render comparisons do
-  not cover material GUIDs, skin-family identity, tangents, bounds, arbitrary
-  sequence metadata, procedural behaviour or collision geometry equivalence.
-- Compact retail animation decoding needs wider animation-rig corpus validation.
-  Authored compiler output uses raw native tracks, not those compact modes.
-- Retail and later self-hostable season profiles remain future work. S0-S3 share
-  a header but differ at the vertex-buffer boundary; v54 alone is not a profile.
+The fixed limits remain position 0.0001 inches, normal component 0.006, UV 0.00001
+and weight 2/32767. None was increased. The native writer preserves normalized
+integer sums and rejects unrepresentable weight ratios or index overflows.
 
-Historical TF2 corpus figures under docs/reference and tests/legacy_v53 are not
-R5 evidence. Reports contain local game paths and stay ignored. No release tag or
-claim of full runtime compatibility accompanies this development build.
+These are explicitly render-only runs: physics/BVH, rigs and sequence metadata are
+not preserved or compared. Full render reports live in complex-render-s0 through
+complex-render-s3. complex-validation-manifest.json records the compiler, reader,
+source/tool hashes, report hashes and all selected input companion hashes. Game
+data, research tools and rebuilt assets stay ignored and are not distributed.
+
+## Remaining limitations
+
+- Native PHY/BVH collision and ragdolls, procedural bones, RUI, external rigs and
+  sequence assets, root-motion tracks, IK rules, transition nodes and followers.
+- RPak baking/streaming/relocations, material dependencies, shader compatibility
+  and runtime entity behaviour remain unverified. Output components still require
+  a matching-season packager. No runtime compatibility claim accompanies this build.
+- Early profiles retain the 256-bone and 16-influence limits. Unshareable VG
+  extra-weight lists with starting indices above 65535 fail explicitly. Extreme
+  positive weight ratios that exceed the fixed quantization budget also fail.
+- Render comparisons do not establish material GUID, skin-family, tangent, bounds,
+  arbitrary sequence metadata, procedural or collision equivalence. Compact retail
+  animation decoding still needs broader external-rig validation.
+- Historical TF2 corpus reports/tests are reference material, not Apex evidence.
+  No R5 release has been tagged or published.

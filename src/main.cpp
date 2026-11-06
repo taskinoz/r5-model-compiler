@@ -104,7 +104,8 @@ int main(int argc, char** argv) {
         model.name = def->modelName;
         if(EndsWithI(model.name,".mdl")) model.name.resize(model.name.size()-4);
         if(!EndsWithI(model.name,".rmdl")) model.name += ".rmdl";
-        if(model.flags & 0x4000) Fatal("Apex complex skinning is not implemented yet");
+        model.flags &= ~0x4000;
+        if(model.HasComplexWeights()) model.flags |= 0x4000;
         for(const auto& binding:materials) {
             bool found=false;
             for(const auto& name:model.textures) if(name==binding.first) found=true;
@@ -119,7 +120,7 @@ int main(int argc, char** argv) {
         if(!model.boneFollowers.empty() || !model.includeModels.empty())
             Fatal("Apex followers and external animation rigs are not implemented yet");
         if(!model.nodeNames.empty()) Fatal("Apex transition nodes are not implemented yet");
-        std::vector<uint8_t> mdl = WriteMDL(model);
+        std::vector<uint8_t> mdl = WriteMDL(model,target=="s2" || target=="s3");
         auto read32=[&](size_t p) { int32_t v; std::memcpy(&v,mdl.data()+p,4); return v; };
         int checksum=read32(8);
         int textures=read32(0xD4);
@@ -133,6 +134,7 @@ int main(int argc, char** argv) {
             // Baked VG profiles have no legacy component spans.
             std::memset(mdl.data()+0x1C0,0,12);
             std::memset(mdl.data()+0x1D0,0,12);
+            std::memset(mdl.data()+0x21C,0,8);
         }
 
         std::filesystem::path out;
@@ -165,6 +167,7 @@ int main(int argc, char** argv) {
             write(".dx11.vtx",WriteVTX(model,checksum));
             write(".vvd",WriteVVD(model,checksum));
             if(model.hasVertexColor || model.hasUV2) write(".vvc",WriteVVC(model,checksum));
+            if(model.HasComplexWeights()) write(".vvw",WriteVVW(model,checksum));
         }
         if(!f) Fatal("failed writing model");
         int verts = 0, tris = 0;

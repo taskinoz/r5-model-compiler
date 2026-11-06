@@ -11,8 +11,7 @@ import unittest
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'tools'))
 from mdl54 import Model, Reader, PROFILES
-from decompile53 import write_smd
-from decompile54 import decompile
+from decompile54 import decompile, write_smd
 
 
 class Compiler54(unittest.TestCase):
@@ -167,12 +166,105 @@ class Compiler54(unittest.TestCase):
         self.assertAlmostEqual(frame[1][1][0],.1,delta=.0002)
 
     def test_complex_weights_are_not_truncated(self):
+        bones=[dict(name=f'b{i}',parent=i-1) for i in range(16)]
+        frame=[((0,0,i),(0,0,0),(1,1,1)) for i in range(16)]
+        tris=[]; expected={}
+        for count in (1,2,3,4,8,16):
+            weights=[(i,(i+1)/(count*(count+1)/2)) for i in range(count)]
+            tri=[]
+            for pos,normal,uv,_ in self.tris[0][1]:
+                point=(pos[0]+count*10,pos[1],pos[2]); expected[point]=dict(weights)
+                tri.append((point,normal,uv,weights))
+            tris.append(('test/material',tri))
+        write_smd(self.work/'mesh.smd',bones,[frame],tris)
+        for target in PROFILES:
+            out,_=self.run_compiler(target=target,name=target)
+            model=Model(out,target); self.assertTrue(model.get('i',0x9C)&0x4000)
+            self.assertEqual(len(model.bones),16)
+            self.assertTrue(all(bone['flags']&0x400 for bone in model.bones))
+            for mesh in model.render()[0]:
+                for triangle in mesh['triangles']:
+                    for vertex in triangle:
+                        point=tuple(round(x,4) for x in vertex['pos'])
+                        wanted=expected[point]; actual=dict(vertex['weights'])
+                        self.assertEqual(wanted.keys(),actual.keys())
+                        self.assertEqual(sum(actual.values()),1)
+                        for bone,weight in wanted.items(): self.assertAlmostEqual(actual[bone],weight,delta=2/32767)
+            self.assertEqual(out.with_suffix('.vvw').exists(),target in ('s0','s1'))
+            if target in ('s0','s1'):
+                vvw=Reader(out.with_suffix('.vvw').read_bytes())
+                self.assertEqual(vvw.get('i',0),model.get('i',8)); self.assertEqual(vvw.get('i',4),1)
+                self.assertEqual(model.get('i',0x220),len(vvw.data))
+                vtx=Reader(out.with_suffix('.dx11.vtx').read_bytes()); self.assertEqual(vtx.get('i',12),16)
+            export=decompile(out,self.work/(target+'-export'),target)
+            rebuilt=self.work/(target+'-rebuilt.rmdl')
+            run=subprocess.run([str(self.compiler),'--target',target,'-quiet','-o',str(rebuilt),str(export)],capture_output=True,text=True)
+            self.assertEqual(run.returncode,0,run.stdout+run.stderr)
+            from validate54 import validate
+            self.assertEqual(validate(rebuilt,target,out)['differences'],[])
+
+    def test_excess_influences_fail(self):
+        bones=[dict(name=f'b{i}',parent=i-1) for i in range(17)]
+        frame=[((0,0,0),(0,0,0),(1,1,1)) for _ in bones]
+        tris=[('test/material',[(v[0],v[1],v[2],[(i,1/17) for i in range(17)]) for v in self.tris[0][1]])]
+        write_smd(self.work/'mesh.smd',bones,[frame],tris)
+        _,run=self.run_compiler(ok=False); self.assertIn('max 16',run.stdout)
+
+    def test_malformed_complex_weight_companions_rejected(self):
         bones=[dict(name=f'b{i}',parent=i-1) for i in range(4)]
-        frame=[((0,0,i),(0,0,0),(1,1,1)) for i in range(4)]
+        frame=[((0,0,0),(0,0,0),(1,1,1)) for _ in bones]
         tris=[('test/material',[(v[0],v[1],v[2],[(i,.25) for i in range(4)]) for v in self.tris[0][1]])]
         write_smd(self.work/'mesh.smd',bones,[frame],tris)
-        _,run=self.run_compiler(ok=False)
-        self.assertIn('complex skinning',run.stdout)
+        out,_=self.run_compiler(); extra=out.with_suffix('.vvw')
+        raw=extra.read_bytes(); extra.write_bytes(raw[:44])
+        with self.assertRaises(ValueError): Model(out,'s0').render()
+        bad=bytearray(raw); struct.pack_into('<i',bad,0,0); extra.write_bytes(bad)
+        with self.assertRaisesRegex(ValueError,'checksum'): Model(out,'s0').render()
+        out,_=self.run_compiler(target='s3',name='vg')
+        path=out.with_suffix('.vg'); data=bytearray(path.read_bytes())
+        reader=Reader(data); vertex_start=reader.get('Q',0x40)
+        struct.pack_into('<H',data,vertex_start+14,65535); path.write_bytes(data)
+        with self.assertRaisesRegex(ValueError,'extra-weight index'): Model(out,'s3').render()
+
+    def test_repeated_weights_fit_native_vg_index_range(self):
+        # A naive per-vertex table needs 67,242 entries, beyond the uint16 start
+        # index limit. Identical middle influences can share one native record.
+        bones=[dict(name=f'b{i}',parent=i-1) for i in range(16)]
+        frame=[((0,0,0),(0,0,0),(1,1,1)) for _ in bones]
+        triangles=[]
+        for triangle in range(1601):
+            corners=[]
+            for pos,normal,uv,_ in self.tris[0][1]:
+                corners.append(((pos[0]+triangle*4,pos[1],pos[2]),normal,uv,[(i,1/16) for i in range(16)]))
+            triangles.append(('test/material',corners))
+        write_smd(self.work/'mesh.smd',bones,[frame],triangles)
+        out,_=self.run_compiler(target='s3')
+        rendered=Model(out,'s3').render()[0][0]['triangles']
+        self.assertEqual(len(rendered),1601)
+        for triangle in (rendered[0],rendered[-1]):
+            for vertex in triangle:
+                self.assertEqual(dict(vertex['weights']),dict((i,1/16) for i in range(16)))
+
+    def test_unrepresentable_weight_ratio_fails_budget(self):
+        bones=[dict(name=f'b{i}',parent=i-1) for i in range(4)]
+        frame=[((0,0,0),(0,0,0),(1,1,1)) for _ in bones]
+        weights=[(0,1.),(1,1e-9),(2,1e-9),(3,1e-9)]
+        triangles=[('test/material',[(v[0],v[1],v[2],weights) for v in self.tris[0][1]])]
+        write_smd(self.work/'mesh.smd',bones,[frame],triangles)
+        _,run=self.run_compiler(target='s3',ok=False)
+        self.assertIn('quantization error budget',run.stdout)
+
+    def test_small_positive_influences_survive(self):
+        bones=[dict(name=f'b{i}',parent=i-1) for i in range(4)]
+        frame=[((0,0,0),(0,0,0),(1,1,1)) for _ in bones]
+        weights=[(0,.99994),(1,.00002),(2,.00002),(3,.00002)]
+        triangles=[('test/material',[(v[0],v[1],v[2],weights) for v in self.tris[0][1]])]
+        write_smd(self.work/'mesh.smd',bones,[frame],triangles)
+        for target in ('s0','s3'):
+            out,_=self.run_compiler(target=target,name=target)
+            decoded=Model(out,target).render()[0][0]['triangles'][0][0]['weights']
+            self.assertEqual(len(decoded),4)
+            self.assertTrue(all(weight>0 for _,weight in decoded))
 
     def test_dmx_vertex_colors_and_second_uv(self):
         from decompile53 import write_dmx
@@ -185,6 +277,30 @@ class Compiler54(unittest.TestCase):
             vertex=Model(out,target).render()[0][0]['triangles'][0][0]
             self.assertEqual(vertex['color'],(255,128,0,255))
             self.assertEqual(vertex['uv2'],(.125,.875))
+
+    def test_complex_vvw_after_vvc_with_multiple_meshes_and_lods(self):
+        from decompile53 import write_dmx
+        bones=[dict(name=f'b{i}',parent=i-1) for i in range(4)]
+        frame=[((0,0,0),(0,0,0),(1,1,1)) for _ in bones]
+        corners=[(v[0],v[1],[(i,.25) for i in range(4)],
+                  dict(uv=v[2],uv2=(.125,.875),color=(1,.5,0,1),id=index))
+                 for index,v in enumerate(self.tris[0][1])]
+        write_dmx(self.work/'mesh.dmx',bones,frame,[('test/material',0,corners)],model_space=True)
+        qc=self.qc.replace('mesh.smd','mesh.dmx')+'\n$body second "mesh.dmx"\n$lod 30 { replacemodel "mesh.dmx" "mesh.dmx" }\n'
+        for target in PROFILES:
+            out,_=self.run_compiler(qc,target=target,name=target)
+            model=Model(out,target)
+            render=model.render()
+            self.assertEqual([sum(len(m['triangles']) for m in lod) for lod in render],[2,2])
+            for lod in render:
+                for mesh in lod:
+                    for tri in mesh['triangles']:
+                        for vertex in tri:
+                            self.assertEqual(dict(vertex['weights']),dict((i,.25) for i in range(4)))
+                            self.assertEqual(vertex['color'],(255,128,0,255))
+                            self.assertEqual(vertex['uv2'],(.125,.875))
+            if target in ('s0','s1'):
+                self.assertEqual(model.get('i',0x21C),sum(model.get('i',o) for o in (0x1D0,0x1D4,0x1D8)))
 
     def test_truncated_or_wrong_format_rejected(self):
         out,_=self.run_compiler(); data=out.read_bytes()

@@ -2,7 +2,7 @@
 //
 // Matches studiomdl's conventions: texture V is flipped (1 - v), triangle winding is
 // reversed, material names lose their extension, and vertex weights are merged,
-// sorted and clipped to the strongest three. Positive sub-5% weights are retained.
+// sorted and retained up to Apex's sixteen influences. Positive small weights remain.
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
@@ -33,7 +33,7 @@ void BalanceWeights(std::vector<BoneWeight>& w, size_t maxCount) {
             }
     std::stable_sort(w.begin(), w.end(), [](const BoneWeight& a, const BoneWeight& b) { return a.weight > b.weight; });
     while (w.size() > 1 && w.back().weight <= 0.f) w.pop_back();
-    if (w.size() > maxCount) Fatal("Apex complex skinning (more than three weights per vertex) is not implemented yet");
+    if (w.size() > maxCount) Fatal("too many skin influences (%d, max %d)",int(w.size()),int(maxCount));
     float t = 0;
     for (auto& b : w) t += b.weight;
     if (t <= 0) {

@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include "core/weights.h"
 
 #include "core/math.h"
 
@@ -73,8 +74,8 @@ struct CVertex {
     Vec2 uv2;
     uint8_t color[4] = {255, 255, 255, 255};
     int numBones = 1;
-    uint8_t bone[3] = {0, 0, 0};
-    float weight[3] = {1, 0, 0};
+    uint8_t bone[kMaxWeightsPerVertex] = {};
+    float weight[kMaxWeightsPerVertex] = {1};
 };
 
 // One triangle list for one mesh at one LOD; indices into CMesh::verts.
@@ -261,6 +262,12 @@ struct CPerTri {
 };
 
 struct CompiledModel {
+    bool HasComplexWeights() const {
+        for(const auto& bp:bodyParts) for(const auto& md:bp.models)
+            for(const auto& mesh:md.meshes) for(const auto& v:mesh.verts)
+                if(v.numBones>3) return true;
+        return false;
+    }
     std::string name;       // internal name, e.g. "props/crate.mdl"
     int flags = 0;
     Vec3 eyePosition, illumPosition;
