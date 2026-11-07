@@ -11,3 +11,5 @@ $sequence walk {
     walkframe 40 LX LY LZR
     eventcycle "AE_R5C_MARKER" 0.375 "motion marker"
 }
+
+$attachment "REF" "hip" 0 0 0

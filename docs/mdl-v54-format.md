@@ -181,7 +181,9 @@ byte offset; the vertex index is measured in records. The last weight is one min
 the decoded explicit weights. Simple VG similarly uses an implicit final weight.
 Repeated middle-weight lists share storage. An unshareable list whose starting
 index exceeds 65535 fails rather than wrapping. Header VVW spans are zero in VG
-profiles; no legacy VTX/VVD is generated as an intermediate for those profiles.
+profiles; legacy VTX/VVD allocation sizes are computed, but companions are not
+written for those profiles. Their size fields at 0x1D0..0x1D8 remain populated;
+component offsets at 0x1C0..0x1C8 are zero. RePak uses the sizes for allocation.
 
 Native Apex PHY/BVH remain unimplemented; TF2's collision writer is not a valid
 substitute. These layout/geometry checks do not establish runtime compatibility.
@@ -189,8 +191,8 @@ substitute. These layout/geometry checks do not establish runtime compatibility.
 
 ## Standalone rigs and sequences
 
-`--external-assets` separates a compiled set into a render model with one empty
-`ref` sequence, a full native studio-header `.rrig` containing the shared skeleton,
+`--external-assets` writes a render model retaining embedded clips with an empty
+`ref` sequence at index zero, a full native studio-header `.rrig` containing the shared skeleton,
 attachments, hitboxes, IK chains and pose parameters, and one `.rseq` per sequence.
 Each RSEQ starts with its 0xD0 sequence descriptor at byte zero. Its animation
 reference table contains int32 offsets relative to that descriptor. Each referenced
@@ -208,3 +210,26 @@ a compiler packaging manifest, not an engine asset: ASCII `R5AS1`, target, seque
 count, each on a separate line. It prevents stale numbered sequence assets from
 being accidentally linked after recompilation. These facts establish the packaged
 asset structure; live rig resolution and streaming still require a runtime test.
+
+## R5R playback and VG rendering findings
+
+The sequence descriptor base at +0 must be zero for the native int32 relative
+animation-reference table. A nonzero base selects legacy int16 animation indices
+in R5R (`r5apex.exe+0x1C8AD0`). GetSequenceDuration rejects sequence indices <=0;
+authored external sets therefore reserve `ref` at zero. Embedded native clips
+play in R5R; external-rig-only playback remains unverified.
+
+Studio offset 0xCC points to an optional byte-per-material shader-type table:
+RGDU/RGDP/RGDC/SKNU/SKNP/SKNC/WLDU/WLDC/PTCU/PTCS are values 0..9.
+Material path, GUID, shader family and vertex position layout must agree.
+
+All 8,469 S2 and 11,808 S3 surveyed nonempty VG meshes include flag bits 0x840.
+The writer emits these bits, an identity bone palette for skinned models, and
+optionally native packed positions (21/21/22-bit XYZ with biases 1024/1024/2048,
+scale 1024). The existing 0.0001-inch render budget is enforced before writing.
+
+The VG offset/count pair at 0x60/0x68 describes 48-byte auxiliary records. In all
+581 installed S3 models surveyed, its count equals the studio mesh count, without
+multiplying by LOD count. Omitting the buffer suppressed drawing in an isolated
+R5R concrete-model test; zero-filled records restored drawing. Individual fields
+remain unknown. The writer allocates zeros rather than copying native payloads.

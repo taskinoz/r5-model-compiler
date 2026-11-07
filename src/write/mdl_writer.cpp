@@ -260,7 +260,7 @@ void MdlWriter::WriteSequences() {
         size_t p = base + i * kSeqDescSize;
         auto I = [&](size_t off, int32_t v) { b_.PatchI32(p + off, v); };
         auto F = [&](size_t off, float v) { b_.PatchAt<float>(p + off, v); };
-        I(0x00, -static_cast<int32_t>(p));
+        I(0x00, 0); // native int32 animation references; nonzero selects legacy int16 indices
         Str(p + 0x04, p, s.label);
         Str(p + 0x08, p, s.activityName);
         int flags = s.flags;
@@ -542,6 +542,12 @@ void MdlWriter::WriteTextures() {
         Str(p, p, t);
     }
     b_.Align(4);
+    if (!m_.materialTypes.empty()) {
+        if (m_.materialTypes.size()!=m_.textures.size()) Fatal("material type count does not match texture slots");
+        HdrHere(0xCC);
+        for (uint8_t type : m_.materialTypes) b_.U8(type);
+        b_.Align(4);
+    }
     HdrHere(H_CDTEXTUREINDEX);
     Hdr(H_NUMCDTEXTURES, static_cast<int>(m_.cdTextures.size()));
     size_t cd = b_.Reserve(4 * m_.cdTextures.size());
@@ -660,7 +666,7 @@ std::vector<uint8_t> MdlWriter::Run() {
     bool hasMesh = false;
     for (auto& bp : m_.bodyParts) for (auto& md : bp.models)
         if (!md.meshes.empty()) hasMesh = true;
-    if (hasMesh && !vertexGroup_) {
+    if (hasMesh) {
         auto vtx = WriteVTX(m_, checksum);
         Hdr(H_VTXOFFSET, -1);
         Hdr(H_VTXSIZE, static_cast<int>(vtx.size()));

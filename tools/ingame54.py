@@ -55,24 +55,35 @@ def fields(data):
 class NetConsole:
     def __init__(self,port,password,timeout=2):
         self.sock=socket.create_connection(('::1',port),timeout)
-        self.buffer=bytearray(); self.send(1,password)
-        response=self.receive()
-        if response.get(3)!=0 or not response.get(5):
-            self.close(); raise ValueError('SDK netconsole authentication failed')
-        self.send(2,value='1')
+        self.buffer=bytearray()
+        try:
+            self.send(1,password)
+            response=self.receive()
+            if response.get(3)!=0 or not response.get(5):
+                raise ValueError('SDK netconsole authentication failed')
+            self.send(2,value='1')
+        except BaseException:
+            self.close()
+            raise
+
     def send(self,kind,message='',value=''):
         request=field(3,kind)+field(4,message)+field(5,value)
-        envelope=field(1,0)+field(3,request)
-        self.sock.sendall(struct.pack('!I',len(envelope))+envelope)
-    def command(self,text): self.send(0,text)
+        self.tx_sequence=getattr(self,'tx_sequence',0)+1
+        nonce=field(1,self.tx_sequence)+field(2,time.time_ns())
+        envelope=field(1,nonce)+field(4,request)
+        self.sock.sendall(struct.pack('!II',0x6e6f4352,len(envelope))+envelope)
+    def command(self,text):
+        name,_,args=text.partition(' ')
+        self.send(0,name,text)
     def receive(self):
-        while len(self.buffer)<4: self.buffer.extend(self.sock.recv(65536) or self._closed())
-        count=struct.unpack_from('!I',self.buffer)[0]
+        while len(self.buffer)<8: self.buffer.extend(self.sock.recv(65536) or self._closed())
+        magic,count=struct.unpack_from('!II',self.buffer)
+        if magic!=0x6e6f4352: raise ValueError('invalid R5R netconsole magic')
         if count>4*1024*1024: raise ValueError('oversized SDK message')
-        while len(self.buffer)<count+4: self.buffer.extend(self.sock.recv(65536) or self._closed())
-        envelope=fields(bytes(self.buffer[4:4+count])); del self.buffer[:4+count]
-        if envelope.get(1,0): raise ValueError('set rcon_encryptframes 0 in the isolated runtime')
-        return fields(envelope.get(3,b''))
+        while len(self.buffer)<count+8: self.buffer.extend(self.sock.recv(65536) or self._closed())
+        envelope=fields(bytes(self.buffer[8:8+count])); del self.buffer[:8+count]
+        if envelope.get(3,b''): raise ValueError('set rcon_encryptframes 0 in the isolated runtime')
+        return fields(envelope.get(4,b''))
     def _closed(self): raise ConnectionError('SDK netconsole closed')
     def close(self): self.sock.close()
 
@@ -113,7 +124,12 @@ def write_probe(runtime,models):
         if not re.fullmatch(r'[A-Za-z0-9_./ -]+',text):
             raise ValueError('unsupported character in runtime probe asset/sequence name')
         return json.dumps(text)
-    lines=['global function R5C_Run',
+    lines=['global function CodeCallback_RFiveCompiler_Test_ModInit',
+           'global function R5C_Run',
+           'global function R5C_Cleanup',
+           'struct { array<entity> props } file',
+           'void function CodeCallback_RFiveCompiler_Test_ModInit()', '{',
+           *[f'  PrecacheModel( ${literal(model["path"])} )' for model in models], '}',
            'void function R5C_Run() { thread R5C_Probe() }',
            'void function R5C_Probe()', '{',
            '  while ( GetPlayerArray().len() == 0 ) wait 0.5',
@@ -124,17 +140,19 @@ def write_probe(runtime,models):
            '  wait 3.0']
     for i,model in enumerate(models):
         lines += ['  {',f'    asset model = ${literal(model["path"])}',
-                  '    PrecacheModel( model )',
                   f'    vector origin = center + right * {(i-(len(models)-1)/2)*60:.3f}',
                   '    entity prop = CreatePropDynamic( model, origin, <0,0,0> )',
+                  '    file.props.append( prop )',
+                  f'    prop.SetModelScale( {float(model.get("scale",1)):.6f} )',
                   f'    print( "R5C_SPAWN {i}\\n" )']
         for j,label in enumerate(model['labels']):
+            if j in model.get('reference_sequences',[]): continue
             lines += ['    {',f'      string label = {literal(label)}',
-                      '      int id = prop.LookupSequence( label )',
-                      '      float duration = prop.GetSequenceDuration( label )',
+                      f'      int id = prop.LookupSequence( {literal(label)} )',
+                      '      float duration = id < 0 ? 0.0 : prop.GetSequenceDuration( label )',
                       f'      print( format( "R5C_SEQUENCE {i} {j} %d %.6f\\n", id, duration ) )',
                       '      if ( id < 0 ) { print( "R5C_FAIL missing sequence\\n" ); return }',
-                      '      prop.Anim_PlayWithRefPoint( label, origin, <0,0,0>, 0.0 )',
+                      '      prop.Anim_PlayWithRefPoint( label, origin, <0,0,0>, 0.0 )' if model.get('has_ref') else '      prop.Anim_Play( label )',
                       '      float started = Time()',
                       '      for ( int sample = 0; sample < 5; sample++ )',
                       '      {',
@@ -148,12 +166,47 @@ def write_probe(runtime,models):
                       f'          print( format( "R5C_ATTACHMENT {i} {j} %.6f %.6f %.6f\\n", a.x, a.y, a.z ) )',
                       '        }','      }','    }']
         lines += ['  }']
-    lines += ['  player.ClientCommand( "screenshot" )','  print( "R5C_DONE\\n" )','}']
+    lines += ['  print( "R5C_DONE\\n" )','}',
+              'void function R5C_Cleanup() { foreach ( entity prop in file.props ) { if ( IsValid(prop) ) prop.Destroy() } file.props.clear() }']
     mod=Path(runtime)/'mods'/'r5c_compiler_test'
     scripts=mod/'scripts'/'vscripts'; scripts.mkdir(parents=True,exist_ok=True)
-    (mod/'mod.vdf').write_text('"mod" { "name" "R5C compiler test" "id" "R5C.Test" "description" "Isolated authored models" "version" "1.0" "author" "R5C" }\n')
+    (mod/'mod.vdf').write_text('"mod" { "name" "R5C compiler test" "id" "RFiveCompiler.Test" "description" "Isolated authored models" "version" "1.0" "author" "R5C" "PakLoadOnPlaylists" { "dev_default" "1" "survival_dev" "1" } }\n')
     (scripts/'scripts.rson').write_text('When: "SERVER"\nScripts:\n[\n r5c_probe.nut\n]\n')
     (scripts/'r5c_probe.nut').write_text('\n'.join(lines)+'\n')
+    visual=['global function CodeCallback_RFiveCompiler_Test_ModInit',
+            'global function R5C_Visual',
+            'global function R5C_VisualSelect',
+            'struct { array<entity> props } file',
+            'void function CodeCallback_RFiveCompiler_Test_ModInit() {}',
+            'void function R5C_Visual()', '{',
+            '  entity player = GetLocalViewPlayer()',
+            '  vector angles = <0, player.CameraAngles().y, 0>',
+            '  vector center = player.CameraPosition() + AnglesToForward( angles ) * 180 - <0,0,12>',
+            '  vector right = AnglesToRight( angles )']
+    for i,model in enumerate(models):
+        angles=model.get('visual_angles',[0,0,0])
+        if len(angles)!=3 or not all(__import__('math').isfinite(float(a)) for a in angles):
+            raise ValueError('invalid visual angles')
+        angle_literal='<'+','.join(str(float(a)) for a in angles)+'>'
+        visual+=['  {',f'    entity prop = CreateClientSidePropDynamic( center + right * {(i-(len(models)-1)/2)*60:.3f}, {angle_literal}, ${literal(model["path"])} )',
+                 f'    prop.SetModelScale( {float(model.get("visual_scale",model.get("scale",1))):.6f} )',
+                 '    file.props.append( prop )',f'    print( "R5C_VIS_SPAWN {i}\\n" )','  }']
+    visual+=['  print( "R5C_VIS_DONE\\n" )','}']
+    visual+=['void function R5C_VisualSelect( int selected )', '{',
+             '  entity player = GetLocalViewPlayer()',
+             '  vector angles = <0, player.CameraAngles().y, 0>',
+             '  vector center = player.CameraPosition() + AnglesToForward(angles) * 180 - <0,0,12>',
+             '  vector right = AnglesToRight(angles)']
+    for i,model in enumerate(models):
+        visual+=[f'  file.props[{i}].SetModelScale( selected == {i} ? {float(model.get("visual_scale",model.get("scale",1))):.6f} : 0.001 )',
+                 f'  file.props[{i}].SetOrigin( center + right * (selected == {i} ? 0.0 : 10000.0) )']
+        if model.get('animated_sequences'):
+            label=model['labels'][model['animated_sequences'][0]]
+            visual+=[f'  if ( selected == {i} ) file.props[{i}].Anim_Play( {literal(label)} )']
+    visual+=['  print( "R5C_VIS_SELECTED\\n" )','}']
+    (scripts/'r5c_visual.nut').write_text('\n'.join(visual)+'\n')
+    (scripts/'scripts.rson').write_text('When: "SERVER"\nScripts:\n[\n r5c_probe.nut\n]\nWhen: "CLIENT"\nScripts:\n[\n r5c_visual.nut\n]\n')
+
 
 
 def summarize(log,models):
@@ -166,6 +219,7 @@ def summarize(log,models):
     for i,model in enumerate(models):
         if i not in spawned: failures.append(model['path']+': missing spawn')
         for j,label in enumerate(model['labels']):
+            if j in model.get('reference_sequences',[]): continue
             value=sequences.get((i,j))
             if value is None or value['index']<0: failures.append(model['path']+': missing sequence '+label)
             if len(re.findall(rf'R5C_SAMPLE {i} {j} ',log))!=5:
@@ -179,8 +233,31 @@ def summarize(log,models):
         except ValueError: failures.append('invalid movement sample')
     if 'R5C_DONE' not in log: failures.append('runtime probe did not finish')
     if 'R5C_FAIL' in log: failures.append('runtime probe reported a failure')
-    return dict(spawned=len(spawned),sequences=len(sequences),samples=samples,failures=failures,
+    for i,model in enumerate(models):
+        for j in model.get('animated_sequences',[]):
+            value=sequences.get((i,j))
+            if value is not None and (not __import__('math').isfinite(value['duration']) or value['duration']<=0):
+                failures.append(model['path']+': animated sequence has no duration')
+            cycles=[s['cycle'] for s in samples if s['model']==i and s['sequence']==j]
+            if cycles and max(cycles)-min(cycles)<0.01:
+                failures.append(model['path']+': animated sequence cycle did not advance')
+    return dict(spawned=len(spawned),sequences=len(sequences),
+                sequence_results=[dict(model=i,sequence=j,**value) for (i,j),value in sorted(sequences.items())],
+                samples=samples,failures=failures,
                 passed=not failures,scope='spawn, sequence lookup/playback and movement samples; inspect screenshots and samples for geometry/motion equivalence')
+
+
+def summarize_visual(log,count):
+    import re
+    spawned={int(i) for i in re.findall(r'R5C_VIS_SPAWN (\d+)',log)}
+    failures=[]
+    if spawned!=set(range(count)) or 'R5C_VIS_DONE' not in log:
+        failures.append('client visual probe did not create every model')
+    if log.count('R5C_VIS_SELECTED')!=count:
+        failures.append('client visual selection did not finish')
+    if 'SCRIPT ERROR' in log.upper(): failures.append('client/server script error')
+    return dict(spawned=len(spawned),failures=failures,
+                scope='client script execution only; screenshots require visual review')
 
 
 def main():
@@ -211,19 +288,31 @@ def main():
         if dest.exists() and os.path.samefile(source,dest): continue
         if dest.exists(): dest.unlink()
         shutil.copy2(source,dest)
+    mod_paks=runtime/'mods/r5c_compiler_test/paks/Win64'
+    mod_paks.mkdir(parents=True,exist_ok=True)
+    shutil.copy2(pak,mod_paks/pak.name)
+    (mod_paks/'preload.rson').write_text('Paks:\n[\n '+pak.name+'\n]\n')
     password=secrets.token_hex(24)
     config=runtime/'platform'/'cfg'/'r5c_test.cfg'
     config.write_text('\n'.join(['sv_cheats 1','rcon_encryptframes 0','sv_rcon_useloopbacksocket 1',
-        'sv_rcon_password '+password,'sv_rcon_sendlogs 1','cl_onlineAuthEnable 0',
+        'sv_rcon_password '+password,'sv_rcon_sendlogs 1','sv_rcon_maxconnections 2','enable_motd 0','cl_onlineAuthEnable 0',
         'sv_onlineAuthEnable 0','pylon_matchmaking_enabled 0','backtrace_enabled 0'])+'\n')
+    # R5R executes its server defaults after command-line +exec. Apply the
+    # local test connection settings at the end of that server startup file.
+    server_config=runtime/'platform/cfg/tools/rcon_server_dev.cfg'
+    server_original=server_config.read_text()
+    server_config.write_text(server_original+'\n'+config.read_text())
     args=[str(runtime/'r5apex.exe'),'-launcher','-offline','-dev','-devsdk','-fnf','-multiple',
         '-novid','-windowed','-w','1280','-h','720','-console','-playlistfile','playlists_r5_patch.txt',
         '+hostport',str(a.port),'+exec','r5c_test.cfg','+map',a.map,'+launchplaylist','dev_default']
+    (runtime/'.r5c-session.json').write_text(json.dumps(dict(port=a.port,password=password)))
     process=None; connection=None; log=''
     report={'runtime':str(runtime),'game':str(Path(a.game).resolve()),'state':'starting',
             'runtime_sha256':hashlib.sha256((runtime/'r5apex.exe').read_bytes()).hexdigest(),
             'package_outputs':package['outputs'],'models':package['models']}
     previous_screenshots={str(p) for p in runtime.rglob('*.tga')}
+    logs_root=runtime/'platform/logs'
+    previous_logs={p.name for p in logs_root.iterdir() if p.is_dir()}
     started=time.monotonic()
     try:
         process=subprocess.Popen(args,cwd=runtime); report['pid']=process.pid
@@ -235,7 +324,7 @@ def main():
         else: raise TimeoutError('R5R netconsole startup timed out; inspect the game window for startup prompts')
         report['state']='netconsole-ready'
         connection.command('echo R5C_NETCON_READY')
-        connection.command('pak_requestload '+pak.name)
+        connection.command('r_drawothermodels 1')
         deadline=time.monotonic()+a.timeout; next_probe=0.; probe_started=False
         with (runtime/'r5c-netconsole.log').open('w',encoding='utf-8') as f:
             while time.monotonic()<deadline and process.poll() is None:
@@ -246,12 +335,37 @@ def main():
                     message=connection.receive()
                     text=message.get(4,b'').decode('utf-8',errors='replace')
                     f.write(text); f.flush(); log+=text
-                    if not probe_started and 'R5C_VM_READY' in text:
+                    if not probe_started and text.strip()=='R5C_VM_READY':
                         connection.command('script R5C_Run()'); probe_started=True
-                    if 'R5C_DONE' in text: break
+                    if 'R5C_DONE' in text:
+                        connection.command('script R5C_Cleanup()'); time.sleep(1)
+                        connection.command('script_client R5C_Visual()'); time.sleep(3)
+                        connection.command('screenshot'); time.sleep(1)
+                        for model_index in range(len(package['models'])):
+                            connection.command('script_client R5C_VisualSelect('+str(model_index)+')')
+                            time.sleep(1); connection.command('screenshot'); time.sleep(1)
+                        break
                 except socket.timeout: continue
                 except ConnectionError: break
         report.update(summarize(log,package['models'])); report['state']='finished'
+        # Native disk logging is buffered. Wait for the final client selection
+        # marker instead of reporting a false failure before its flush.
+        for attempt in range(13):
+            native_log=''
+            for directory in logs_root.iterdir():
+                if directory.is_dir() and directory.name not in previous_logs:
+                    for name in ('script.log','error.log'):
+                        path=directory/name
+                        if path.exists(): native_log+=path.read_text(errors='replace')+'\n'
+            if not summarize_visual(native_log,len(package['models']))['failures'] or process.poll() is not None:
+                break
+            if attempt<12: time.sleep(0.5)
+        (runtime/'r5c-script.log').write_text(native_log,encoding='utf-8')
+        report['visual']=summarize_visual(native_log,len(package['models']))
+        report['failures']+=report['visual']['failures']
+        if process.poll() not in (None,0):
+            report['failures'].append('R5R exited with code '+str(process.poll()))
+        report['passed']=not report['failures']
     except (OSError,ValueError,RuntimeError,TimeoutError) as error:
         report.update(state='failed',passed=False,error=str(error))
     finally:
@@ -264,6 +378,8 @@ def main():
             try: process.wait(timeout=10)
             except subprocess.TimeoutExpired: process.terminate(); process.wait(timeout=10)
         config.unlink(missing_ok=True)
+        if not a.keep_open: (runtime/'.r5c-session.json').unlink(missing_ok=True)
+        server_config.write_text(server_original)
         report['elapsed_seconds']=time.monotonic()-started
         report['exit_code']=process.poll() if process else None
         report['screenshots']=[str(p) for p in runtime.rglob('*.tga') if str(p) not in previous_screenshots]

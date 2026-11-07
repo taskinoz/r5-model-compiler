@@ -1,21 +1,22 @@
-# Apex early-season compiler validation - 6 November 2026
+# Apex early-season compiler validation - 7 November 2026
 
-Experimental development build with native external rig/sequence output and S3
-RePak packaging, native frame movement, piecewise root motion, IK-chain export,
-complex skinning and animation metadata round trips. Offline structure/render and
-authored-animation checks pass. A six-model RPak bake succeeds. R5R was launched
-from a separate test directory but Windows displayed a firewall prompt before the
-netconsole became available; no models were spawned and no runtime model pass is
-claimed. This is not a stable release or proof of full Apex model equivalence.
+Experimental development checkpoint for native S0-S3 output. Offline structure,
+render and authored-animation checks pass. R5R v2.6.52 completed six spawns,
+eleven sequence checks and 55 server playback/movement samples. Five client
+screenshots show the expected shapes. The float-position animated prop uses an
+unresolved error material and its rendered shape is not validated. The runtime-only
+walking QC explicitly omits its IK chain: the original embedded-chain model
+crashes in R5R IK processing. The packager now rejects that configuration.
+This is not a stable release or proof of full Apex model equivalence.
 Retail and later self-hostable seasons remain future targets.
 
 Windows x64 MSVC Release: build/r5studiomdl.exe
-SHA-256: `7b66989d02f8807581ee2d4311aaa4a757e768e248b8f5bf5e75231c3b3b5b52`.
+SHA-256: `ffdb70750ca499cf071bc6400665af958a0b6ca5f8d6ceb03a01c4fc378432af`.
 Independent reader SHA-256: `294ecb9eff3f705a0e35c24fa8d83b77575abebcec3353c3f2506571bd188f69`.
 
 ## Automated checks
 
-- All 51 native compiler/packaging/runtime-harness regressions pass on ordinary Python 3.10 and locked uv/Python 3.14.
+- All 56 native compiler/packaging/runtime-harness regressions pass on ordinary Python 3.10 and locked uv/Python 3.14.
 - Both CTest groups pass: convex-hull math and native compiler regressions. The
   inherited hull tests are not Apex physics emission evidence.
 - Complex-skinning tests exercise mixed 1/2/3/4/8/16-influence vertices across all
@@ -44,25 +45,52 @@ required for each render slot. The manifest bounds the sequence set; tests cover
 stale extra sequence files, target mismatches, unbound material rejection and a
 RePak process that exits zero without producing new artifacts.
 
-The installed RePak built six authored example models into 23 assets: six models,
-six rigs and eleven sequences. The mandatory streaming file contains six VG assets.
+The installed RePak built six runtime example variants into 29 assets: six models,
+six rigs and seventeen sequences (eleven authored clips plus six empty references).
+The mandatory streaming file contains six VG assets.
 RePak SHA-256: `afaf61c9f462444adbe49d87a494a63bdc813be8945d8857c9d692847f1a5ca2`.
-RPak SHA-256: `491d5e0ae0dc5577ddb774e6f9a5b3a6acbb09a4a8a54d726cf53ac4102ced11`.
-Streaming SHA-256: `5bd0797a4c27b70d17d722ded41c1c23a548dbbae76ced056a0d745429cce7ac`.
-Build map, tool hashes, source hashes and per-model sequence paths are recorded in
-`test-output/r5r-authored/pak/r5c_authored.report.json`. This is successful packaging,
-not evidence that the runtime has resolved or played the new assets.
+RPak SHA-256: `1dffcc585910e7ad22368022b34620338bb5bb3904c2971bd10f38b0feef90f4`.
+Streaming SHA-256: `7bed2479f57144c6b763572264454e0b17d1e5ff48b06cb6753e3939c33ad310`.
+Build map, input hashes and explicit runtime exclusions are recorded in
+`test-output/r5r-authored/pak/r5c_authored.report.json`.
 
-The first isolated R5R v2.6.52 startup attempt used
-`F:\Games\Apex Detours\r5c-test-runtime`. Configs/platform scripts/mods were copied;
-large resource data uses links to the installed R5R LIVE assets. Current retail was
-not modified or launched. The SDK netconsole timed out while a Windows firewall
-permission prompt was visible. Live model loading, material resolution, external
-rig linkage, skinning, root-motion behavior and event dispatch remain pending.
-The experimental harness records explicit failures for missing spawns/sequences
-or incomplete playback samples; collecting those samples alone does not establish
-geometry or motion equivalence. Its generated Squirrel probe still needs its first
-successful runtime execution.
+The isolated runtime is `F:\Games\Apex Detours\r5c-test-runtime`, sourced from
+R5R v2.6.52 LIVE. Its executable SHA-256 is
+`bfe9066cf13db3b72fb1017a385260ac2337442f82c4acc96fca40cb7ff306ef`.
+Current retail was not modified or launched. The completed report, netconsole log,
+client/server script log and reviewed PNGs are under
+`test-output/r5r-runtime-evidence`. R5R exited cleanly with code zero.
+
+Native sequence base zero selects the int32 relative descriptor table; a nonzero
+base selects legacy int16 indices and caused zero-duration playback. Index zero
+is reserved for `ref`. The fixed embedded clips advance cycles in R5R. Both native
+and legacy root-motion examples change origin during playback. Server timing can
+lag a cycle by one tick; exact trajectory parity is not asserted. The mixed `lean`
+blend remains at its default static pose; its animated blend endpoint is not a
+live-runtime claim. Event dispatch and independent external-rig-only playback
+remain unverified: the render model retains embedded clips.
+
+The harness now checks positive duration and cycle advancement for sequences
+whose embedded blends all contain multiple frames, and checks client spawn and
+selection completion from native disk logs. It removes its own server props before
+client photography. Script/log completion alone is not a visual pass.
+The reviewed weighted quad, LOD box, two movement triangles and static box render.
+The animated prop's float-position/error-SKNC combination produces an oversized
+error surface and is explicitly not a successful geometry/material render check.
+No material appearance or exact skinning equivalence is claimed.
+
+The original walking example with an embedded IK chain crashed at
+`r5apex.exe+0x7C6E4D`, dereferencing a null virtual-rig mapping. Setting the external
+sequence flag did not fix it. The runtime-only QC variant removes the chain
+explicitly; original offline IK source/output is retained. Packaging models with
+embedded chains now fails before launching RePak.
+
+All 581 installed S3 VG auxiliary counts match the studio mesh count. An isolated
+concrete control did not draw with the auxiliary buffer omitted; zero-filled
+48-byte records restored drawing. The writer now allocates these records and
+emits native shader descriptor bits, skinned bone palettes and optional packed
+positions. Packed coordinates retain the unchanged 0.0001-inch render budget.
+The auxiliary record fields remain unknown.
 
 ## Piecewise root motion and IK-chain evidence
 
@@ -247,9 +275,10 @@ render-only comparisons; no corpus tools were changed during the run.
   existing rig dependencies, native asset-GUID layers, IK rules, transition
   nodes and followers. Export also rejects sequence keyvalues, transitions and
   procedural weight fixups, and unknown animation/sequence flags or event types.
-- RPak baking/streaming/relocations, material dependencies, shader compatibility
-  and runtime entity behaviour remain unverified. The S3 RePak bake succeeds; other profiles still require
-  a matching-season packager. No runtime compatibility claim accompanies this build.
+- S3 RPak loading and limited embedded playback/rendering have live evidence.
+  Other profiles require a matching-season packager. External-rig-only playback,
+  embedded IK linkage and the float-position animated material remain unverified.
+  General material/shader compatibility and exact runtime geometry are not established.
 - Early profiles retain the 256-bone and 16-influence limits. Unshareable VG
   extra-weight lists with starting indices above 65535 fail explicitly. Extreme
   positive weight ratios that exceed the fixed quantization budget also fail.

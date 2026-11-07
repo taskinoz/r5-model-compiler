@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import struct
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from mdl54 import Model, SequenceAsset
@@ -43,13 +44,14 @@ def package(models, output, name, repak, target):
         inputs[str(source)]=sha(source)
     for path in models:
         path=Path(path).resolve(); m=Model(path,target)
+        if m.get('i',0x124):
+            raise ValueError(f'{path}: R5R packaging of embedded IK chains is not supported; virtual-rig linkage is unverified')
         if any(not mat['guid'] for mat in m.materials):
             raise ValueError(f'{path}: every material needs an existing nonzero GUID (--material-guid)')
-        if len(m.sequences)!=1 or m.sequences[0]['animations'] or m.sequences[0]['name']!='ref':
-            raise ValueError(f'{path}: compile with --external-assets before packaging')
         marker=path.with_suffix('.assetset'); lines=marker.read_text().splitlines()
         if len(lines)!=3 or lines[:2]!=['R5AS1',target]: raise ValueError('asset set target/magic mismatch')
         count=int(lines[2])
+        if count!=len(m.sequences): raise ValueError('model/asset set sequence count mismatch')
         if not 0<=count<=32767: raise ValueError('invalid asset set sequence count')
         native=asset_path(m.name)
         if native.casefold() in names: raise ValueError('duplicate model asset path')
@@ -60,11 +62,22 @@ def package(models, output, name, repak, target):
         sequences=[]; labels=[]
         for i in range(count):
             source=path.with_suffix(f'.seq{i}.rseq'); seq=SequenceAsset(source,rig)
+            if seq.name!=m.sequences[i]['name']: raise ValueError('model/asset set sequence label mismatch')
             dest=f'animseq/{base}/seq{i}.rseq'; copy(source,dest); sequences.append(dest); labels.append(seq.name)
+            # Native ASEQ labels are canonical asset paths, not QC short labels.
+            staged=sources/dest; data=bytearray(staged.read_bytes())
+            struct.pack_into('<i',data,4,len(data))
+            data.extend(dest.encode('utf-8')+b'\0'); staged.write_bytes(data)
+
         files.append(dict(_type='arig',_path=rigpath,**{'$sequences':sequences}))
-        files.append(dict(_type='mdl_',_path=native,**{'$animrigs':[rigpath]}))
+        files.append(dict(_type='mdl_',_path=native,**{'$animrigs':[rigpath],'$sequences':sequences}))
         inputs[str(marker)]=sha(marker)
-        outputs.append(dict(path=native,rig=rigpath,sequences=sequences,labels=labels))
+        animated=[i for i,s in enumerate(m.sequences) if s['animations'] and
+                  all(m.get('i',a+16)>1 for a in s['animations'])]
+        outputs.append(dict(path=native,rig=rigpath,sequences=sequences,labels=labels,
+                            animated_sequences=animated,
+                            has_ref=any(a['name'].lower()=='ref' for a in m.attachments),
+                            reference_sequences=[i for i,s in enumerate(m.sequences) if not s['animations']]))
     build=dict(version=8,name=name,assetsDir=str(sources),outputDir=str(output),
                streamFileMandatory=f'paks/Win64/{name}.starpak',keepClientOnly=True,keepServerOnly=True,files=files)
     config=output/(name+'.json'); config.write_text(json.dumps(build,indent=2)+'\n')

@@ -8,7 +8,8 @@ assets. This is the experimental R5 sibling of
 **This is an initial development compiler, not a validated replacement for
 Respawn's asset bakery.** Native render data and basic animation are implemented.
 Native Apex physics/BVH and procedural bones are unfinished. External rig/sequence
-output and an S3 RePak wrapper are available; runtime validation is pending. See [VALIDATION.md](VALIDATION.md).
+output and an S3 RePak wrapper are available; limited R5R playback/render tests are
+documented in [VALIDATION.md](VALIDATION.md).
 No game assets, game binaries or extraction tools are distributed.
 
 ## Targets
@@ -113,8 +114,9 @@ established by chain-field comparisons.
 
 Default output contains model components. `--external-assets` additionally writes a
 `.rrig` skeleton, numbered `.seqN.rseq` sequence assets and a `.assetset` manifest.
-The render model contains the native empty `ref` sequence; animations are linked
-through the external rig. The manifest records the target and sequence count so
+The render model retains embedded playback clips and reserves index zero for the
+native empty `ref` sequence. Separate rig/sequence-only playback is not yet proved.
+The manifest records the target and sequence count so
 stale sequence files cannot enter the package. This output is available for all
 four profiles. Importing arbitrary existing rig dependencies through QC is still
 unsupported.
@@ -131,6 +133,13 @@ Bind a material to an existing asset with a repeatable option:
 Unbound slots contain zero GUIDs for a downstream packager to resolve. Binding does
 not create a material or validate RPak dependencies.
 
+The stored slot name must match the bound material; use `$renamematerial` when
+binding an existing material with a different name. `--material-type slot=rgdp`
+sets its shader family. Supported families are `rgdu`, `rgdp`, `rgdc`, `sknu`,
+`sknp`, `sknc`, `wldu`, `wldc`, `ptcu`, `ptcs`. Packed-position P materials require
+`--packed-positions` (S2/S3 only). This uses the native 1/1024-inch position grid
+and rejects coordinates outside its range or exceeding 0.0001-inch error.
+
 For S3 / R5R, use a compatible, separately installed RePak:
 
 ```powershell
@@ -145,6 +154,9 @@ It produces an RPak v8 with model v10, rig v4 and sequence v7 assets plus the
 mandatory streaming file. RePak and game data are not included in this repository.
 A successful bake alone does not establish runtime compatibility. S0/S1/S2 RPak
 packaging is not implemented by this wrapper.
+Embedded IK chains are rejected by the packager: current R5R virtual-rig linkage
+is incomplete and loading them can crash the game. Offline chain output and
+round-trip checks remain available.
 
 The experimental Windows harness prepares a separate R5R directory and records
 spawns, every sequence lookup, playback/movement samples, optional `probe`
@@ -161,8 +173,9 @@ loopback SDK netconsole, and refuses to start alongside another game process.
 It exits nonzero for startup failures, missing spawns/sequences or incomplete
 samples. The report and netconsole log are written in the isolated directory.
 `--keep-open` leaves that test game open for inspection. Windows security prompts
-must be handled manually. The first local attempt stopped at a firewall prompt;
-no in-game model validation is claimed yet. Movement samples and screenshots need
+must be handled manually. R5R v2.6.52 has loaded the authored package and played
+its sequences; see VALIDATION.md for the scope and remaining limits.
+Movement samples and screenshots need
 review before claiming geometry or root-motion equivalence.
 
 ## Inspect, export and validate

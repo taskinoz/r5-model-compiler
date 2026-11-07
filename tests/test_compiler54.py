@@ -54,37 +54,54 @@ class Compiler54(unittest.TestCase):
                 out,_=self.run_compiler(qc,target=target,name=target+'external',extra=['--external-assets'])
                 model,ref=Model(out,target),Model(original,target)
                 rig=Model(out.with_suffix('.rrig'),target)
-                self.assertEqual(model.sequences[0]['name'],'ref');self.assertEqual(model.sequences[0]['animations'],[])
+                self.assertEqual(model.sequences[0]['name'],'ref')
+                self.assertFalse(model.sequences[0]['animations'])
+                self.assertEqual([s['name'] for s in model.sequences[1:]],[s['name'] for s in ref.sequences])
                 self.assertEqual(rig.bones,ref.bones);self.assertEqual(rig.sequences,[])
+                self.assertTrue(all(model.get('i',s['offset'])==0 for s in model.sequences))
+                self.assertTrue(all(s['animations'] for s in model.sequences[1:]))
                 self.assertEqual(validate(out,target,original)['differences'],[])
                 for i,seq in enumerate(ref.sequences):
-                    asset=SequenceAsset(out.with_suffix(f'.seq{i}.rseq'),rig)
+                    asset=SequenceAsset(out.with_suffix(f'.seq{i+1}.rseq'),rig)
                     expected=ref.sequences; ref.sequences=[seq]
                     self.assertEqual(compare_animation_metadata(asset,ref),[])
                     ref.sequences=expected
                     self.assertTrue(all(asset.get('i',d)==0 for d in asset.sequences[0]['animations']))
 
+    def test_package_rejects_unverified_embedded_ik_linkage(self):
+        from pack54 import package
+        bones=[dict(name='root',parent=-1),dict(name='knee',parent=0),dict(name='foot',parent=1)]
+        frames=[[((0,0,i),(0,0,0),(1,1,1)) for i in range(3)]]
+        write_smd(self.work/'mesh.smd',bones,frames,self.tris)
+        qc=self.qc.replace('$sequence idle "mesh.smd"','$sequence idle "mesh.smd" noautoik')
+        out,_=self.run_compiler(qc+'\n$ikchain leg foot links root knee foot\n',target='s3',
+                                extra=['--external-assets','--material-guid','test/material=123456789abcdef0'])
+        with self.assertRaisesRegex(ValueError,'virtual-rig linkage'):
+            package([out],self.work/'pak','r5c_test',self.compiler,'s3')
+
     def test_package_native_asset_dependencies_and_stale_sequences(self):
         from pack54 import package
         out,_=self.run_compiler(target='s3',extra=['--external-assets','--material-guid','test/material=123456789abcdef0'])
         # A stale second file is deliberately present after recompiling one sequence.
-        out.with_suffix('.seq1.rseq').write_bytes(out.with_suffix('.seq0.rseq').read_bytes())
+        out.with_suffix('.seq2.rseq').write_bytes(out.with_suffix('.seq0.rseq').read_bytes())
         calls=[]
         def repak(command,**kwargs):
             build=json.loads(Path(command[1]).read_text()); calls.append(build)
             self.assertEqual([f['_type'] for f in build['files']],['arig','mdl_'])
             rig,model=build['files']
             self.assertEqual(model['$animrigs'],[rig['_path']])
-            self.assertEqual(len(rig['$sequences']),1)
+            self.assertEqual(model['$sequences'],rig['$sequences'])
+            self.assertEqual(len(rig['$sequences']),2)
             source=Path(build['assetsDir'])
             asset=SequenceAsset(source/rig['$sequences'][0],Model(source/rig['_path'],'s3'))
-            self.assertEqual(asset.name,'idle')
+            self.assertEqual(asset.name,rig['$sequences'][0])
             for suffix in ('.rpak','.starpak'):
                 (Path(build['outputDir'])/(build['name']+suffix)).write_bytes(b'new artifact')
             return subprocess.CompletedProcess(command,0,'packed','')
         with patch('pack54.subprocess.run',side_effect=repak):
             report=package([out],self.work/'pak','r5c_test',self.compiler,'s3')
-        self.assertEqual(report['models'][0]['labels'],['idle'])
+        self.assertEqual(report['models'][0]['labels'],['ref','idle'])
+        self.assertEqual(report['models'][0]['reference_sequences'],[0])
         self.assertEqual(len(calls),1)
         alias,_=self.run_compiler(self.qc.replace('test/model.rmdl','TEST/model.rmdl'),target='s3',name='alias',extra=['--external-assets','--material-guid','test/material=123456789abcdef0'])
         with self.assertRaisesRegex(ValueError,'duplicate model asset path'):
@@ -141,6 +158,14 @@ class Compiler54(unittest.TestCase):
         self.assertEqual(Model(out,'s0').materials[0]['guid'],0x123456789abcdef0)
         _,run=self.run_compiler(extra=['--material-guid','test/material=xyz'],name='bad',ok=False)
         self.assertIn('invalid material GUID',run.stderr)
+
+    def test_native_material_shader_types(self):
+        for target in PROFILES:
+            out,_=self.run_compiler(target=target,name=target+'typed',extra=['--material-type','test/material=sknp'])
+            model=Model(out,target); table=model.get('i',0xCC)
+            self.assertGreater(table,0); self.assertEqual(model.get('B',table),4)
+        self.run_compiler(name='unknownshader',extra=['--material-type','test/material=invalid'],ok=False)
+        self.run_compiler(name='unknownslot',extra=['--material-type','missing=rgdp'],ok=False)
 
     def test_animation_sections_and_native_tracks(self):
         frames=[]
@@ -373,7 +398,7 @@ class Compiler54(unittest.TestCase):
                 self.assertEqual(meta['grid'],(3,2)); self.assertEqual(meta['posekeys'],[-2,0,3,-1,1])
                 external,_=self.run_compiler(qc,target=target,name=target+'assets',extra=['--external-assets'])
                 rig=Model(external.with_suffix('.rrig'),target)
-                asset=SequenceAsset(external.with_suffix('.seq0.rseq'),rig)
+                asset=SequenceAsset(external.with_suffix('.seq1.rseq'),rig)
                 self.assertEqual(compare_animation_metadata(asset,m),[])
                 self.assertEqual(rig.pose_parameters(),m.pose_parameters())
                 self.assertEqual(meta['events'][0]['event'],1004)
@@ -549,6 +574,30 @@ class Compiler54(unittest.TestCase):
             self.assertEqual(run.returncode,0,run.stdout+run.stderr)
             from validate54 import validate
             self.assertEqual(validate(rebuilt,target,out)['differences'],[])
+
+    def test_native_vg_shader_flags_palette_and_allocation_sizes(self):
+        for target in ('s2','s3'):
+            out,_=self.run_compiler(target=target,name=target,extra=['--packed-positions'])
+            model=Model(out,target); vg=Reader(out.with_suffix('.vg').read_bytes())
+            mesh=vg.get('Q',0x20)
+            self.assertEqual(vg.get('Q',mesh)&0xFFF,0xA42)
+            auxiliary=vg.get('Q',0x60); auxiliary_count=vg.get('Q',0x68)
+            self.assertEqual(auxiliary_count,len(model.meshes))
+            self.assertEqual(vg.data[auxiliary:auxiliary+48*auxiliary_count],bytes(48*auxiliary_count))
+            palette=vg.get('Q',0x10); count=vg.get('Q',0x18)
+            self.assertEqual(vg.data[palette:palette+count],bytes(range(len(model.bones))))
+            self.assertTrue(all(model.get('i',o)>0 for o in (0x1D0,0x1D4)))
+            self.assertEqual(model.get('3i',0x1C0),(0,0,0))
+            self.assertFalse(out.with_suffix('.vvd').exists())
+            self.assertFalse(out.with_suffix('.dx11.vtx').exists())
+            expected=Model(self.run_compiler(target=target,name=target+'float')[0],target)
+            self.assertEqual(validate(out,target,expected.path)['differences'],[])
+        _,run=self.run_compiler(extra=['--packed-positions'],ok=False)
+        self.assertIn('s2',run.stdout)
+        bad=[('test/material',[(tuple(x+.0003 for x in v[0]),v[1],v[2],v[3]) for v in self.tris[0][1]])]
+        write_smd(self.work/'mesh.smd',self.bones,self.frames,bad)
+        _,run=self.run_compiler(target='s3',extra=['--packed-positions'],ok=False,name='quantized')
+        self.assertIn('error budget',run.stdout)
 
     def test_excess_influences_fail(self):
         bones=[dict(name=f'b{i}',parent=i-1) for i in range(17)]

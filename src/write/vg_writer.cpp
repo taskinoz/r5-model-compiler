@@ -1,4 +1,4 @@
-// Early Apex (S2/S3) revision-1 vertex group. Positions stay float32.
+// Early Apex (S2/S3) revision-1 vertex group.
 #include "write/writers.h"
 #include "core/buffer.h"
 #include "core/log.h"
@@ -52,8 +52,8 @@ std::vector<uint8_t> WriteVG(const CompiledModel& m) {
             uint32_t count=uint32_t(mesh.lodVertexCount[lod]);
             if (count>65535) Fatal("VG mesh exceeds 65535 vertices");
             bool weights=m.bones.size()>1;
-            uint64_t flags=1|0x200|(uint64_t(2)<<24);
-            uint32_t stride=24;
+            uint64_t flags=(m.packedPositions ? 2 : 1)|0xA40|(uint64_t(2)<<24);
+            uint32_t stride=m.packedPositions ? 20 : 24;
             if(weights) { flags|=0x5000; stride+=8; }
             if(m.hasVertexColor) { flags|=0x10; stride+=4; }
             if(m.hasUV2) { flags|=uint64_t(2)<<32; stride+=8; }
@@ -66,7 +66,21 @@ std::vector<uint8_t> WriteVG(const CompiledModel& m) {
             out.PatchI32(p+32,int(indices.Size()/2)); out.PatchI32(p+36,int(tris.size()));
             out.PatchI32(p+48,int(strips.Size()/0x23)); out.PatchI32(p+52,1);
             for(uint32_t i=0;i<count;++i) {
-                const auto& v=mesh.verts[i]; vertices.V3(v.pos);
+                const auto& v=mesh.verts[i];
+                if(m.packedPositions) {
+                    uint64_t packed=0;
+                    for(int axis=0;axis<3;++axis) {
+                        double bias=axis==2 ? 2048.0 : 1024.0;
+                        double scaled=(double(v.pos[axis])+bias)*1024.0;
+                        double quant=std::round(scaled);
+                        uint64_t limit=axis==2 ? 0x3FFFFF : 0x1FFFFF;
+                        if(!std::isfinite(scaled) || quant<0 || quant>double(limit) ||
+                           std::fabs(quant/1024.0-bias-double(v.pos[axis]))>0.0001)
+                            Fatal("packed VG position exceeds native range or 0.0001-inch error budget");
+                        packed |= uint64_t(quant) << (axis*21);
+                    }
+                    vertices.Put(packed);
+                } else vertices.V3(v.pos);
                 if(weights) {
                     const auto packed=PackWeights(v.weight,v.numBones);
                     vertices.I16(packed[0]);
@@ -111,10 +125,24 @@ std::vector<uint8_t> WriteVG(const CompiledModel& m) {
     auto pair=[&](size_t field,size_t offset,size_t count) {
         out.PatchAt<uint64_t>(field,offset); out.PatchAt<uint64_t>(field+8,count);
     };
+    // Native files reserve one 48-byte auxiliary record per studio mesh, not
+    // per LOD. The payload is not preserved data: zero initialization is enough
+    // for R5R to render, while omitting the allocation suppresses drawing.
+    // Its individual fields remain unknown.
+    pair(0x60,out.Size(),meshCount);
+    out.Zero(meshCount*48);
+    pair(0x10,out.Size(),0);
+    if(m.bones.size()>1) {
+        pair(0x10,out.Size(),m.bones.size());
+        for(size_t bone=0;bone<m.bones.size();++bone) out.U8(static_cast<uint8_t>(bone));
+        out.Align(4);
+    }
     pair(0x20,meshes,ordinal); pair(0x70,lods,m.numLods);
     pair(0x30,out.Size(),indices.Size()/2); out.Append(indices); out.Align(4);
     pair(0x40,out.Size(),vertices.Size()); out.Append(vertices); out.Align(4);
-    if(extraWeights.Size()) { pair(0x50,out.Size(),extraWeights.Size()); out.Append(extraWeights); out.Align(4); }
+    pair(0x50,out.Size(),extraWeights.Size());
+    out.Append(extraWeights); out.Align(4);
+    pair(0x80,out.Size(),0);
     pair(0x90,out.Size(),strips.Size()/0x23); out.Append(strips);
     out.PatchI32(12,int(out.Size()));
     return out.Data();

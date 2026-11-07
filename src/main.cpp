@@ -26,6 +26,8 @@ static void Usage() {
         "usage: r5studiomdl --target <s0|s1|s2|s3> [options] <file.qc>\n"
         "  --target       required season; s0/s1 use VTX/VVD, s2/s3 use VG rev1\n"
         "  --material-guid <name=hex> bind a material to an existing RPak asset\n"
+        "  --packed-positions use native 64-bit positions for packed-position shaders (s2/s3)\n"
+        "  --material-type <name=type> native shader family (rgdu/rgdp/rgdc/sknu/sknp/sknc/wldu/wldc/ptcu/ptcs)\n"
         "  --external-assets emit a native rig and standalone sequence assets alongside the model\n"
         "  --list-targets show supported compiler profiles\n"
         "  -game <dir>     game/mod directory; output is written to <dir>/models/<$modelname>\n"
@@ -40,7 +42,8 @@ static void Usage() {
 int main(int argc, char** argv) {
     std::string qc, game, outFile, outDir, target;
     std::map<std::string,uint64_t> materials;
-    bool externalAssets = false;
+    std::map<std::string,uint8_t> materialTypes;
+    bool externalAssets = false, packedPositions = false;
     QcOptions opt;
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
@@ -59,6 +62,17 @@ int main(int argc, char** argv) {
                 return 0;
             }
             else if (l == "--external-assets") externalAssets = true;
+            else if (l == "--packed-positions") packedPositions = true;
+            else if (l == "--material-type") {
+                auto value=next(); auto eq=value.find('=');
+                const std::vector<std::string> names={"rgdu","rgdp","rgdc","sknu","sknp","sknc","wldu","wldc","ptcu","ptcs"};
+                bool found=false;
+                for(size_t type=0;type<names.size();++type)
+                    if(eq!=std::string::npos && eq>0 && value.substr(eq+1)==names[type]) {
+                        materialTypes[value.substr(0,eq)]=static_cast<uint8_t>(type); found=true; break;
+                    }
+                if(!found) { std::fprintf(stderr,"ERROR: invalid material type; expected name=rgdp (or another native shader family)\n"); return 1; }
+            }
             else if (l == "--material-guid") {
                 auto value=next(); auto eq=value.find('=');
                 if(eq==std::string::npos) { std::fprintf(stderr,"ERROR: material binding needs name=hex\n"); return 1; }
@@ -113,7 +127,9 @@ int main(int argc, char** argv) {
             if ((anim->flags & STUDIO_FRAMEMOVEMENT) && (def->legacyMovement || def->staticProp))
                 Fatal("native frame movement conflicts with legacy movement or staticprop");
         }
+        if(packedPositions && target!="s2" && target!="s3") Fatal("packed positions require --target s2 or s3");
         CompiledModel model = Build(*def);
+        model.packedPositions = packedPositions;
         model.name = def->modelName;
         if(EndsWithI(model.name,".mdl")) model.name.resize(model.name.size()-4);
         if(!EndsWithI(model.name,".rmdl")) model.name += ".rmdl";
@@ -123,6 +139,16 @@ int main(int argc, char** argv) {
             bool found=false;
             for(const auto& name:model.textures) if(name==binding.first) found=true;
             if(!found) Fatal("material binding '%s' does not match a texture slot",binding.first.c_str());
+        }
+        if(!materialTypes.empty()) {
+            model.materialTypes.assign(model.textures.size(),model.bones.size()>1 ? 5 : 2);
+            for(const auto& binding:materialTypes) {
+                bool found=false;
+                for(size_t i=0;i<model.textures.size();++i) if(model.textures[i]==binding.first) {
+                    model.materialTypes[i]=binding.second; found=true;
+                }
+                if(!found) Fatal("material type binding '%s' does not match a texture slot",binding.first.c_str());
+            }
         }
         if (!model.physics.phy.empty()) Fatal("Apex native physics/BVH compilation is not implemented yet");
         if (!model.uiPanels.empty()) Fatal("Apex RUI compilation is not implemented yet");
@@ -135,15 +161,16 @@ int main(int argc, char** argv) {
         if(!model.nodeNames.empty()) Fatal("Apex transition nodes are not implemented yet");
         for (const auto& seq : model.sequences) if (!seq.layers.empty())
             Fatal("Apex asset-GUID animation layers are not implemented yet");
+        if(externalAssets && (model.sequences.empty() || model.sequences.front().label!="ref")) {
+            CSequence reference;
+            reference.label="ref";
+            reference.weights.assign(model.bones.size(),1.f);
+            model.sequences.insert(model.sequences.begin(),reference);
+        }
         CompiledModel renderModel;
         if (externalAssets) {
             renderModel = model;
-            renderModel.animations.clear();
-            renderModel.sequences.clear();
-            CSequence ref;
-            ref.label = "ref";
-            ref.weights.assign(model.bones.size(), 1.f);
-            renderModel.sequences.push_back(ref);
+            // Keep native embedded playback data while emitting additional asset files.
         }
         std::vector<uint8_t> mdl = WriteMDL(externalAssets ? renderModel : model,target=="s2" || target=="s3");
         auto read32=[&](size_t p) { int32_t v; std::memcpy(&v,mdl.data()+p,4); return v; };
@@ -156,9 +183,8 @@ int main(int argc, char** argv) {
         std::vector<uint8_t> vg;
         if(target=="s2" || target=="s3") {
             vg=WriteVG(model);
-            // Baked VG profiles have no legacy component spans.
+            // VG uses separate streaming bytes, but retains native pre-bake allocation sizes.
             std::memset(mdl.data()+0x1C0,0,12);
-            std::memset(mdl.data()+0x1D0,0,12);
             std::memset(mdl.data()+0x21C,0,8);
         }
 
