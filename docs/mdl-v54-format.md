@@ -219,9 +219,26 @@ in R5R (`r5apex.exe+0x1C8AD0`). GetSequenceDuration rejects sequence indices <=0
 authored external sets therefore reserve `ref` at zero. Embedded native clips
 play in R5R; external-rig-only playback remains unverified.
 
+Animation descriptor base +0 is also zero, including embedded clips. All 25,405
+surveyed S0-S3 descriptors use zero. Descriptor flag 0x20000 means usable bone
+tracks; it is independent of the sequence's scale flag at the same bit. Omitting
+it let cycles advance while bone poses stayed at rest. The native encoder writes
+explicit tracks for every compiled bone and now sets this flag accordingly.
+
+Studio field 0x158 uses -1 to request a virtual rig from RPak dependencies; zero
+leaves the mapping absent. The surveyed S0-S3 models contain only zero or -1
+(634 and 1,155 models respectively). The authored IK-chain model crashed with
+zero and completed playback with -1. External-asset render models now write -1;
+standalone rigs retain zero. The package verifies matching bones and IK chains.
+
 Studio offset 0xCC points to an optional byte-per-material shader-type table:
 RGDU/RGDP/RGDC/SKNU/SKNP/SKNC/WLDU/WLDC/PTCU/PTCS are values 0..9.
 Material path, GUID, shader family and vertex position layout must agree.
+The shader may also require attributes such as COLOR. The installed S3 SKNC
+`opaque_normalz_front_sknc` shader requires float positions, packed weights and
+vertex colors. Its authored float-position probe renders with `$usevertexcolor`,
+without snapping positions. The builtin error shader was not a valid visual
+control for that complete mesh layout. A shader-family match alone is insufficient.
 
 All 8,469 S2 and 11,808 S3 surveyed nonempty VG meshes include flag bits 0x840.
 The writer emits these bits, an identity bone palette for skinned models, and

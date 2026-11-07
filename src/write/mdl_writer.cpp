@@ -212,7 +212,7 @@ void MdlWriter::WriteAnimations() {
     for (size_t i = 0; i < m_.animations.size(); ++i) {
         const auto& a = m_.animations[i];
         size_t p = base + i * kAnimDescSize;
-        b_.PatchI32(p, standaloneSequence_ ? 0 : -static_cast<int32_t>(p));
+        b_.PatchI32(p, 0); // native animation descriptors, including embedded clips
         Str(p + 4, p, a.name);
         b_.PatchAt<float>(p + 8, a.fps);
         b_.PatchI32(p + 12, a.flags);
@@ -518,7 +518,9 @@ void MdlWriter::WriteIncludeModels() {
     // retail models (which have no include models) point the include index at the panels
     if (m_.includeModels.empty()) {
         b_.PatchI32(H_INCLUDEMODELINDEX, static_cast<int32_t>(panelStart));
-        Hdr(H_NUMINCLUDEMODELS, 0);
+        // -1 tells the RPak loader to construct the virtual rig from asset
+        // references. Zero leaves it absent, which crashes native IK playback.
+        Hdr(H_NUMINCLUDEMODELS, m_.externalAssetRig ? -1 : 0);
         return;
     }
     b_.Align(8);

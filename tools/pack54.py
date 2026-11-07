@@ -44,8 +44,8 @@ def package(models, output, name, repak, target):
         inputs[str(source)]=sha(source)
     for path in models:
         path=Path(path).resolve(); m=Model(path,target)
-        if m.get('i',0x124):
-            raise ValueError(f'{path}: R5R packaging of embedded IK chains is not supported; virtual-rig linkage is unverified')
+        if m.get('i',0x124) and m.get('i',0x158)!=-1:
+            raise ValueError(f'{path}: embedded IK chains require the native external-rig sentinel; recompile with --external-assets')
         if any(not mat['guid'] for mat in m.materials):
             raise ValueError(f'{path}: every material needs an existing nonzero GUID (--material-guid)')
         marker=path.with_suffix('.assetset'); lines=marker.read_text().splitlines()
@@ -58,6 +58,7 @@ def package(models, output, name, repak, target):
         names.add(native.casefold()); base=native[4:-5]; rigpath=f'animrig/{base}.rrig'
         rigfile=path.with_suffix('.rrig'); rig=Model(rigfile,target)
         if rig.bones!=m.bones: raise ValueError('model/rig bone layout mismatch')
+        if rig.ik_chains()!=m.ik_chains(): raise ValueError('model/rig IK chain layout mismatch')
         copy(path,native); copy(path.with_suffix('.vg'),native[:-5]+'.vg'); copy(rigfile,rigpath)
         sequences=[]; labels=[]
         for i in range(count):
@@ -76,6 +77,7 @@ def package(models, output, name, repak, target):
                   all(m.get('i',a+16)>1 for a in s['animations'])]
         outputs.append(dict(path=native,rig=rigpath,sequences=sequences,labels=labels,
                             animated_sequences=animated,
+                            ik_chains=len(m.ik_chains()),external_rig=m.get('i',0x158)==-1,
                             has_ref=any(a['name'].lower()=='ref' for a in m.attachments),
                             reference_sequences=[i for i,s in enumerate(m.sequences) if not s['animations']]))
     build=dict(version=8,name=name,assetsDir=str(sources),outputDir=str(output),

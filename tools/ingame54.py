@@ -203,6 +203,10 @@ def write_probe(runtime,models):
         if model.get('animated_sequences'):
             label=model['labels'][model['animated_sequences'][0]]
             visual+=[f'  if ( selected == {i} ) file.props[{i}].Anim_Play( {literal(label)} )']
+            if 'visual_cycle' in model:
+                cycle=float(model['visual_cycle'])
+                if not 0<=cycle<=1: raise ValueError('visual cycle must be between zero and one')
+                visual+=[f'  if ( selected == {i} ) {{ file.props[{i}].SetCycle( {cycle:.6f} ); file.props[{i}].Anim_SetPaused( true ) }}']
     visual+=['  print( "R5C_VIS_SELECTED\\n" )','}']
     (scripts/'r5c_visual.nut').write_text('\n'.join(visual)+'\n')
     (scripts/'scripts.rson').write_text('When: "SERVER"\nScripts:\n[\n r5c_probe.nut\n]\nWhen: "CLIENT"\nScripts:\n[\n r5c_visual.nut\n]\n')
@@ -241,9 +245,21 @@ def summarize(log,models):
             cycles=[s['cycle'] for s in samples if s['model']==i and s['sequence']==j]
             if cycles and max(cycles)-min(cycles)<0.01:
                 failures.append(model['path']+': animated sequence cycle did not advance')
+    attachments=[]
+    for match in re.finditer(r'R5C_ATTACHMENT (\d+) (\d+) ([^\r\n]+)',log):
+        try:
+            point=[float(x) for x in match[3].split()]
+            if len(point)!=3 or not all(__import__('math').isfinite(v) for v in point): raise ValueError()
+            attachments.append(dict(model=int(match[1]),sequence=int(match[2]),origin=point))
+        except ValueError: failures.append('invalid attachment sample')
+    for i,model in enumerate(models):
+        for j in model.get('probe_motion_sequences',[]):
+            points=[a['origin'] for a in attachments if a['model']==i and a['sequence']==j]
+            if len(points)!=5 or max((sum((a-b)**2 for a,b in zip(p,points[0])) for p in points),default=0)<0.0001:
+                failures.append(model['path']+': probe attachment did not move')
     return dict(spawned=len(spawned),sequences=len(sequences),
                 sequence_results=[dict(model=i,sequence=j,**value) for (i,j),value in sorted(sequences.items())],
-                samples=samples,failures=failures,
+                samples=samples,attachment_samples=attachments,failures=failures,
                 passed=not failures,scope='spawn, sequence lookup/playback and movement samples; inspect screenshots and samples for geometry/motion equivalence')
 
 

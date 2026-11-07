@@ -1479,6 +1479,10 @@ void EncodeAnimations(BuildContext& ctx) {
         // only the bits retail animation descriptors use (looping, snap, delta, all-zeros,
         // 0x20000, frame movement); build-time flags such as noforceloop are not stored
         ca.flags = a.flags & (0x1 | 0x2 | 0x4 | 0x20 | 0x20000 | STUDIO_FRAMEMOVEMENT);
+        // In an Apex animation descriptor 0x20000 means usable bone tracks,
+        // independently of the sequence's scale flag at that same bit.
+        // EncodeNative54 emits explicit channels for every compiled bone.
+        if (!bones.empty()) ca.flags |= 0x20000;
         if (!a.qc->fmStream.empty()) ca.frameMovement = a.qc->fmStream;
         else if (!a.frameMove.empty()) ca.frameMovement = EncodeFrameMovement54(a.frameMove, a.fixedFmScales ? a.fmScales : NativeFrameScales54(a.frameMove));
         else ca.flags &= ~STUDIO_FRAMEMOVEMENT;

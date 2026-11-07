@@ -77,4 +77,24 @@ class Runtime54(unittest.TestCase):
         self.assertTrue(summarize_visual(log,2)['failures'])
         self.assertTrue(summarize_visual(log+'SCRIPT ERROR: bad call',1)['failures'])
 
+    def test_visual_pose_sampling_is_explicit_and_bounded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            model=dict(path='mdl/test.rmdl',labels=['walk'],animated_sequences=[0],visual_cycle=.5)
+            write_probe(tmp,[model])
+            script=(Path(tmp)/'mods/r5c_compiler_test/scripts/vscripts/r5c_visual.nut').read_text()
+            self.assertIn('SetCycle( 0.500000 )',script)
+            self.assertIn('Anim_SetPaused( true )',script)
+            model['visual_cycle']=float('nan')
+            with self.assertRaisesRegex(ValueError,'visual cycle'): write_probe(tmp,[model])
+
+    def test_pose_probe_rejects_advancing_cycles_with_static_bones(self):
+        models=[dict(path='mdl/test.rmdl',labels=['bend'],animated_sequences=[0],probe_motion_sequences=[0])]
+        log='R5C_SPAWN 0\nR5C_SEQUENCE 0 0 1 1.0\n'
+        log+=''.join(f'R5C_SAMPLE 0 0 {i*.2} {i*.2} 0 0 0 0\n' for i in range(5))
+        static=''.join('R5C_ATTACHMENT 0 0 0 0 0\n' for i in range(5))
+        self.assertFalse(summarize(log+static+'R5C_DONE\n',models)['passed'])
+        moving=''.join(f'R5C_ATTACHMENT 0 0 {i} 0 0\n' for i in range(5))
+        self.assertTrue(summarize(log+moving+'R5C_DONE\n',models)['passed'])
+        self.assertFalse(summarize(log+moving.replace('2 0 0','nan 0 0')+'R5C_DONE\n',models)['passed'])
+
 if __name__=='__main__': unittest.main()

@@ -43,9 +43,10 @@ directory so companion sets do not mix.
 
 Implemented: static/skinned meshes (up to sixteen influences per vertex), LODs, body
 groups, attachments, hitboxes, skins, SMD and binary/keyvalues2 DMX input, basic
-sequences/blends/events, piecewise root-motion records, native frame movement, and native position/rotation/scale tracks. VG positions stay
-float32; normals/tangents and weights use native packing. Basic IK chain descriptors
-can be compiled, exported and compared, but runtime IK has not been checked.
+sequences/blends/events, piecewise root-motion records, native frame movement, and native position/rotation/scale tracks. VG supports float32 positions
+or explicit packed positions; normals/tangents and weights use native packing.
+Basic IK chain descriptors can be compiled, exported and compared. R5R has loaded
+and played the authored chain-bearing model; solver equivalence is not established.
 
 The compiler rejects physics/collision, procedures, RUI, IK rules,
 animation layers, transition nodes, followers, QC include-model rig imports and more than sixteen influences. Some
@@ -115,7 +116,8 @@ established by chain-field comparisons.
 Default output contains model components. `--external-assets` additionally writes a
 `.rrig` skeleton, numbered `.seqN.rseq` sequence assets and a `.assetset` manifest.
 The render model retains embedded playback clips and reserves index zero for the
-native empty `ref` sequence. Separate rig/sequence-only playback is not yet proved.
+native empty `ref` sequence. The native external-rig sentinel enables the runtime
+virtual-rig mapping, including IK chains. Separate rig/sequence-only playback is not yet proved.
 The manifest records the target and sequence count so
 stale sequence files cannot enter the package. This output is available for all
 four profiles. Importing arbitrary existing rig dependencies through QC is still
@@ -136,9 +138,23 @@ not create a material or validate RPak dependencies.
 The stored slot name must match the bound material; use `$renamematerial` when
 binding an existing material with a different name. `--material-type slot=rgdp`
 sets its shader family. Supported families are `rgdu`, `rgdp`, `rgdc`, `sknu`,
-`sknp`, `sknc`, `wldu`, `wldc`, `ptcu`, `ptcs`. Packed-position P materials require
+`sknp`, `sknc`, `wldu`, `wldc`, `ptcu`, `ptcs`. The surveyed RGDP/SKNP shaders require
 `--packed-positions` (S2/S3 only). This uses the native 1/1024-inch position grid
 and rejects coordinates outside its range or exceeding 0.0001-inch error.
+
+The complete vertex layout must also match the shader. For example, the installed
+S3 `opaque_normalz_front_sknc` debug material accepts float positions and requires
+vertex colors. A runtime copy of the animated-prop QC can use:
+
+```text
+$usevertexcolor
+$renamematerial "models/electricalboxes/pipesmulti" "opaque_normalz_front_sknc"
+```
+
+Bind that slot with `--material-type opaque_normalz_front_sknc=sknc` and
+`--material-guid opaque_normalz_front_sknc=1421bd566ca23287`, without packed
+positions. `$usevertexcolor` supplies white colors for SMD vertices. This tested
+debug binding preserves the original geometry; it does not create a textured material.
 
 For S3 / R5R, use a compatible, separately installed RePak:
 
@@ -154,9 +170,9 @@ It produces an RPak v8 with model v10, rig v4 and sequence v7 assets plus the
 mandatory streaming file. RePak and game data are not included in this repository.
 A successful bake alone does not establish runtime compatibility. S0/S1/S2 RPak
 packaging is not implemented by this wrapper.
-Embedded IK chains are rejected by the packager: current R5R virtual-rig linkage
-is incomplete and loading them can crash the game. Offline chain output and
-round-trip checks remain available.
+Embedded IK chains require the native external-rig sentinel written by
+`--external-assets`; recompile older outputs. The packager checks that the model
+and rig contain matching chain descriptions. IK rules and locks remain unsupported.
 
 The experimental Windows harness prepares a separate R5R directory and records
 spawns, every sequence lookup, playback/movement samples, optional `probe`

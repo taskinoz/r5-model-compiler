@@ -167,12 +167,9 @@ int main(int argc, char** argv) {
             reference.weights.assign(model.bones.size(),1.f);
             model.sequences.insert(model.sequences.begin(),reference);
         }
-        CompiledModel renderModel;
-        if (externalAssets) {
-            renderModel = model;
-            // Keep native embedded playback data while emitting additional asset files.
-        }
-        std::vector<uint8_t> mdl = WriteMDL(externalAssets ? renderModel : model,target=="s2" || target=="s3");
+        model.externalAssetRig = externalAssets;
+        // Keep embedded playback data while also linking the RPak rig assets.
+        std::vector<uint8_t> mdl = WriteMDL(model,target=="s2" || target=="s3");
         auto read32=[&](size_t p) { int32_t v; std::memcpy(&v,mdl.data()+p,4); return v; };
         int checksum=read32(8);
         int textures=read32(0xD4);

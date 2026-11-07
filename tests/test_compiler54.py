@@ -58,8 +58,13 @@ class Compiler54(unittest.TestCase):
                 self.assertFalse(model.sequences[0]['animations'])
                 self.assertEqual([s['name'] for s in model.sequences[1:]],[s['name'] for s in ref.sequences])
                 self.assertEqual(rig.bones,ref.bones);self.assertEqual(rig.sequences,[])
+                self.assertEqual(model.get('i',0x158),-1)
+                self.assertEqual(rig.get('i',0x158),0)
                 self.assertTrue(all(model.get('i',s['offset'])==0 for s in model.sequences))
                 self.assertTrue(all(s['animations'] for s in model.sequences[1:]))
+                self.assertTrue(all(model.get('i',a)==0 for s in model.sequences for a in s['animations']))
+                self.assertTrue(all(ref.get('i',a)==0 for s in ref.sequences for a in s['animations']))
+                self.assertTrue(all(model.get('i',a+12)&0x20000 for s in model.sequences for a in s['animations']))
                 self.assertEqual(validate(out,target,original)['differences'],[])
                 for i,seq in enumerate(ref.sequences):
                     asset=SequenceAsset(out.with_suffix(f'.seq{i+1}.rseq'),rig)
@@ -68,7 +73,7 @@ class Compiler54(unittest.TestCase):
                     ref.sequences=expected
                     self.assertTrue(all(asset.get('i',d)==0 for d in asset.sequences[0]['animations']))
 
-    def test_package_rejects_unverified_embedded_ik_linkage(self):
+    def test_package_embedded_ik_requires_linkage_and_matching_rig(self):
         from pack54 import package
         bones=[dict(name='root',parent=-1),dict(name='knee',parent=0),dict(name='foot',parent=1)]
         frames=[[((0,0,i),(0,0,0),(1,1,1)) for i in range(3)]]
@@ -76,8 +81,23 @@ class Compiler54(unittest.TestCase):
         qc=self.qc.replace('$sequence idle "mesh.smd"','$sequence idle "mesh.smd" noautoik')
         out,_=self.run_compiler(qc+'\n$ikchain leg foot links root knee foot\n',target='s3',
                                 extra=['--external-assets','--material-guid','test/material=123456789abcdef0'])
-        with self.assertRaisesRegex(ValueError,'virtual-rig linkage'):
+        def repak(command,**kwargs):
+            build=json.loads(Path(command[1]).read_text())
+            for suffix in ('.rpak','.starpak'):
+                (Path(build['outputDir'])/(build['name']+suffix)).write_bytes(b'new artifact')
+            return subprocess.CompletedProcess(command,0,'packed','')
+        with patch('pack54.subprocess.run',side_effect=repak):
+            report=package([out],self.work/'good-pak','r5c_test',self.compiler,'s3')
+        self.assertEqual(report['models'][0]['ik_chains'],1)
+        self.assertTrue(report['models'][0]['external_rig'])
+        data=bytearray(out.read_bytes());struct.pack_into('<i',data,0x158,0);out.write_bytes(data)
+        with self.assertRaisesRegex(ValueError,'external-rig sentinel'):
             package([out],self.work/'pak','r5c_test',self.compiler,'s3')
+        struct.pack_into('<i',data,0x158,-1);out.write_bytes(data)
+        rig=out.with_suffix('.rrig');data=bytearray(rig.read_bytes())
+        struct.pack_into('<i',data,0x124,0);rig.write_bytes(data)
+        with self.assertRaisesRegex(ValueError,'IK chain layout mismatch'):
+            package([out],self.work/'stale-pak','r5c_test',self.compiler,'s3')
 
     def test_package_native_asset_dependencies_and_stale_sequences(self):
         from pack54 import package
@@ -598,6 +618,32 @@ class Compiler54(unittest.TestCase):
         write_smd(self.work/'mesh.smd',self.bones,self.frames,bad)
         _,run=self.run_compiler(target='s3',extra=['--packed-positions'],ok=False,name='quantized')
         self.assertIn('error budget',run.stdout)
+
+    def test_float_skinned_vertex_color_material_layout(self):
+        # Native SKNC opaque debug VS requires float positions, packed weights
+        # and COLOR. Keep non-grid coordinates to rule out position snapping.
+        triangles=[('test/material',[(tuple(x+.0003 for x in v[0]),v[1],v[2],v[3])
+                                    for v in self.tris[0][1]])]
+        write_smd(self.work/'mesh.smd',self.bones,self.frames,triangles)
+        out,_=self.run_compiler(self.qc+'\n$usevertexcolor\n',target='s3',
+                                extra=['--material-type','test/material=sknc'])
+        model=Model(out,'s3');vg=Reader(out.with_suffix('.vg').read_bytes())
+        flags=vg.get('Q',vg.get('Q',0x20))
+        self.assertEqual(flags&0x40000011,0x11)
+        self.assertEqual(flags&0x7000,0x5000)
+        self.assertEqual(vg.get('I',vg.get('Q',0x20)+12),36)
+        self.assertEqual(model.get('B',model.get('i',0xCC)),5)
+        self.assertTrue(model.get('I',0x9C)&0x1000000)
+        vertices=model.render()[0][0]['triangles'][0]
+        for actual in vertices:
+            self.assertEqual(actual['color'],(255,255,255,255))
+        for actual,expected in zip(sorted(v['pos'] for v in vertices),sorted(v[0] for v in triangles[0][1])):
+            self.assertTrue(all(abs(a-b)<0.0001 for a,b in zip(actual,expected)))
+        qc=decompile(out,self.work/'float-color-export','s3')
+        rebuilt=self.work/'float-color-rebuilt.rmdl'
+        run=subprocess.run([str(self.compiler),'--target','s3','-quiet','-o',str(rebuilt),str(qc)],capture_output=True,text=True)
+        self.assertEqual(run.returncode,0,run.stdout+run.stderr)
+        self.assertEqual(validate(rebuilt,'s3',out)['differences'],[])
 
     def test_excess_influences_fail(self):
         bones=[dict(name=f'b{i}',parent=i-1) for i in range(17)]
