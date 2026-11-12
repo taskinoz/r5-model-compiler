@@ -3,12 +3,17 @@
 Layout (measured on the installed S3 corpus; docs/mdl-v54-format.md): a 16-byte header
 (contents offset, table offset, contents end, entry count), 0x20-byte entries (packed
 flag, node/vertex/leaf offsets relative to the block, integer origin, power-of-two
-scale), 64-byte BVH4 nodes, and leaves. Types 4 (float vertices) and 5 (packed int16)
-are triangle lists and are decoded; types 3 and 7 are counted, not decoded.
+scale), 64-byte BVH4 nodes, and leaves: triangle lists (4 float vertices, 5 packed int16),
+parallelogram quad lists (6 float, 7 packed; the fourth corner is b + c - a) and leaf
+lists (3: a count, then one word per sub-leaf with its type in byte 1 and its length in
+words in byte 2, the sub-leaves following in order).
 """
 import struct
 
-NODE, EMPTY, LIST, FLOAT_TRIS, PACKED_TRIS, PACKED_QUADS = 0, 1, 3, 4, 5, 7
+NODE, EMPTY, LIST, FLOAT_TRIS, PACKED_TRIS, FLOAT_QUADS, PACKED_QUADS = 0, 1, 3, 4, 5, 6, 7
+DECODED = {NODE, EMPTY, LIST, FLOAT_TRIS, PACKED_TRIS, FLOAT_QUADS, PACKED_QUADS}
+# quads as triangles: corners a, b, c and d = b + c - a, outline a, b, d, c
+QUAD_TRIANGLES = ((0, 1, 3), (0, 3, 2))
 
 
 class BvhError(ValueError):
@@ -48,13 +53,35 @@ def parse(data, block, strict=False):
         leaf_words = (end_of(leaves) - leaves) // 4
         node_count = (end_of(nodes) - nodes) // 64
         triangles, types, problems = [], {}, []
+        quad_list, plain = [], []
         seen = set()
 
-        def leaf(kind, index):
+        def leaf(kind, index):  # returns the points of its corners (for the box check)
             if index >= leaf_words:
                 problems.append('leaf index outside the leaf data')
                 return []
             header = struct.unpack_from('<I', data, block + leaves + 4 * index)[0]
+            if kind == LIST:
+                count = header
+                if not 1 <= count <= 16 or index + 1 + count > leaf_words:
+                    problems.append('invalid leaf list')
+                    return []
+                points, at = [], index + 1 + count
+                for k in range(count):
+                    word = struct.unpack_from('<I', data, block + leaves + 4 * (index + 1 + k))[0]
+                    sub, length = (word >> 8) & 0xFF, (word >> 16) & 0xFF
+                    if word & 0xFF000000 or word & 0xFF or sub not in (FLOAT_TRIS, PACKED_TRIS, FLOAT_QUADS, PACKED_QUADS):
+                        problems.append('unknown leaf list word %08x' % word)
+                        return points
+                    types[sub] = types.get(sub, 0) + 1
+                    if length != 2 + ((struct.unpack_from('<I', data, block + leaves + 4 * at)[0] >> 12) & 0xF):
+                        problems.append('leaf list length does not match its sub-leaf')
+                    points += leaf(sub, at)
+                    at += length
+                return points
+            if (kind in (PACKED_TRIS, PACKED_QUADS)) != bool(packed):
+                problems.append('leaf type does not match the vertex kind')
+            quads = kind in (FLOAT_QUADS, PACKED_QUADS)
             base = (header >> 16) * 1024  # a 1024-vertex page; the first offset adds the rest
             points = []
             for t in range(((header >> 12) & 0xF) + 1):
@@ -62,14 +89,27 @@ def parse(data, block, strict=False):
                     problems.append('leaf runs past the leaf data')
                     break
                 w = struct.unpack_from('<I', data, block + leaves + 4 * (index + 1 + t))[0]
-                base += w & 0x7FF
-                ids = (base, base + 1 + ((w >> 11) & 0x1FF), base + 1 + ((w >> 20) & 0x1FF))
+                if quads:  # A 10 bits, B 9, C 9, flags 4 (always 0xF in retail)
+                    base += w & 0x3FF
+                    ids = (base, base + 1 + ((w >> 10) & 0x1FF), base + 1 + ((w >> 19) & 0x1FF))
+                else:  # A 11 bits, B 9, C 9, flags 3 (always 7 in retail)
+                    base += w & 0x7FF
+                    ids = (base, base + 1 + ((w >> 11) & 0x1FF), base + 1 + ((w >> 20) & 0x1FF))
                 if max(ids) >= len(vertices):
-                    problems.append('triangle vertex outside the vertex data')
+                    problems.append('leaf vertex outside the vertex data')
                     continue
-                tri = tuple(vertices[i] for i in ids)
-                triangles.append(tri)
-                points.extend(tri)
+                corners = [vertices[i] for i in ids]
+                if quads:
+                    corners.append(tuple(corners[1][a] + corners[2][a] - corners[0][a] for a in range(3)))
+                    tris = [tuple(corners[i] for i in t3) for t3 in QUAD_TRIANGLES]
+                    quad_list.append(tuple(corners))
+                else:
+                    tris = [tuple(corners)]
+                    plain.append(tris[0])
+                triangles.extend(tris)
+                # a computed quad corner is tagged: retail sizes boxes from the true corner,
+                # which may be one packing step from b + c - a (m20_f_grenade_projectile)
+                points.extend(corners[:3] + [corners[3] + ('computed',)] if quads else corners)
             return points
 
         def walk(index):
@@ -91,11 +131,10 @@ def parse(data, block, strict=False):
                         problems.append('node reached twice')
                     sub = walk(child) if child not in seen else []
                     seen.add(child)
-                elif kind in (FLOAT_TRIS, PACKED_TRIS):
-                    if (kind == PACKED_TRIS) != bool(packed):
-                        problems.append('leaf type does not match the vertex kind')
+                elif kind in DECODED:
                     sub = leaf(kind, child)
                 else:
+                    problems.append('unknown child type %d' % kind)
                     sub = []
                 if kind == NODE and not strict:
                     sub = []
@@ -103,7 +142,8 @@ def parse(data, block, strict=False):
                     for a in range(3):
                         lo = origin[a] + axes[a][c] * step
                         hi = origin[a] + axes[a][4 + c] * step
-                        if not lo - 1e-4 <= p[a] <= hi + 1e-4:
+                        slack = 1e-4 + (step if len(p) > 3 else 0)
+                        if not lo - slack <= p[a] <= hi + slack:
                             problems.append('child box does not contain its geometry')
                             break
                 points += sub if kind != NODE or strict else []
@@ -112,7 +152,8 @@ def parse(data, block, strict=False):
         walk(0)
         role = 'hull' if index == hull else 'trace' if index == trace else 'solid'
         entries.append(dict(role=role, packed=bool(packed), origin=origin, scale=scale, vertices=vertices,
-                            triangles=triangles, types=types, problems=sorted(set(problems))))
+                            triangles=triangles, quads=quad_list, plain=plain, types=types,
+                            problems=sorted(set(problems))))
     return dict(entries=entries, hull=hull, trace=trace, bounds=struct.unpack_from('<6f', data, 0x1F0))
 
 

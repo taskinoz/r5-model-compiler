@@ -15,7 +15,7 @@ Independent reader SHA-256: `294ecb9eff3f705a0e35c24fa8d83b77575abebcec3353c3f25
 
 ## Automated checks
 
-- All 64 native compiler/packaging/runtime-harness regressions pass on ordinary Python 3.10 and locked uv/Python 3.14.
+- All 69 native compiler/packaging/runtime-harness regressions pass on ordinary Python 3.10 and locked uv/Python 3.14.
 - Both CTest groups pass: convex-hull math and native compiler regressions. The
   inherited hull tests are not Apex physics emission evidence.
 - Complex-skinning tests exercise mixed 1/2/3/4/8/16-influence vertices across all
@@ -326,8 +326,13 @@ matched by nearest vertex and compared as ordered loops (winding included).
 
 ## BVH collision (12 November 2026)
 
-The BVH block (studiohdr 0x214) is decoded far enough to write it: header, entries,
-packed and float vertices, BVH4 nodes and triangle leaves (format notes). The compiler
+The BVH block (studiohdr 0x214) is decoded: header, entries, packed and float
+vertices, BVH4 nodes, triangle leaves (types 4/5), parallelogram quad leaves (6/7,
+whose fourth corner is computed as b + c - a and often not stored) and leaf lists (3);
+only the meaning of a small per-leaf table is open (format notes). All 3,865 S0-S3
+entries decode to valid trees; every hull and solid entry encloses its retail PHY
+solid's volume except wood_gib01c's, and every trace triangle and quad is a render
+triangle or pair. The compiler writes triangle leaves only. The compiler
 writes the trace mesh (static props), the physics hull (`$collisionmodel`) or one entry
 per solid in bone order (`$collisionjoints`), and the 0x1F0 box and 0x218 roles.
 
@@ -335,7 +340,7 @@ Corpus: every installed model with a BVH (S0 229, S1 272, S2 273, S3 354) was ex
 (`decompile54.py --render-only --with-physics`), rebuilt and compared by
 `roundtrip54.py`, which now runs `compare_bvh54.py` on every model with a BVH. Compiler
 SHA-256 `7afbe4bdc7269d650378c1a592d00c45e2528a97abaed2716c70bb433744e507`; tools
-roundtrip54 `2d5811c8...`, compare_bvh54 `b8342a0f...`, bvh54 `dd61f902...`,
+roundtrip54 `2d5811c8...`, compare_bvh54 `eab6c5c9...`, bvh54 `819009db...`,
 compare_phy54 `3cfbb654...`, decompile54 `ff535740...`, phy54 `90dd10e5...`.
 
 The comparison checks, for every model: entry roles and count, the 0x1F0 box (0.0001
@@ -343,9 +348,11 @@ in), a valid rebuilt tree (every child box contains its geometry, each node reac
 once), and that the rebuilt trace mesh is its own LOD 0 render triangles with matching
 winding (1.5 packing steps). Against retail, per entry: trace meshes triangle by
 triangle with winding (1.5 steps plus the model's measured retail offset, at most 0.001
-in); hulls and solids by vertex set (1.5 steps) and enclosed volume (0.1%). Retail
-entries that use the undecoded leaf types 3 or 7 are listed as not compared: 1,154 of
-3,865 entries. 2,711 entries were compared; 311 models had every entry compared.
+in), a retail quad matching when its two triangles under either diagonal do; hulls
+and solids by vertex set (1.5 steps) and enclosed volume (0.1%). Every one of the
+3,865 retail entries was compared; an entry the reader cannot decode is a difference,
+never skipped. (A first run, before quads and lists were decoded, compared 2,711
+entries with the same result.)
 
 | Season | Pass | Differences |
 | --- | --- | --- |
@@ -402,8 +409,9 @@ netconsole and script logs: `test-output/r5r-collision/evidence`.
 
 ## Remaining limitations
 
-- BVH leaf types 3 and 7 (read only as not comparable), in-game tests of trace meshes, jointed
-  BVHs and ragdolls, procedural bones, RUI, importing arbitrary
+- The BVH per-leaf surface table (written as zeros), writing quad and list leaves
+  (only triangles are written), in-game tests of trace meshes, jointed BVHs and
+  ragdolls, procedural bones, RUI, importing arbitrary
   existing rig dependencies, native asset-GUID layers, IK rules, transition
   nodes and followers. Export also rejects sequence keyvalues, transitions and
   procedural weight fixups, and unknown animation/sequence flags or event types.

@@ -9,9 +9,12 @@ approximate (retail BVH vertices sit 0 to about 0.001 in above the render vertic
 so retail triangles are matched to rebuilt ones within 1.5 steps plus that model's
 measured retail gap, which is reported as `retail_gap`.
 
+Retail quads (leaf types 6 and 7, also inside type 3 lists) are parallelograms whose two
+triangles may be split along either diagonal; a retail quad matches when its two
+triangles under one diagonal both match rebuilt triangles.
+
 Hull and solid entries (retail triangulates hull faces its own way): the set of
-vertices within 1.5 steps and the enclosed volume within 0.1%. Retail entries using
-leaf types 3 or 7 (not decoded yet) are reported as not comparable, never as passing.
+vertices within 1.5 steps and the enclosed volume within 0.1%.
 """
 import argparse
 import json
@@ -108,9 +111,9 @@ def compare(original, rebuilt):
             if miss or len(eb['triangles']) != len(own):
                 issues.append('entry %d trace: %d of %d rebuilt triangles are not its render triangles (%d render)' % (
                     i, miss, len(eb['triangles']), len(own)))
-        undecoded = set(ea['types']) - {bvh54.NODE, bvh54.EMPTY, bvh54.FLOAT_TRIS, bvh54.PACKED_TRIS}
-        if undecoded:
-            notes.append('entry %d (%s): original uses leaf types %s; not compared' % (i, ea['role'], sorted(undecoded)))
+        undecoded = set(ea['types']) - bvh54.DECODED
+        if undecoded or ea['problems']:  # a reader failure is reported, never passed
+            issues.append('entry %d (%s): original not decoded: %s' % (i, ea['role'], ea['problems'] or sorted(undecoded)))
             continue
         step = max(ea['scale'], eb['scale']) * 65536
         if ea['role'] == 'trace':
@@ -121,7 +124,12 @@ def compare(original, rebuilt):
                 gap = max(gap, min((max(abs(p[k] - r[k]) for k in range(3)) for r in pts.near(p)), default=math.inf))
             metrics['entry %d retail_gap' % i] = gap
             tol = 1.5 * step + gap + 1e-6
-            miss = _unmatched(ea['triangles'], eb['triangles'], tol)
+            miss = _unmatched(ea['plain'], eb['triangles'], tol)
+            index = Index(eb['triangles'], max(4 * tol, 1e-3), _centroid)
+            found = lambda t: any(_same(t, cand, tol) for cand in index.near(_centroid(t)))
+            for qa, qb, qc, qd in ea['quads']:
+                if not (all(map(found, [(qa, qb, qd), (qa, qd, qc)])) or all(map(found, [(qa, qb, qc), (qb, qd, qc)]))):
+                    miss += 2
             if miss or len(ea['triangles']) != len(eb['triangles']):
                 issues.append('entry %d trace: %d of %d retail triangles unmatched (%d rebuilt)' % (
                     i, miss, len(ea['triangles']), len(eb['triangles'])))

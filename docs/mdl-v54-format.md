@@ -239,8 +239,12 @@ confirmed in R5R where noted.
   box (0x6C) extended to include the origin when a BVH is present (all 1,128 S0-S3
   models with a BVH), else the hull box unchanged (all 227 S3 models without one).
 - Block header: contents offset, table offset, contents end, entry count (relative to
-  the block). table = 0x10 + 0x20 * count; the table is 8 (sometimes 16-32) bytes of
-  words that look like surface references (0x001D0000; zero in 283 of 354 models); the
+  the block). table = 0x10 + 0x20 * count. The table has two words per leaf table
+  index (see the leaf header): its size is 8 * (largest index + 1) in all 354 S3
+  models. The first word's high 16 bits are a small number, zero in 285 models and
+  otherwise per material rather than per model (glass 16, rock mostly 15; models
+  whose `$surfaceprop` is `metal` carry 22, 27 or 41), probably the material's surface
+  type; the second word was always 0. Not established; the compiler writes zeros. The
   contents list holds one word, 1 (CONTENTS_SOLID; 8 in three models).
 - Entries (0x20 each, at 0x10): packed flag (1 packed int16 vertices, 0 float vec3
   vertices; only the 2,400-inch `mp_setting_menu` uses floats), node, vertex and leaf
@@ -259,20 +263,34 @@ confirmed in R5R where noted.
   inverted box. Then four words: child index in the high 24 bits; the low byte of word
   2 holds the types of children 0 and 1 (low nibble first), that of word 3 children 2
   and 3. Child types: 0 node, 1 empty, 3 leaf list, 4 float-vertex triangles, 5 packed
-  triangles, 7 packed quads. Retail may point two slots of a node at one child node,
+  triangles, 6 float-vertex quads, 7 packed quads (2 never seen). Retail may point two slots of a node at one child node,
   each box covering part of it (a DAG); the compiler writes a plain tree.
 - Type 4/5 leaves (index = word offset into the leaf data): a header word, bits 12-15
-  = triangle count - 1, bits 16-31 = a 1024-vertex page, bits 0-11 = a small table index
-  (0-3 in retail; 0 from the compiler). Then one word per triangle: A (11 bits) adds to
+  = triangle count - 1, bits 16-31 = a 1024-vertex page, bits 0-11 = a table index
+  (0-3 in retail, e.g. 0 for at_gib5's trace leaves and 1 for its hull leaves; 0 from
+  the compiler). Then one word per triangle: A (11 bits) adds to
   a running base, which starts at page * 1024; the corners are base, base + 1 + B
   (9 bits) and base + 1 + C (9 bits); the top three bits were 7 in every S3 triangle.
   The page unit was found in R5R: with the first vertex stored as a plain number, every
   leaf after the first traced at the wrong place (`static_step` in VALIDATION.md); with
   pages, `crypto_drone_holo` (2,711 vertices) decodes all 2,812 triangles, against
   1,305 read as a plain number.
-- Type 3 leaves (in convex hull entries) list sub-leaves: a count, then one word per
-  sub-leaf with its type in byte 1 and a 16-bit field (a type 5 field is its word offset
-  after the list); quads (type 7) are one word each. Not fully decoded; the compiler
+- Type 6/7 leaves: parallelogram quads. The header is as for triangles (bits 12-15 =
+  quad count - 1). Then one word per quad: A (10 bits) adds to the running base, B
+  (9 bits) and C (9 bits) give corners base + 1 + B and base + 1 + C, and the top four
+  bits were 0xF in all 6,690 quads. The fourth corner is not stored: it is
+  b + c - a, opposite the base, and retail leaves vertices it can compute this way out
+  of the vertex data (`crypto_drone`'s box hull stores seven corners). In 4,008 of
+  4,259 S3 quads b + c - a is a stored vertex; in 47 it is one packing unit from one
+  (retail sizes the boxes from the true corner, so a reader allows one step there).
+  A quad is two triangles; render meshes split quads along either diagonal.
+- Type 3 leaves list sub-leaves: a count (2-4), then one word per sub-leaf, its type
+  (4-7) in byte 1 and its length in words (header + items) in byte 2, other bytes
+  zero; the sub-leaves follow the list in order (14,581 of 14,581 list words).
+- Decoded this way, all 3,865 S0-S3 entries have valid trees (every leaf inside its
+  box); every hull and solid entry encloses its retail PHY solid's volume, wound the
+  hull way, except wood_gib01c's (a bent face split along the other diagonal); and
+  every trace triangle and quad is a render triangle or triangle pair. The compiler
   writes only types 4 and 5, which R5R accepts for hulls, solids and trace meshes.
 
 
