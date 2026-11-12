@@ -89,14 +89,23 @@ use. Like retail, the compiler writes:
 - for `$collisionjoints`: one entry per solid, in bone order.
 
 Coordinates are packed into int16 on a power-of-two grid around a whole-inch origin; a
-model too large for packing uses float vertices. `tools/bvh54.py` reads a BVH and
-checks it; `tools/compare_bvh54.py` compares two. `--no-bvh` omits the block, for
-diagnostics only.
+model too large for packing uses float vertices. As in retail, flat parallelograms are
+stored as quads and mixed leaves as leaf lists. `tools/bvh54.py` reads every retail
+leaf type and checks a BVH; `tools/compare_bvh54.py` compares two. `--no-bvh` omits
+the block, for diagnostics only.
 
-Runtime use in R5R: spawn a static model as a `prop_dynamic` with `SOLID_VPHYSICS`, as
-R5R's map editor does; a physics model as a `prop_physics`, which also needs a
-`prop_data` keyvalue (`$keyvalues { prop_data { "base" "Metal.Medium" } }`) or the game
-deletes it. See VALIDATION.md for what was measured in game.
+Runtime use in R5R (see VALIDATION.md for what was measured):
+
+- Spawn a static model as a `prop_dynamic` with `SOLID_VPHYSICS`, as R5R's map editor
+  does. Ordinary traces (`TraceLine`) hit its physics hull, so give it a
+  `$collisionmodel` if bullets should stop on it; `TraceLineHighDetail` hits the exact
+  trace mesh, with or without a PHY.
+- A physics model spawns as a `prop_physics`, which needs a `prop_data` keyvalue
+  (`$keyvalues { prop_data { "base" "Metal.Medium" } }`) or the game deletes it.
+- A jointed model becomes a ragdoll (`BecomeRagdoll`) only if a sequence has the
+  `ACT_DIERAGDOLL` activity, as retail's `ragdoll` sequence does:
+  `$sequence "ragdoll" "ref.smd" activity ACT_DIERAGDOLL 1`.
+- Traces report the model's `$surfaceprop`.
 
 ```powershell
 .\build\r5studiomdl.exe --target s3 -o out\physics_box.rmdl examples\physics_prop\physics_box.qc

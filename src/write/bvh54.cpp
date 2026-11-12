@@ -3,6 +3,8 @@
 // (LOD 0 render triangles), the rigid physics hull, or one per jointed solid. Leaves are
 // triangle lists (type 5 with packed int16 vertices, type 4 with float vertices).
 #include <algorithm>
+#include <array>
+#include <cstdint>
 #include <cfloat>
 #include <cmath>
 #include <cstring>
@@ -20,7 +22,7 @@ namespace {
 constexpr int kLeafTris = 16;         // four-bit triangle count
 constexpr int kFinestStep = -14;      // log2 of the finest packed step retail uses
 constexpr int kCoarsestPacked = -7;   // beyond this packed vertices lose too much: use floats
-constexpr int kTypeNode = 0, kTypeEmpty = 1, kTypeFloatTris = 4, kTypePackedTris = 5;
+constexpr int kTypeNode = 0, kTypeEmpty = 1, kTypeList = 3, kTypeFloatTris = 4, kTypePackedTris = 5, kTypePackedQuads = 7;
 
 struct Entry {
     std::vector<Vec3> verts;
@@ -99,41 +101,137 @@ Built BuildEntry(const Entry& e, const char* what) {
     };
     // a leaf: its own run of vertices; triangles start at their lowest local vertex,
     // sorted, so each base only grows (retail winding is clockwise from outside)
-    auto emitLeaf = [&](const std::vector<int>& ids) {
-        std::map<int, int> local;
-        std::vector<int> order;
-        for (int i : ids)
-            for (int c = 0; c < 3; c++)
-                if (local.emplace(tris[i][c], static_cast<int>(order.size())).second) order.push_back(tris[i][c]);
-        if (vertexCount + static_cast<int>(order.size()) > 0xFFFF) Fatal("BVH %s needs more than 65535 vertices", what);
-        std::vector<std::array<int, 3>> lt;
-        for (int i : ids) {
-            std::array<int, 3> t = {local[tris[i][0]], local[tris[i][2]], local[tris[i][1]]};  // reverse winding
+    // A leaf, as retail writes them: vertices stored once per position, triangle pairs
+    // that form an exact parallelogram on the packed grid as quads (type 7, whose fourth
+    // corner b + c - a is computed and not stored unless something else uses it), the
+    // rest as triangles (type 5); a leaf with both is a type 3 list of the two. Float
+    // entries keep triangles (type 4): b + c - a is not exact in floats.
+    using Key = std::array<int64_t, 3>;
+    auto keyOf = [&](int v) {
+        Key k{};
+        for (int a = 0; a < 3; a++) {
+            if (out.packed) {
+                k[a] = std::llround((e.verts[v][a] - out.origin[a]) / step);
+            } else {
+                float f = e.verts[v][a];
+                int32_t bits;
+                std::memcpy(&bits, &f, 4);
+                k[a] = bits;
+            }
+        }
+        return k;
+    };
+    auto emitLeaf = [&](const std::vector<int>& ids) -> std::pair<int, int> {
+        std::map<Key, int> unique;
+        std::vector<int> rep;  // a source vertex per unique position
+        std::vector<Key> pos;
+        auto U = [&](int v) {
+            Key k = keyOf(v);
+            auto it = unique.find(k);
+            if (it != unique.end()) return it->second;
+            unique.emplace(k, static_cast<int>(rep.size()));
+            rep.push_back(v);
+            pos.push_back(k);
+            return static_cast<int>(rep.size()) - 1;
+        };
+        std::vector<std::array<int, 3>> et;  // winding reversed (retail hulls wind the other way)
+        for (int i : ids) et.push_back({U(tris[i][0]), U(tris[i][2]), U(tris[i][1])});
+
+        // pair triangles sharing an edge (a->b in one, b->a in the other) whose far corners
+        // p, q make a parallelogram: p + q == a + b exactly; outline p, a, q, b
+        std::vector<bool> paired(et.size(), false);
+        std::vector<std::array<int, 4>> outlines;
+        for (size_t x = 0; out.packed && x < et.size(); x++) {
+            if (paired[x]) continue;
+            for (size_t y = x + 1; y < et.size() && !paired[x]; y++) {
+                if (paired[y]) continue;
+                for (int i = 0; i < 3 && !paired[x]; i++) {
+                    int a = et[x][i], b = et[x][(i + 1) % 3], p = et[x][(i + 2) % 3];
+                    for (int j = 0; j < 3; j++) {
+                        if (et[y][j] != b || et[y][(j + 1) % 3] != a) continue;
+                        int q = et[y][(j + 2) % 3];
+                        bool para = q != p;
+                        for (int k = 0; k < 3 && para; k++) para = pos[p][k] + pos[q][k] == pos[a][k] + pos[b][k];
+                        if (!para) continue;
+                        outlines.push_back({p, a, q, b});
+                        paired[x] = paired[y] = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // local vertex numbers: triangle corners first, then each quad's base and its two
+        // neighbours (the base is its lowest-numbered corner, so b and c follow it)
+        std::vector<int> local(rep.size(), -1), order;
+        auto assign = [&](int u) {
+            if (local[u] < 0) {
+                local[u] = static_cast<int>(order.size());
+                order.push_back(u);
+            }
+            return local[u];
+        };
+        std::vector<std::array<int, 3>> lt, lq;
+        for (size_t x = 0; x < et.size(); x++) {
+            if (paired[x]) continue;
+            std::array<int, 3> t = {assign(et[x][0]), assign(et[x][1]), assign(et[x][2])};
             std::rotate(t.begin(), std::min_element(t.begin(), t.end()), t.end());
             lt.push_back(t);
         }
-        std::sort(lt.begin(), lt.end());
-        int word = static_cast<int>(leafWords.Size() / 4);
-        // the header's high 16 bits are a 1024-vertex page (found in game: a plain vertex
-        // number there misplaces every leaf after the first); the remainder starts the
-        // first triangle's offset, which stays below 1024 + leaf size < 2^11
-        leafWords.U32(static_cast<uint32_t>(vertexCount / 1024) << 16 | static_cast<uint32_t>(lt.size() - 1) << 12);
-        int base = -(vertexCount % 1024);
-        for (auto& t : lt) {
-            int a = t[0] - base, b = t[1] - t[0] - 1, c = t[2] - t[0] - 1;
-            base = t[0];
-            leafWords.U32(static_cast<uint32_t>(a) | static_cast<uint32_t>(b) << 11 | static_cast<uint32_t>(c) << 20 | 7u << 29);
+        for (auto& o : outlines) {
+            int k = 0;
+            for (int m = 1; m < 4; m++) {
+                int lm = local[o[m]] < 0 ? INT32_MAX : local[o[m]], lk = local[o[k]] < 0 ? INT32_MAX : local[o[k]];
+                if (lm < lk) k = m;
+            }
+            int a = assign(o[k]), b = assign(o[(k + 1) % 4]), c = assign(o[(k + 3) % 4]);  // o[k+2] is computed
+            lq.push_back({a, b, c});
         }
-        for (int v : order) {
-            const Vec3& p = e.verts[v];
+        std::sort(lt.begin(), lt.end());
+        std::sort(lq.begin(), lq.end());
+        if (vertexCount + static_cast<int>(order.size()) > 0xFFFF) Fatal("BVH %s needs more than 65535 vertices", what);
+
+        // a sub-leaf: header (1024-vertex page, count - 1), then one word per item on a
+        // running base; quads: A 10 bits, B 9, C 9, flags 0xF; triangles: A 11, B 9, C 9, 7
+        auto subLeaf = [&](Buffer& w, const std::vector<std::array<int, 3>>& items, bool quad) {
+            int first = vertexCount + items[0][0];
+            w.U32(static_cast<uint32_t>(first / 1024) << 16 | static_cast<uint32_t>(items.size() - 1) << 12);
+            int base = first / 1024 * 1024 - vertexCount;
+            for (auto& t : items) {
+                int a = t[0] - base, b = t[1] - t[0] - 1, c = t[2] - t[0] - 1;
+                if (a < 0 || a > (quad ? 0x3FF : 0x7FF) || b < 0 || b > 0x1FF || c < 0 || c > 0x1FF)
+                    Fatal("internal: BVH %s leaf offsets out of range", what);
+                base = t[0];
+                w.U32(quad ? static_cast<uint32_t>(a) | static_cast<uint32_t>(b) << 10 | static_cast<uint32_t>(c) << 19 | 0xFu << 28
+                           : static_cast<uint32_t>(a) | static_cast<uint32_t>(b) << 11 | static_cast<uint32_t>(c) << 20 | 7u << 29);
+            }
+        };
+        int word = static_cast<int>(leafWords.Size() / 4);
+        int triType = out.packed ? kTypePackedTris : kTypeFloatTris;
+        int type;
+        if (lq.empty() || lt.empty()) {
+            subLeaf(leafWords, lq.empty() ? lt : lq, !lq.empty());
+            type = lq.empty() ? triType : kTypePackedQuads;
+        } else {
+            Buffer quads, triangles;
+            subLeaf(quads, lq, true);
+            subLeaf(triangles, lt, false);
+            leafWords.U32(2);
+            leafWords.U32(static_cast<uint32_t>(kTypePackedQuads) << 8 | static_cast<uint32_t>(quads.Size() / 4) << 16);
+            leafWords.U32(static_cast<uint32_t>(triType) << 8 | static_cast<uint32_t>(triangles.Size() / 4) << 16);
+            leafWords.Bytes(quads.Data().data(), quads.Size());
+            leafWords.Bytes(triangles.Data().data(), triangles.Size());
+            type = kTypeList;
+        }
+        for (int u : order) {
+            const Vec3& p = e.verts[rep[u]];
             for (int a = 0; a < 3; a++) {
-                double rel = (p[a] - out.origin[a]) / step;
-                if (out.packed) vertBytes.I16(static_cast<int16_t>(std::clamp(std::round(rel), -32768.0, 32767.0)));
+                if (out.packed) vertBytes.I16(static_cast<int16_t>(std::clamp(static_cast<double>(pos[u][a]), -32768.0, 32767.0)));
                 else vertBytes.F32(p[a]);
             }
         }
         vertexCount += static_cast<int>(order.size());
-        return word;
+        return std::make_pair(word, type);
     };
     auto split = [&](std::vector<int> ids) {
         Vec3 mn(FLT_MAX, FLT_MAX, FLT_MAX), mx(-FLT_MAX, -FLT_MAX, -FLT_MAX);
@@ -165,8 +263,9 @@ Built BuildEntry(const Entry& e, const char* what) {
             }
             nodes[self].box[c] = boxOf(groups[c]);
             if (static_cast<int>(groups[c].size()) <= kLeafTris) {
-                nodes[self].type[c] = out.packed ? kTypePackedTris : kTypeFloatTris;
-                nodes[self].index[c] = emitLeaf(groups[c]);
+                auto [word, type] = emitLeaf(groups[c]);
+                nodes[self].type[c] = type;
+                nodes[self].index[c] = word;
             } else {
                 int child = build(groups[c]);
                 nodes[self].type[c] = kTypeNode;

@@ -348,6 +348,30 @@ class Compiler54(unittest.TestCase):
         corners={p for t in entry['triangles'] for p in t}
         self.assertEqual(corners,{(x,y,z) for x in (-600.,600.) for y in (-600.,600.) for z in (0.,1200.)})
 
+    def test_bvh_quads_and_lists(self):
+        import bvh54
+        from compare_bvh54 import compare
+        # a box: six exact parallelograms -> one quad leaf, one stored vertex per corner
+        write_smd(self.work/'box.smd',self.bones,self.frames,self.box_tris((-1,2,0),(3,5,4)))
+        out,_=self.run_compiler('$modelname "test/q.rmdl"\n$staticprop\n$body body "box.smd"\n$sequence idle "box.smd"\n',target='s3',name='quads')
+        (entry,)=bvh54.from_model(out,strict=True)['entries']
+        self.assertEqual(entry['problems'],[])
+        self.assertEqual(entry['types'].get(bvh54.PACKED_QUADS),1)
+        self.assertEqual((len(entry['quads']),len(entry['plain']),len(entry['vertices'])),(6,0,8))
+        # a flat square and a bent one: the bent pair is no parallelogram and stays two
+        # triangles, so the leaf is a list of a quad leaf and a triangle leaf
+        tris=[]
+        for quad in ([(0,0,0),(2,0,0),(2,2,0),(0,2,0)],[(4,0,0),(6,0,0),(6,2,1),(4,2,0)]):
+            for a,b,c in ((0,1,2),(0,2,3)):
+                tris.append(('mat',[(quad[k],(0,0,1),(0,0),[(0,1.0)]) for k in (a,b,c)]))
+        write_smd(self.work/'mixed.smd',self.bones,self.frames,tris)
+        out,_=self.run_compiler('$modelname "test/m.rmdl"\n$staticprop\n$body body "mixed.smd"\n$sequence idle "mixed.smd"\n',target='s3',name='mixed')
+        (entry,)=bvh54.from_model(out,strict=True)['entries']
+        self.assertEqual(entry['problems'],[])
+        self.assertEqual(entry['types'].get(bvh54.LIST),1)
+        self.assertEqual((len(entry['quads']),len(entry['plain'])),(1,2))
+        self.assertEqual(compare(out,out)['issues'],[])  # the trace still equals the render triangles
+
     def test_phy_face_limit_fails_explicitly(self):
         # a 40-sided prism: its caps exceed the 32 vertices a native face can hold
         ring=[(math.cos(2*math.pi*k/40)*4,math.sin(2*math.pi*k/40)*4) for k in range(40)]

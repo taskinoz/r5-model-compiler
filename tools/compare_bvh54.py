@@ -9,9 +9,10 @@ approximate (retail BVH vertices sit 0 to about 0.001 in above the render vertic
 so retail triangles are matched to rebuilt ones within 1.5 steps plus that model's
 measured retail gap, which is reported as `retail_gap`.
 
-Retail quads (leaf types 6 and 7, also inside type 3 lists) are parallelograms whose two
-triangles may be split along either diagonal; a retail quad matches when its two
-triangles under one diagonal both match rebuilt triangles.
+Quads (leaf types 6 and 7, also inside type 3 lists, written by retail and by the
+compiler) are parallelograms whose two triangles may be split along either diagonal;
+a quad matches when its two triangles under one diagonal both match. Trace meshes are
+matched both ways round.
 
 Hull and solid entries (retail triangulates hull faces its own way): the set of
 vertices within 1.5 steps and the enclosed volume within 0.1%.
@@ -77,6 +78,29 @@ def _unmatched(tris, others, tol, reverse=False):
     return missing
 
 
+def _both_diagonals(entry):
+    """An entry's triangles, with each quad under both of its diagonals."""
+    out = list(entry['plain'])
+    for a, b, c, d in entry['quads']:
+        out += [(a, b, d), (a, d, c), (a, b, c), (b, d, c)]
+    return out
+
+
+def _uncovered(entry, candidates, tol, reverse=False):
+    """Triangles of `entry` not among `candidates`; a quad counts as covered when its
+    two triangles under one diagonal both are."""
+    index = Index(candidates, max(4 * tol, 1e-3), _centroid)
+
+    def found(t):
+        want = (t[0], t[2], t[1]) if reverse else t
+        return any(_same(want, cand, tol) for cand in index.near(_centroid(t)))
+    miss = sum(not found(t) for t in entry['plain'])
+    for a, b, c, d in entry['quads']:
+        if not (all(map(found, [(a, b, d), (a, d, c)])) or all(map(found, [(a, b, c), (b, d, c)]))):
+            miss += 2
+    return miss
+
+
 def _render(path):
     from mdl54 import Model, PROFILES
     data = open(path, 'rb').read()
@@ -107,7 +131,7 @@ def compare(original, rebuilt):
             # drops them, and so does the compiler)
             g = lambda p: tuple(round(c / step_b) for c in p)
             own = [t for t in _render(rebuilt) if len({g(p) for p in t}) == 3]
-            miss = _unmatched(eb['triangles'], own, 1.5 * step_b + 1e-6, reverse=True)
+            miss = _uncovered(eb, own, 1.5 * step_b + 1e-6, reverse=True)
             if miss or len(eb['triangles']) != len(own):
                 issues.append('entry %d trace: %d of %d rebuilt triangles are not its render triangles (%d render)' % (
                     i, miss, len(eb['triangles']), len(own)))
@@ -124,12 +148,11 @@ def compare(original, rebuilt):
                 gap = max(gap, min((max(abs(p[k] - r[k]) for k in range(3)) for r in pts.near(p)), default=math.inf))
             metrics['entry %d retail_gap' % i] = gap
             tol = 1.5 * step + gap + 1e-6
-            miss = _unmatched(ea['plain'], eb['triangles'], tol)
-            index = Index(eb['triangles'], max(4 * tol, 1e-3), _centroid)
-            found = lambda t: any(_same(t, cand, tol) for cand in index.near(_centroid(t)))
-            for qa, qb, qc, qd in ea['quads']:
-                if not (all(map(found, [(qa, qb, qd), (qa, qd, qc)])) or all(map(found, [(qa, qb, qc), (qb, qd, qc)]))):
-                    miss += 2
+            # both ways round: quads on either side may use either diagonal
+            miss = _uncovered(ea, _both_diagonals(eb), tol)
+            miss_b = _uncovered(eb, _both_diagonals(ea), tol)
+            if miss_b:
+                issues.append('entry %d trace: %d of %d rebuilt triangles are not retail ones' % (i, miss_b, len(eb['triangles'])))
             if miss or len(ea['triangles']) != len(eb['triangles']):
                 issues.append('entry %d trace: %d of %d retail triangles unmatched (%d rebuilt)' % (
                     i, miss, len(ea['triangles']), len(eb['triangles'])))

@@ -89,10 +89,11 @@ target = mat['name'].replace(chr(92), '/')
 models = []
 
 
-def compile_qc(name, qc_path, flags=()):
+def compile_qc(name, qc_path, flags=(), material=None, kind='rgdp'):
     model = compiled / (name + '.rmdl')
+    m_name, m_guid = material or (target, mat['guid'])
     cmd = [str(root / 'build/r5studiomdl.exe'), '--target', 's3', '--external-assets', '-quiet', '-o', str(model),
-           '--material-guid', target + '=' + '%016x' % mat['guid'], '--material-type', target + '=rgdp',
+           '--material-guid', m_name + '=' + '%016x' % m_guid, '--material-type', m_name + '=' + kind,
            '--packed-positions', *flags, str(qc_path)]
     r = subprocess.run(cmd, capture_output=True, text=True)
     assert not r.returncode, r.stdout + r.stderr
@@ -121,25 +122,45 @@ t2 = qc2.read_text().replace('$modelname "r5c_collision/phys_box.rmdl"', '$model
 assert 'pbox64_rt' in t2
 qc2.write_text(t2 + '\n$keyvalues { prop_data { "base" "Metal.Medium" } }\n')
 compile_qc('pbox64_rt', qc2)
+# a jointed model: the retail bird (six solids), decompiled and rebuilt, with a skinned
+# material bound as the earlier runtime package did for multi-bone models
+bird = next((root / 'test-output/s3-raw').rglob('bird.rmdl'))
+qc3 = decompile(bird, src / 'bird', 's3', render_only=True, with_physics=True)
+t3 = qc3.read_text()
+old_name = '$modelname "' + Model(bird, 's3').name.replace(chr(92), '/')[4:] + '"'
+assert old_name in t3, old_name
+skin = Model(next((root / 'test-output/s3-raw').rglob('pilot_light_wraith.rmdl')), 's3').materials[0]
+skin_name = skin['name'].replace(chr(92), '/')
+t3 = t3.replace(old_name, '$modelname "r5c_collision/bird_rebuilt.rmdl"')
+# what the render-only export drops but a ragdoll needs: an ACT_DIERAGDOLL sequence
+# (retail's `ragdoll`; posed from the mesh's reference skeleton here) and prop_data
+t3 += '$sequence "ragdoll" "mesh0_lod0.dmx" activity ACT_DIERAGDOLL 1' + chr(10)
+t3 += '$keyvalues { prop_data { "base" "" } }' + chr(10)
+t3 += ''.join('$renamematerial "%s" "%s"\n' % (m['name'], skin_name) for m in Model(bird, 's3').materials)
+qc3.write_text(t3)
+compile_qc('bird_rebuilt', qc3, material=(skin_name, skin['guid']), kind='sknp')
 
 report = package(models, out / 'pak', 'r5c_collision', args.repak, 's3')
 report['runtime_exclusions'] = []
 
 
-def hull_height(model_path, wx, wy):
-    """Top of the model's physics-hull BVH entry at a world offset from the prop (props
-    spawn at angles 0, where BVH coordinates are world offsets)."""
+def entry_height(model_path, wx, wy, role='hull'):
+    """Top of the model's hull or trace-mesh BVH entry at a world offset from the prop
+    (props spawn at angles 0, where BVH coordinates are world offsets). Quads count
+    under both diagonals (a flat parallelogram has one top either way)."""
     import bvh54
     parsed = bvh54.from_model(model_path)
-    entry = parsed['entries'][parsed['hull']]
-    x, y = wx, wy
+    entry = parsed['entries'][parsed[role]]
+    tris = list(entry['plain'])
+    for a, b, c, d in entry['quads']:
+        tris += [(a, b, d), (a, d, c)]
     best = None
-    for a, b, c in entry['triangles']:
-        d = (b[1] - c[1]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[1] - c[1])
-        if abs(d) < 1e-9:
+    for a, b, c in tris:
+        den = (b[1] - c[1]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[1] - c[1])
+        if abs(den) < 1e-9:
             continue
-        l1 = ((b[1] - c[1]) * (x - c[0]) + (c[0] - b[0]) * (y - c[1])) / d
-        l2 = ((c[1] - a[1]) * (x - c[0]) + (a[0] - c[0]) * (y - c[1])) / d
+        l1 = ((b[1] - c[1]) * (wx - c[0]) + (c[0] - b[0]) * (wy - c[1])) / den
+        l2 = ((c[1] - a[1]) * (wx - c[0]) + (a[0] - c[0]) * (wy - c[1])) / den
         l3 = 1 - l1 - l2
         if min(l1, l2, l3) >= -1e-6:
             z = l1 * a[2] + l2 * b[2] + l3 * c[2]
@@ -147,17 +168,24 @@ def hull_height(model_path, wx, wy):
     return None if best is None else round(best, 3)
 
 
-grid = [(x, y) for x in (-28, -18, -8, 0, 8, 18, 28) for y in (-28, -18, -8, 0, 8, 18, 28)]
+# half-inch offsets: no point lies on an edge of the step, where either level is right
+grid = [(x + 0.5, y + 0.5) for x in (-28, -18, -8, 0, 8, 18, 28) for y in (-28, -18, -8, 0, 8, 18, 28)]
+
+
+def expect(name, role):
+    return [[x, y, entry_height(compiled / (name + '.rmdl'), x, y, role)] for x, y in grid]
+
+
 spec = {
-    # trace-only static props: R5R does not trace a prop_dynamic without a PHY (retail
-    # error.rmdl behaves the same), so these assert no hit
-    'static_box': dict(collision_traces=[[0, 0, None]]),
-    'static_step': dict(collision_traces=[[0, 0, None]]),
-    'nocoll_box': dict(collision_traces=[[0, 0, None]]),
-    # traces follow the physics-hull entry; heights are sampled from the compiled hull
-    'static_step_phy': dict(collision_traces=[[x, y, hull_height(compiled / 'static_step_phy.rmdl', x, y)] for x, y in grid]),
-    'phys_box': dict(collision_traces=[[x, y, hull_height(compiled / 'phys_box.rmdl', x, y)] for x, y in grid],
-                     physics_drops=[[None, 0.0]]),
+    # ordinary traces on a SOLID_VPHYSICS prop_dynamic follow the physics-hull entry and
+    # miss models without a PHY (retail error.rmdl too); high-detail traces read the
+    # trace-mesh entry: on the step with a PHY the two differ (hull slope vs exact L)
+    'static_box': dict(collision_traces=[[0, 0, None]], high_detail_traces=expect('static_box', 'trace')),
+    'static_step': dict(collision_traces=[[0, 0, None]], high_detail_traces=expect('static_step', 'trace')),
+    'static_step_phy': dict(collision_traces=expect('static_step_phy', 'hull'),
+                            high_detail_traces=expect('static_step_phy', 'trace')),
+    'nocoll_box': dict(collision_traces=[[0, 0, None]], high_detail_traces=[[0, 0, None]]),
+    'phys_box': dict(collision_traces=expect('phys_box', 'hull'), physics_drops=[[None, 0.0]]),
     # without the BVH the box still lands (PHY) but a trace cannot hit it: no trace expectation
     'phys_box_nobvh': dict(physics_drops=[]),
     'pbox16_m5': dict(physics_drops=[[None, 0.0]]),
@@ -166,13 +194,17 @@ spec = {
     'pbox64_rt': dict(physics_drops=[[None, 0.0]]),
     # rebuilt retail rocket: rests where the retail control rests (measured 6.72 in R5R)
     'bangalore_rebuilt': dict(physics_drops=[[None, 6.72]]),
+    # jointed: must switch to a (client-side) ragdoll, as the retail bird does
+    'bird_rebuilt': dict(ragdoll=True),
 }
 for m in report['models']:
     m.update(spec[Path(m['path']).stem])
 report['collision_controls'] = [
-    dict(path='mdl/error.rmdl', collision_traces=[[0, 0, None]]),
+    dict(path='mdl/error.rmdl', collision_traces=[[0, 0, None]], high_detail_traces=[[0.399, 1.353, 26.114]]),
+    dict(path='mdl/menu/coin.rmdl', collision_traces=[[0, 0, None]], high_detail_traces=[[-0.464, -0.034, 15.276]]),
     dict(path='mdl/props_debris/concrete_chunk02a.rmdl', collision_traces=[[-1.42, 2.21, 10.3]]),
     dict(path='mdl/weapons_r5/misc_bangalore_rockets/bangalore_rockets_projectile.rmdl', physics_drops=[[None, 6.72]]),
+    dict(path='mdl/creatures/bird/bird.rmdl', ragdoll=True),
 ]
 (out / 'pak/r5c_collision.report.json').write_text(json.dumps(report, indent=2))
 print(json.dumps([m['path'] for m in report['models']], indent=2), report['outputs'])

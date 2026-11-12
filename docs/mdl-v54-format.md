@@ -241,11 +241,14 @@ confirmed in R5R where noted.
 - Block header: contents offset, table offset, contents end, entry count (relative to
   the block). table = 0x10 + 0x20 * count. The table has two words per leaf table
   index (see the leaf header): its size is 8 * (largest index + 1) in all 354 S3
-  models. The first word's high 16 bits are a small number, zero in 285 models and
-  otherwise per material rather than per model (glass 16, rock mostly 15; models
-  whose `$surfaceprop` is `metal` carry 22, 27 or 41), probably the material's surface
-  type; the second word was always 0. Not established; the compiler writes zeros. The
-  contents list holds one word, 1 (CONTENTS_SOLID; 8 in three models).
+  models. The first word's high 16 bits are an index into the game's surface-property
+  list (R5R reports 15 concrete, 16 glass, 22 metal, 51 rock), zero in 285 models and
+  otherwise set per material rather than per model (glass 16, rock mostly 15; models
+  whose `$surfaceprop` is `metal` carry 22, 27 or 41); the second word was always 0.
+  In R5R traces of a prop report the model's `$surfaceprop`, not this value
+  (concrete_chunk02a's table says 15, traces report its `rock`, 51), for ordinary and
+  high-detail traces alike; the compiler writes zeros. The contents list holds one
+  word, 1 (CONTENTS_SOLID; 8 in three models).
 - Entries (0x20 each, at 0x10): packed flag (1 packed int16 vertices, 0 float vec3
   vertices; only the 2,400-inch `mp_setting_menu` uses floats), node, vertex and leaf
   offsets, an integer origin (vec3) and a power-of-two scale (2^-30..2^-23). A packed
@@ -290,8 +293,17 @@ confirmed in R5R where noted.
 - Decoded this way, all 3,865 S0-S3 entries have valid trees (every leaf inside its
   box); every hull and solid entry encloses its retail PHY solid's volume, wound the
   hull way, except wood_gib01c's (a bent face split along the other diagonal); and
-  every trace triangle and quad is a render triangle or triangle pair. The compiler
-  writes only types 4 and 5, which R5R accepts for hulls, solids and trace meshes.
+  every trace triangle and quad is a render triangle or triangle pair.
+- The compiler writes leaves as retail does: vertices once per stored position,
+  triangle pairs that form an exact parallelogram on the packed grid as quads (the
+  computed corner left out of the vertex data unless another item uses it), the rest
+  as triangles, and a type 3 list where a leaf has both. Float entries keep triangles
+  (b + c - a is not exact in floats). Rebuilt blocks are close to retail's size
+  (40,128 against 41,024 bytes over ten sampled models).
+- Use in R5R (v2.6.52): an ordinary trace of a SOLID_VPHYSICS prop_dynamic reads the
+  physics-hull entry and misses models without one; `TraceLineHighDetail` reads the
+  trace-mesh entry. Jointed entries are not traced on a prop_dynamic, retail's or
+  rebuilt (TRACE_MASK_SHOT hits hitboxes instead).
 
 
 ## Standalone rigs and sequences

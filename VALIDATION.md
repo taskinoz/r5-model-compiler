@@ -15,7 +15,7 @@ Independent reader SHA-256: `294ecb9eff3f705a0e35c24fa8d83b77575abebcec3353c3f25
 
 ## Automated checks
 
-- All 69 native compiler/packaging/runtime-harness regressions pass on ordinary Python 3.10 and locked uv/Python 3.14.
+- All 70 native compiler/packaging/runtime-harness regressions pass on ordinary Python 3.10 and locked uv/Python 3.14.
 - Both CTest groups pass: convex-hull math and native compiler regressions. The
   inherited hull tests are not Apex physics emission evidence.
 - Complex-skinning tests exercise mixed 1/2/3/4/8/16-influence vertices across all
@@ -332,15 +332,16 @@ whose fourth corner is computed as b + c - a and often not stored) and leaf list
 only the meaning of a small per-leaf table is open (format notes). All 3,865 S0-S3
 entries decode to valid trees; every hull and solid entry encloses its retail PHY
 solid's volume except wood_gib01c's, and every trace triangle and quad is a render
-triangle or pair. The compiler writes triangle leaves only. The compiler
+triangle or pair. The compiler writes leaves as retail does: quads for exact
+parallelograms, triangles otherwise, and lists where a leaf has both. The compiler
 writes the trace mesh (static props), the physics hull (`$collisionmodel`) or one entry
 per solid in bone order (`$collisionjoints`), and the 0x1F0 box and 0x218 roles.
 
 Corpus: every installed model with a BVH (S0 229, S1 272, S2 273, S3 354) was exported
 (`decompile54.py --render-only --with-physics`), rebuilt and compared by
 `roundtrip54.py`, which now runs `compare_bvh54.py` on every model with a BVH. Compiler
-SHA-256 `7afbe4bdc7269d650378c1a592d00c45e2528a97abaed2716c70bb433744e507`; tools
-roundtrip54 `2d5811c8...`, compare_bvh54 `eab6c5c9...`, bvh54 `819009db...`,
+SHA-256 `394d5e4ce84c88c825863f76767dca7069bcf1077e799b96776c1524d117feb1` (writes quad
+and list leaves); tools roundtrip54 `2d5811c8...`, compare_bvh54 `50184367...`, bvh54 `819009db...`,
 compare_phy54 `3cfbb654...`, decompile54 `ff535740...`, phy54 `90dd10e5...`.
 
 The comparison checks, for every model: entry roles and count, the 0x1F0 box (0.0001
@@ -351,8 +352,8 @@ triangle with winding (1.5 steps plus the model's measured retail offset, at mos
 in), a retail quad matching when its two triangles under either diagonal do; hulls
 and solids by vertex set (1.5 steps) and enclosed volume (0.1%). Every one of the
 3,865 retail entries was compared; an entry the reader cannot decode is a difference,
-never skipped. (A first run, before quads and lists were decoded, compared 2,711
-entries with the same result.)
+never skipped. (Earlier runs, with a triangle-only compiler and before quads and lists
+were decoded, gave the same result.)
 
 | Season | Pass | Differences |
 | --- | --- | --- |
@@ -378,40 +379,55 @@ retail trace vertices sit up to 0.001 in above the stored render vertices.
 ### In game (R5R v2.6.52)
 
 `tools/build_r5r_collision_test.py` builds an S3 package (RPak SHA-256
-`547dd22969c6b4ece25c6571a010a5231056249d9cdb28f2ff2f26f3e99b2b99`, final compiler above):
-static and physics boxes, an L-shaped step with and without a PHY, a box without
-collision, a physics box built with `--no-bvh`, boxes of 16/32/64 in at 5/20/500 mass, a
-decompiled and rebuilt physics box, and a decompiled and rebuilt retail rocket
-(`bangalore_rockets_projectile`), with retail controls. `ingame54.py --collision` spawns
+`e7c92367c420dd60ee4982af3917b3d9801250780cf976fbd7ea8eb93678961d`, compiler
+`394d5e4c...`, which writes quad and list leaves): static and physics boxes, an
+L-shaped step with and without a PHY, a box without collision, a physics box built with
+`--no-bvh`, boxes of 16/32/64 in at 5/20/500 mass, a decompiled and rebuilt physics box,
+a decompiled and rebuilt retail rocket (`bangalore_rockets_projectile`) and a
+decompiled and rebuilt jointed bird (six solids), with retail controls (`error`,
+`coin`, `concrete_chunk02a`, the rocket and the bird). `ingame54.py --collision` spawns
 trace targets as `SOLID_VPHYSICS` prop_dynamics 240 in above the ground (as R5R's map
-editor does), traces straight down, then drops each physics model as a prop_physics from
-160 in onto one level spot found by a ground search, samples it for 8 s, traces it and
-removes it. Final run: passed, exit code 0, 103 traces and 7 drops as declared. Report,
-netconsole and script logs: `test-output/r5r-collision/evidence`.
+editor does) and traces each point straight down three ways: an ordinary shot trace, a
+solid-mask trace and a high-detail trace. It drops each physics model as a prop_physics
+from 160 in onto one level spot found by a ground search, samples it for 8 s, traces it
+and removes it; and turns each jointed model into a ragdoll. Expected heights come from
+the compiled BVH entries. Final run: passed, exit code 0; 204 traces of each kind (99
+ordinary and 149 high-detail ones checked against expectations), 7 drops and 2
+ragdolls as declared. Report, netconsole and script logs:
+`test-output/r5r-collision/evidence`.
 
-- Traces follow the physics-hull entry: 98 grid traces over the physics box and the
-  step-with-PHY hit at the hull's height, computed from the compiled hull (64 in, and
-  22/37/52 on the step hull's slope); worst difference 0.057 in, one packing step.
-  The concrete chunk control hits its hull similarly.
+- Ordinary traces follow the physics-hull entry: 98 grid traces over the physics box
+  and the step-with-PHY hit at the hull's height (64 in, and on the step hull's slope);
+  worst difference 0.057 in, one packing step. Models without a PHY are missed, retail
+  `error` and `coin` too.
+- High-detail traces follow the trace-mesh entry: 147 grid traces over the static box,
+  the step and the step-with-PHY hit the trace mesh, worst difference 0.033 in, and the
+  retail `error` and `coin` controls hit theirs 0.032 in above their decoded tops, like
+  the rebuilds. On the step with a PHY the two differ as the entries do: half an inch
+  onto the low side an ordinary trace stops at 63.31 on the hull's slope, a high-detail
+  one at 16.03 on the exact L.
 - Every physics drop settles on the ground within 0.13 in at under 0.07 in/s and is then
   hit by a trace. The rebuilt rocket rests at 6.719 in, exactly where retail's does.
   Without the BVH the box still lands but no trace hits it, so traces use the BVH.
-- Static models without a PHY (`static_box`, `static_step`) are not hit by traces as
-  prop_dynamics, and neither are retail `mdl/error.rmdl` and
-  `rock_set_backwater_02`, so the trace-mesh entry is not exercised this way; it is
-  checked against retail by the corpus only. Jointed BVH entries and ragdolls were not
-  tested in game.
+- Jointed: the rebuilt bird and the retail bird both switch to ragdolls (the server
+  entity is replaced within 0.3 s). Apex ragdolls are client-side, so their motion was
+  not measured; screenshots did not capture them (the birds fell out of view). Jointed
+  BVH entries are not traced on a standing prop_dynamic, retail's or rebuilt: shot
+  traces hit only retail's hitboxes, solid-mask traces neither.
+- Surfaces: traces report the model's `$surfaceprop` (our concrete and metal boxes 15
+  and 22; retail `concrete_chunk02a` 51 rock, its model surface, not its BVH table's 15).
 - Defects found in game: the leaf header's high 16 bits are a 1024-vertex page, not a
   vertex number (every leaf after the first traced at the wrong place on the step; now
   fixed, and `crypto_drone_holo`'s 2,812 triangles decode only this way); prop_physics
   needs a `prop_data` keyvalue, without which the game deletes it; the packager now
-  stages the PHY, which RePak requires.
+  stages the PHY, which RePak requires; a jointed model needs an `ACT_DIERAGDOLL`
+  sequence to become a ragdoll (the render-only export drops it, so the test adds one).
 
 ## Remaining limitations
 
-- The BVH per-leaf surface table (written as zeros), writing quad and list leaves
-  (only triangles are written), in-game tests of trace meshes, jointed BVHs and
-  ragdolls, procedural bones, RUI, importing arbitrary
+- Measuring client-side ragdoll motion in game, exporting what a ragdoll needs
+  (`ACT_DIERAGDOLL` sequences, include models) in the native export, procedural
+  bones, RUI, importing arbitrary
   existing rig dependencies, native asset-GUID layers, IK rules, transition
   nodes and followers. Export also rejects sequence keyvalues, transitions and
   procedural weight fixups, and unknown animation/sequence flags or event types.

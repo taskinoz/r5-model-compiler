@@ -122,81 +122,118 @@ def collision_probe(models,literal):
 
     Models with `collision_traces` ([dx, dy, expected height or null for no hit]) are
     spawned as SOLID_VPHYSICS prop_dynamics 240 units above the ground, so a vertical
-    trace can only hit the prop or nothing (no terrain or clutter). `physics_drops`
-    ([onto model path or null, expected rest height]) spawn a prop_physics 160 units
-    above the measured ground, or above a placed prop, and sample it as it settles."""
-    # its global declaration is with the others at the top of the probe
-    lines=['void function R5C_Collision() { thread R5C_CollisionProbe() }',
+    trace can only hit the prop or nothing (no terrain or clutter); each point gets an
+    ordinary trace (checked) and a high-detail one (recorded), with the surface.
+    `physics_drops` ([onto model path or null, expected rest height]) spawn a
+    prop_physics 160 units above one level spot found by a ground search (or above a
+    placed prop), one at a time, sample it as it settles and remove it. `ragdoll`
+    turns a SOLID_VPHYSICS prop_dynamic 160 units above that spot into a ragdoll and
+    samples it the same way. The work is in helper functions: Squirrel limits a
+    function's locals, so the probe itself only makes calls."""
+    nl='\\n'
+    lines=['void function R5C_TracePair( int i, entity prop, vector origin, float dx, float dy, entity player )','{',
+           '  vector a = origin + <dx, dy, 150>',
+           '  vector b = origin + <dx, dy, -100>',
+           '  TraceResults t = TraceLine( a, b, [player], TRACE_MASK_SHOT, TRACE_COLLISION_GROUP_NONE )',
+           f'  print( format( "R5C_COL_TRACE %d %.3f %.3f %.4f %d %.4f %d %d %s{nl}", i, dx, dy, t.endPos.z - origin.z, t.hitEnt == prop ? 1 : 0, t.fraction, t.surfaceProp, t.contents, t.surfaceName == "" ? "-" : t.surfaceName ) )',
+           '  TraceResults s = TraceLine( a, b, [player], TRACE_MASK_SOLID, TRACE_COLLISION_GROUP_NONE )',  # no hitboxes
+           f'  print( format( "R5C_COL_SOLIDTRACE %d %.3f %.3f %.4f %d %.4f %d %d %s{nl}", i, dx, dy, s.endPos.z - origin.z, s.hitEnt == prop ? 1 : 0, s.fraction, s.surfaceProp, s.contents, s.surfaceName == "" ? "-" : s.surfaceName ) )',
+           '  TraceResults h = TraceLineHighDetail( a, b, player, TRACE_MASK_SHOT, TRACE_COLLISION_GROUP_NONE )',
+           f'  print( format( "R5C_COL_HDTRACE %d %.3f %.3f %.4f %d %.4f %d %d %s{nl}", i, dx, dy, h.endPos.z - origin.z, h.hitEnt == prop ? 1 : 0, h.fraction, h.surfaceProp, h.contents, h.surfaceName == "" ? "-" : h.surfaceName ) )',
+           '}',
+           'entity function R5C_Place( asset model, vector origin )','{',
+           '  entity prop = CreatePropDynamic( model, origin, <0,0,0>, SOLID_VPHYSICS )',
+           # as R5R's map editor places solid props (CreateEditorProp*)
+           '  prop.kv.solid = 6',
+           '  prop.kv.CollisionGroup = TRACE_COLLISION_GROUP_PLAYER',
+           '  file.props.append( prop )',
+           '  return prop',
+           '}',
+           'vector function R5C_FlatSpot( entity player, vector fallback )','{',
+           # level ground: the grid point whose surface is most nearly horizontal and whose
+           # surroundings are at its height
+           '  vector flat = fallback',
+           '  float best = -1.0',
+           '  array<vector> around = [ <48,0,0>, <-48,0,0>, <0,48,0>, <0,-48,0> ]',
+           '  for ( int gx = -6; gx <= 6; gx++ )','  {',
+           '    for ( int gy = -6; gy <= 6; gy++ )','    {',
+           '      vector c = player.GetOrigin() + <gx * 96.0, gy * 96.0, 0>',
+           '      TraceResults g = TraceLine( c + <0,0,400>, c - <0,0,800>, [player], TRACE_MASK_SOLID, TRACE_COLLISION_GROUP_NONE )',
+           '      float level = g.fraction >= 1.0 ? -1.0 : g.surfaceNormal.z',
+           '      foreach ( vector o in around )','      {',
+           '        TraceResults n = TraceLine( g.endPos + o + <0,0,64>, g.endPos + o - <0,0,64>, [player], TRACE_MASK_SOLID, TRACE_COLLISION_GROUP_NONE )',
+           '        if ( n.fraction >= 1.0 || fabs( n.endPos.z - g.endPos.z ) > 1.0 ) level = -1.0',
+           '      }',
+           '      if ( level > best && Distance2D( g.endPos, player.GetOrigin() ) > 128 ) { best = level; flat = g.endPos }',
+           '    }','  }',
+           f'  print( format( "R5C_COL_FLAT %.4f %.1f %.1f %.1f{nl}", best, flat.x, flat.y, flat.z ) )',
+           '  return flat',
+           '}',
+           'void function R5C_Drop( asset model, int i, int d, vector rest, entity player )','{',
+           '  entity phys = CreatePropPhysics( model, rest + <0,0,160>, <0,0,0> )',
+           '  file.props.append( phys )',
+           '  float started = Time()',
+           '  for ( int sample = 0; sample < 16; sample++ )','  {',
+           '    wait 0.5',
+           f'    if ( !IsValid( phys ) ) {{ print( "R5C_COL_FAIL physics prop removed{nl}" ); return }}',
+           '    vector p = phys.GetOrigin()',
+           f'    print( format( "R5C_COL_DROP %d %d %.2f %.4f %.4f{nl}", i, d, Time() - started, p.z - rest.z, Length( phys.GetVelocity() ) ) )',
+           '  }',
+           '  vector q = phys.GetOrigin()',
+           '  TraceResults t = TraceLine( q + <0,0,150>, q - <0,0,30>, [player], TRACE_MASK_SHOT, TRACE_COLLISION_GROUP_NONE )',
+           f'  print( format( "R5C_COL_DROPTRACE %d %d %.4f %d{nl}", i, d, t.endPos.z - q.z, t.hitEnt == phys ? 1 : 0 ) )',
+           '  phys.Destroy()',
+           '  wait 0.5',  # removal completes after the frame
+           '}',
+           # Apex ragdolls are client-side: the server entity is replaced, so the server
+           # records only that the switch happened; the result is checked on screenshots
+           'void function R5C_Ragdoll( asset model, int i, vector spot )','{',
+           '  entity rag = CreatePropDynamic( model, spot + <0,0,60>, <0,0,0>, SOLID_VPHYSICS )',
+           '  file.props.append( rag )',
+           '  wait 0.3',
+           '  rag.BecomeRagdoll( <0,0,0>, false )',
+           '  float started = Time()',
+           '  while ( IsValid( rag ) && Time() - started < 3.0 ) wait 0.1',
+           f'  print( format( "R5C_COL_RAGDOLL %d %d %.2f{nl}", i, IsValid( rag ) ? 0 : 1, Time() - started ) )',
+           '  if ( IsValid( rag ) ) rag.Destroy()',
+           '}',
+           # its global declaration is with the others at the top of the probe
+           'void function R5C_Collision() { thread R5C_CollisionProbe() }',
            'void function R5C_CollisionProbe()','{',
            '  entity player = GetPlayerArray()[0]',
            '  vector forward = AnglesToForward( <0, player.EyeAngles().y, 0> )',
            '  vector right = AnglesToRight( <0, player.EyeAngles().y, 0> )',
            '  vector base = player.GetOrigin() + forward * 360',
-           '  table<string, vector> placed']
-    solid=[(i,m) for i,m in enumerate(models) if m.get('collision_traces')]
+           '  table<string, vector> placed',
+           '  entity prop',
+           '  vector origin']
+    solid=[(i,m) for i,m in enumerate(models) if m.get('collision_traces') or m.get('high_detail_traces')]
     for k,(i,model) in enumerate(solid):
-        lines+=['  {',f'    asset model = ${literal(model["path"])}',
-                f'    vector origin = base + right * {(k-(len(solid)-1)/2)*160:.3f} + <0,0,240>',
-                '    entity prop = CreatePropDynamic( model, origin, <0,0,0>, SOLID_VPHYSICS )',
-                # as R5R's map editor places solid props (CreateEditorProp*)
-                '    prop.kv.solid = 6',
-                '    prop.kv.CollisionGroup = TRACE_COLLISION_GROUP_PLAYER',
-                '    file.props.append( prop )',
-                f'    placed[{literal(model["path"])}] <- origin',
-                '    wait 0.5']
-        for dx,dy,_ in model['collision_traces']:
-            lines+=[f'    {{ TraceResults t = TraceLine( origin + <{dx:.3f},{dy:.3f},150>, origin + <{dx:.3f},{dy:.3f},-100>, [player], TRACE_MASK_SHOT, TRACE_COLLISION_GROUP_NONE )',
-                    f'      print( format( "R5C_COL_TRACE {i} {dx:.3f} {dy:.3f} %.4f %d %.4f\\n", t.endPos.z - origin.z, t.hitEnt == prop ? 1 : 0, t.fraction ) ) }}']
-        lines+=['  }']
-    drop_list=[(i,m,d,onto,want) for i,m in enumerate(models) for d,(onto,want) in enumerate(m.get('physics_drops',[]))]
-    if drop_list:
-        # drops need level ground: search a grid around the player for the spot whose
-        # surface is most nearly horizontal and whose surroundings are at its height
-        lines+=['  vector flat = base',
-                '  float best = -1.0',
-                '  for ( int gx = -6; gx <= 6; gx++ )',
-                '  {',
-                '    for ( int gy = -6; gy <= 6; gy++ )',
-                '    {',
-                '      vector c = player.GetOrigin() + <gx * 96.0, gy * 96.0, 0>',
-                '      TraceResults g = TraceLine( c + <0,0,400>, c - <0,0,800>, [player], TRACE_MASK_SOLID, TRACE_COLLISION_GROUP_NONE )',
-                '      if ( g.fraction >= 1.0 ) continue',
-                '      float level = g.surfaceNormal.z',
-                '      foreach ( vector o in [ <48,0,0>, <-48,0,0>, <0,48,0>, <0,-48,0> ] )',
-                '      {',
-                '        TraceResults n = TraceLine( g.endPos + o + <0,0,64>, g.endPos + o - <0,0,64>, [player], TRACE_MASK_SOLID, TRACE_COLLISION_GROUP_NONE )',
-                '        if ( n.fraction >= 1.0 || fabs( n.endPos.z - g.endPos.z ) > 1.0 ) level = -1.0',
-                '      }',
-                '      if ( level > best && Distance2D( g.endPos, player.GetOrigin() ) > 128 ) { best = level; flat = g.endPos }',
-                '    }',
-                '  }',
-                '  print( format( "R5C_COL_FLAT %.4f %.1f %.1f %.1f\\n", best, flat.x, flat.y, flat.z ) )']
-    for k,(i,model,d,onto,want) in enumerate(drop_list):
-        if onto:
-            rest=f'    vector rest = placed[{literal(onto)}]'
-        else:
-            # the level ground found once above: a trace now could hit the previous prop
-            rest='    vector rest = flat'
-        lines+=['  {',rest,
-                f'    entity phys = CreatePropPhysics( ${literal(model["path"])}, rest + <0,0,160>, <0,0,0> )',
-                '    file.props.append( phys )',
-                '    float started = Time()',
-                '    for ( int sample = 0; sample < 16; sample++ )',
-                '    {',
-                '      wait 0.5',
-                '      if ( !IsValid( phys ) ) { print( "R5C_COL_FAIL physics prop removed\\n" ); break }',
-                '      vector p = phys.GetOrigin()',
-                f'      print( format( "R5C_COL_DROP {i} {d} %.2f %.4f %.4f\\n", Time() - started, p.z - rest.z, Length( phys.GetVelocity() ) ) )',
-                '    }',
-                '    if ( IsValid( phys ) )',
-                '    {',
-                '      vector p = phys.GetOrigin()',
-                '      TraceResults t = TraceLine( p + <0,0,150>, p - <0,0,30>, [player], TRACE_MASK_SHOT, TRACE_COLLISION_GROUP_NONE )',
-                f'      print( format( "R5C_COL_DROPTRACE {i} {d} %.4f %d\\n", t.endPos.z - p.z, t.hitEnt == phys ? 1 : 0 ) )',
-                '      phys.Destroy()',
-                '      wait 0.5',  # removal completes after the frame
-                '    }','  }']
-    lines+=['  print( "R5C_COL_DONE\\n" )','}']
+        lines+=[f'  origin = base + right * {(k-(len(solid)-1)/2)*160:.3f} + <0,0,240>',
+                f'  prop = R5C_Place( ${literal(model["path"])}, origin )',
+                f'  placed[{literal(model["path"])}] <- origin',
+                '  wait 0.5']
+        points=list(dict.fromkeys((dx,dy) for dx,dy,_ in model.get('collision_traces',[])+model.get('high_detail_traces',[])))
+        lines+=[f'  R5C_TracePair( {i}, prop, origin, {dx:.3f}, {dy:.3f}, player )' for dx,dy in points]
+    drop_list=[(i,m,d,onto) for i,m in enumerate(models) for d,(onto,want) in enumerate(m.get('physics_drops',[]))]
+    ragdolls=[(i,m) for i,m in enumerate(models) if m.get('ragdoll')]
+    if drop_list or ragdolls:
+        lines+=['  vector flat = R5C_FlatSpot( player, base )']
+    for i,model,d,onto in drop_list:
+        rest=f'placed[{literal(onto)}]' if onto else 'flat'
+        lines+=[f'  R5C_Drop( ${literal(model["path"])}, {i}, {d}, {rest}, player )']
+    # ragdolls side by side on the level spot, with earlier props removed and the player
+    # 150 units back looking down at it, then left to settle for the screenshot the
+    # harness takes at the end of the probe
+    if ragdolls:
+        lines+=['  R5C_Cleanup()','  wait 0.5']
+    for k,(i,model) in enumerate(ragdolls):
+        lines+=[f'  {{ vector c = player.GetOrigin() + forward * 130 + right * {(k-(len(ragdolls)-1)/2)*50:.1f}',
+                '    TraceResults g = TraceLine( c + <0,0,100>, c - <0,0,200>, [player], TRACE_MASK_SOLID, TRACE_COLLISION_GROUP_NONE )',
+                f'    R5C_Ragdoll( ${literal(model["path"])}, {i}, g.endPos ) }}']
+    if ragdolls:
+        lines+=['  wait 5.0']
+    lines+=[f'  print( "R5C_COL_DONE{nl}" )','}']
     return lines
 
 
@@ -204,8 +241,12 @@ def summarize_collision(log,models,tolerance=0.5):
     """Check traces and drops against each model's declared expectations."""
     import re
     failures=[]; traces=[]; drops={}
-    for i,dx,dy,height,hit,fraction in re.findall(r'R5C_COL_TRACE (\d+) (\S+) (\S+) (\S+) (\d) (\S+)',log):
-        traces.append(dict(model=int(i),dx=float(dx),dy=float(dy),height=float(height),hit_prop=hit=='1',fraction=float(fraction)))
+    high_detail=[]
+    for kind,i,dx,dy,height,hit,fraction,prop,contents,name in re.findall(
+            r'R5C_COL_(TRACE|HDTRACE) (\d+) (\S+) (\S+) (\S+) (\d) (\S+) (-?\d+) (-?\d+) (\S+)',log):
+        row=dict(model=int(i),dx=float(dx),dy=float(dy),height=float(height),hit_prop=hit=='1',fraction=float(fraction),
+                 surface_prop=int(prop),contents=int(contents),surface_name=name)
+        (traces if kind=='TRACE' else high_detail).append(row)
     for i,d,t,z,speed in re.findall(r'R5C_COL_DROP (\d+) (\d+) (\S+) (\S+) (\S+)',log):
         drops.setdefault(f'{i}.{d}',[]).append(dict(time=float(t),height=float(z),speed=float(speed)))
     drop_traces={f'{i}.{d}':dict(height=float(h),hit_prop=hit=='1') for i,d,h,hit in re.findall(r'R5C_COL_DROPTRACE (\d+) (\d+) (\S+) (\d)',log)}
@@ -225,9 +266,25 @@ def summarize_collision(log,models,tolerance=0.5):
                 failures.append(f'{model["path"]} drop {d}: rests at {samples[-1]["height"]:.3f} (speed {samples[-1]["speed"]:.3f}), expected {want}')
             dt=drop_traces.get(key)
             if dt is None or not dt['hit_prop']: failures.append(f'{model["path"]} drop {d}: the resting prop was not hit by a trace')
+    # high-detail traces ([dx, dy, expected height or null]) read the trace-mesh entry
+    for i,model in enumerate(models):
+        for dx,dy,expected in model.get('high_detail_traces',[]):
+            got=[t for t in high_detail if t['model']==i and abs(t['dx']-dx)<1e-3 and abs(t['dy']-dy)<1e-3]
+            if not got: failures.append(f'{model["path"]}: no high-detail trace at {dx},{dy}'); continue
+            t=got[0]
+            if expected is None:
+                if t['hit_prop']: failures.append(f'{model["path"]}: high-detail trace at {dx},{dy} hit the prop')
+            elif not t['hit_prop'] or abs(t['height']-expected)>tolerance:
+                failures.append(f'{model["path"]}: high-detail trace at {dx},{dy} at {t["height"]:.3f}, expected {expected}')
+    # ragdolls: the server entity must be replaced (the switch to a client ragdoll)
+    ragdolls={int(i):(gone=='1',float(t)) for i,gone,t in re.findall(r'R5C_COL_RAGDOLL (\d+) (\d) (\S+)',log)}
+    for i,model in enumerate(models):
+        if model.get('ragdoll'):
+            if i not in ragdolls: failures.append(model['path']+': no ragdoll result')
+            elif not ragdolls[i][0]: failures.append(model['path']+': did not become a ragdoll')
     if 'R5C_COL_DONE' not in log: failures.append('collision probe did not finish')
     if 'R5C_COL_FAIL' in log: failures.append('collision probe reported a failure')
-    return dict(traces=traces,drops=drops,drop_traces=drop_traces,failures=failures,passed=not failures,
+    return dict(traces=traces,high_detail_traces=high_detail,ragdolls={str(k):dict(switched=v[0],seconds=v[1]) for k,v in ragdolls.items()},drops=drops,drop_traces=drop_traces,failures=failures,passed=not failures,
                 scope='server traces against SOLID_VPHYSICS props and physics drops')
 
 

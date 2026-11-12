@@ -32,6 +32,11 @@ Read README.md, VALIDATION.md and docs/mdl-v54-format.md before changing writers
   needs prop_data or the game deletes it; drop physics props on level ground found by a
   search (slopes and terrain holes make them slide or fall away); trace declarations go
   at the top of the Squirrel file; close the test runtime's crashmsg.exe after a crash.
+  More: TraceLineHighDetail reads the trace-mesh entry; TRACE_MASK_SHOT also hits
+  hitboxes (use TRACE_MASK_SOLID to isolate collision); Squirrel limits a function's
+  locals ("Too many locals"), so generated probes call helper functions; ragdolls are
+  client-side (the server only sees its entity replaced) and need an ACT_DIERAGDOLL
+  sequence; traces report the model's $surfaceprop, not the BVH surface table.
 - GPL/AGPL references may be consulted, not copied into this MIT implementation.
 - Run Python on extracted data with -I, with scripts outside the extraction folder.
 - Packaging follows R1: package.ps1, check_package.ps1, tag-driven release.yml.
