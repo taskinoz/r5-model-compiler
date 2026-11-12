@@ -214,9 +214,90 @@ class Compiler54(unittest.TestCase):
                 return sorted(tuple(v['pos']) for tri in Model(path,target).render()[0][0]['triangles'] for v in tri)
             self.assertEqual(positions(out),positions(rebuilt))
 
-    def test_unsupported_native_physics_rejected(self):
-        _,run=self.run_compiler(self.qc+'\n$collisionmodel "mesh.smd" { $mass 5 }\n',ok=False)
-        self.assertIn('native physics',run.stdout)
+    def box_tris(self,lo,hi,bone=0):
+        """Twelve triangles of an axis-aligned box weighted to one bone."""
+        corners=[(x,y,z) for x in (lo[0],hi[0]) for y in (lo[1],hi[1]) for z in (lo[2],hi[2])]
+        quads=[(0,1,3,2),(4,6,7,5),(0,4,5,1),(2,3,7,6),(0,2,6,4),(1,5,7,3)]
+        tris=[]
+        for q in quads:
+            for a,b,c in ((q[0],q[1],q[2]),(q[0],q[2],q[3])):
+                tris.append(('phys',[(corners[i],(0,0,1),(0,0),[(bone,1.0)]) for i in (a,b,c)]))
+        return tris
+
+    def test_native_phy_all_profiles(self):
+        import phy54
+        lo,hi=(-1,2,0),(3,5,4)
+        write_smd(self.work/'box.smd',self.bones,self.frames,self.box_tris(lo,hi))
+        qc=self.qc+'$surfaceprop "metal"\n$collisionmodel "box.smd" { $mass 5 }\n'
+        for target in PROFILES:
+            with self.subTest(target=target):
+                out,_=self.run_compiler(qc,target=target,name=target+'phy')
+                data=out.with_suffix('.phy').read_bytes(); rmdl=out.read_bytes()
+                self.assertEqual(struct.unpack_from('<2i',rmdl,0x1CC)[0],-123456)
+                self.assertEqual(struct.unpack_from('<i',rmdl,0x1DC)[0],len(data))
+                self.assertAlmostEqual(struct.unpack_from('<f',rmdl,0x150)[0],5,places=5)
+                parsed=phy54.parse(data,target)
+                self.assertEqual(parsed['checksum'],struct.unpack_from('<i',rmdl,8)[0])
+                (solid,)=parsed['solids']; (hull,)=solid['hulls']
+                self.assertEqual(phy54.check_hull(hull,target=='s3'),[])
+                self.assertEqual((len(hull['verts']),len(hull['faces']),len(hull['edges'])),(8,6,12))
+                self.assertEqual(len(hull['edges'][0]),4 if target=='s3' else 2)
+                centre=[(a+b)/2 for a,b in zip(lo,hi)]; half=[(b-a)/2 for a,b in zip(lo,hi)]
+                for got in (hull['centroid'],solid['centre'],solid['centre2']):
+                    for g,c in zip(got,centre): self.assertAlmostEqual(g,c,places=5)
+                self.assertAlmostEqual(hull['radius'],min(half),places=5)
+                # per unit mass, about the solid origin: box term plus the parallel-axis shift
+                e=[(2*h)**2 for h in half]
+                expected=[[(e[1]+e[2])/12+centre[1]**2+centre[2]**2,-centre[0]*centre[1],-centre[0]*centre[2]],
+                          [-centre[0]*centre[1],(e[0]+e[2])/12+centre[0]**2+centre[2]**2,-centre[1]*centre[2]],
+                          [-centre[0]*centre[2],-centre[1]*centre[2],(e[0]+e[1])/12+centre[0]**2+centre[1]**2]]
+                for r in range(3):
+                    for c in range(3): self.assertAlmostEqual(solid['inertia'][r][c],expected[r][c],places=4)
+                self.assertEqual(solid['mins'],tuple(float(x) for x in lo))
+                self.assertEqual(solid['maxs'],tuple(float(x) for x in hi))
+                self.assertIn('"mass" "5.000000"',parsed['text'])
+                self.assertIn('"surfaceprop" "metal"',parsed['text'])
+
+    def test_phy_negative_maximum_stored_as_flt_min(self):
+        import phy54
+        write_smd(self.work/'box.smd',self.bones,self.frames,self.box_tris((-4,-6,1),(-1,-2,3)))
+        out,_=self.run_compiler(self.qc+'$collisionmodel "box.smd" { $mass 5 }\n',target='s3')
+        (solid,)=phy54.parse(out.with_suffix('.phy').read_bytes(),'s3')['solids']
+        flt_min=struct.unpack('<f',struct.pack('<I',0x00800000))[0]
+        self.assertEqual(solid['maxs'],(flt_min,flt_min,3.0))
+        self.assertEqual(solid['mins'],(-4.0,-6.0,1.0))
+
+    def test_jointed_phy_decompile_roundtrip(self):
+        from compare_phy54 import compare
+        tris=self.box_tris((-1,-1,0),(1,1,1.5),0)+self.box_tris((-.5,-.5,2),(.5,.5,4),1)
+        write_smd(self.work/'ragdoll.smd',self.bones,self.frames,tris)
+        qc=(self.qc+'$surfaceprop "flesh"\n$collisionjoints "ragdoll.smd"\n{\n $mass 20\n'
+            ' $jointconstrain "arm" x limit -30 30 0\n $jointconstrain "arm" y limit -10 10 0\n'
+            ' $jointconstrain "arm" z limit 0 0 0\n}\n')
+        for target in ('s0','s3'):
+            with self.subTest(target=target):
+                out,_=self.run_compiler(qc,target=target,name=target+'joints')
+                export=decompile(out,self.work/(target+'-phy-export'),target,render_only=True,with_physics=True)
+                self.assertIn('$collisionjoints',export.read_text())
+                rebuilt=self.work/(target+'-phy-rebuilt.rmdl')
+                run=subprocess.run([str(self.compiler),'--target',target,'-quiet','-o',str(rebuilt),str(export)],capture_output=True,text=True)
+                self.assertEqual(run.returncode,0,run.stdout+run.stderr)
+                result=compare(out.with_suffix('.phy'),rebuilt.with_suffix('.phy'),target)
+                self.assertEqual(result['issues'],[])
+                self.assertIn('ragdollconstraint',rebuilt.with_suffix('.phy').read_bytes().decode('latin-1'))
+
+    def test_phy_face_limit_fails_explicitly(self):
+        # a 40-sided prism: its caps exceed the 32 vertices a native face can hold
+        ring=[(math.cos(2*math.pi*k/40)*4,math.sin(2*math.pi*k/40)*4) for k in range(40)]
+        tris=[]
+        for k in range(40):
+            a,b=ring[k],ring[(k+1)%40]
+            for z0,z1 in ((0,0),(3,3)):
+                tris.append(('phys',[((0,0,z0),(0,0,1),(0,0),[(0,1.0)]),((*a,z0),(0,0,1),(0,0),[(0,1.0)]),((*b,z1),(0,0,1),(0,0),[(0,1.0)])]))
+            tris.append(('phys',[((*a,0),(0,0,1),(0,0),[(0,1.0)]),((*b,0),(0,0,1),(0,0),[(0,1.0)]),((*b,3),(0,0,1),(0,0),[(0,1.0)])]))
+        write_smd(self.work/'prism.smd',self.bones,self.frames,tris)
+        _,run=self.run_compiler(self.qc+'$collisionmodel "prism.smd" { $mass 5 }\n',ok=False)
+        self.assertIn('Apex PHY allows 32',run.stdout)
 
     def test_piecewise_root_motion_roundtrip_all_profiles(self):
         frames=[[((j*.5,0,0),(0,0,0),(1,1,1)),((0,0,2),(0,0,0),(1,1,1))] for j in range(95)]

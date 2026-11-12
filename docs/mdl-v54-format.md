@@ -185,8 +185,83 @@ profiles; legacy VTX/VVD allocation sizes are computed, but companions are not
 written for those profiles. Their size fields at 0x1D0..0x1D8 remain populated;
 component offsets at 0x1C0..0x1C8 are zero. RePak uses the sizes for allocation.
 
-Native Apex PHY/BVH remain unimplemented; TF2's collision writer is not a valid
-substitute. These layout/geometry checks do not establish runtime compatibility.
+These layout/geometry checks do not establish runtime compatibility.
+
+## PHY (S0-S3)
+
+The `.phy` beside the model is not IVP. Measured over all 938 installed S0-S3 files
+(every byte accounted for; `tools/phy54.py`):
+
+| Offset | Content |
+| --- | --- |
+| 0x00 | int size (20), int id (1), int16 solid count, int16 0, int model checksum, int keyvalue offset |
+| 0x14 | int64 solid-table offset (0x20), int64 solid count, int64 0, int64 data size (keyvalue offset - 0x14) |
+| table | 0x90 per solid |
+| data | per solid: its 0x40 hull records, then each hull's vertices, faces and edges |
+| kv | keyvalue text as in TF2 (`solid`, `ragdollconstraint`, `collisionrules`, `editparams`, ...), NUL-terminated |
+
+All offsets after the header are int64 and relative to 0x14. There is no alignment
+padding: hull data follows directly, even after an odd number of two-byte edges.
+
+Solid (0x90): int64 hull offset, int64 hull count; float 1.0 then three zero words;
+centre (vec3 + pad); inertia tensor (three vec3 + pad rows); centre again; bounds min,
+bounds max (vec3 each); two zero words. The centre is the hulls' volume centroid. The
+inertia is per unit mass about the solid-space origin, I = I_centroid/V + |c|^2 E - c c^T
+(e.g. a box's parallel-axis terms appear off the diagonal). Bounds minima are the hull
+extents; maxima start at FLT_MIN in Respawn's tool, so a negative maximum is stored as
+1.1754944e-38 (all 3,356 solids). The pad words after the vectors hold uninitialised
+values in retail (for example after the second centre); the compiler writes zero.
+
+Hull (0x40): centroid (vec3) and the distance from it to the nearest face plane (the
+inscribed radius), then {int64 offset, int64 count} for float3 vertices, 32-byte faces
+and edges. A face is a loop of byte vertex indices, counter-clockwise seen from outside,
+ended by 0xFF when shorter than 32. S0-S2 edges are two vertex bytes; S3 edges are four
+bytes: v0, v1, the face running v0->v1 and the face running v1->v0. Each hull is a closed
+polyhedron (V - E + F = 2; one S3 retail axe hull is the exception). S3 hull points are
+the volume centroid (1,246/1,246); S0/S1 retail used another interior point, and S2 has
+both kinds. The radius is measured from the stored point (99.5%; the rest differ by
+non-planar faces or one outlier). Keyvalue `volume` is the polygon volume of the stored
+faces, each fanned from its first vertex; bent faces make it differ slightly from the
+convex hull of the points. Rigid solids are in model space; `$collisionjoints` solids
+are in their bone's space. Header: PHY offset 0x1CC holds -123456, size 0x1DC the file size.
+
+The compiler limits each hull to 255 vertices and faces and 32 vertices per face (byte
+indices with a 0xFF terminator) and fails beyond them. TF2's IVP surfaces and
+map-collision block are not written for Apex.
+
+## BVH (decoding in progress; not written by the compiler)
+
+Models with collision also carry a BVH at header 0x214 (bounds at 0x1F0..0x207). Models
+with a BVH can be exported only with `--drop-bvh` or `--render-only`, which state that
+it is not preserved. Measured over the S3 corpus (354 models, 1,394 entries):
+
+- Block header: int a, int b, int c, int entry count. b = 0x10 + 0x20 * count; a follows
+  b by 8 (sometimes 16-32) bytes of a small table whose words look like surface
+  references (e.g. 0x001D0000); c = a + 4 and the word at a is 1 (8 in three models).
+- Entries (0x20 each, at 0x10): int 1, then node, packed-vertex and leaf offsets
+  (relative to the block), an integer origin (vec3) and a power-of-two scale
+  (2^-30..2^-23). A packed vertex is three int16; position = origin + (v << 16) * scale.
+- Entry roles: header 0x218 holds two int16: the physics-hull entry and the trace-mesh
+  entry (-1 for none). Rigid models with a PHY have (1, 0) (entry 0 the collision mesh,
+  entry 1 the convex hull) or (0, -1); static models (-1, 0); jointed models (-1, -1)
+  with one entry per PHY solid.
+- Nodes (BVH4, 0x40): per axis eight int16, four child minima then four child maxima,
+  in the packed-vertex units of the entry (minima rounded down, maxima up). Then four
+  words: child index in the high 24 bits; the low byte of word 2 holds the types of
+  children 0 and 1 (low nibble first), that of word 3 children 2 and 3. Child types:
+  0 node, 1 empty, 3 leaf list, 4 unpacked triangles, 5 packed triangles, 7 packed
+  quads. Two slots of a node may point at the same child node with different boxes,
+  each covering part of it (a DAG, not a strict tree).
+- Type 5 leaves (index = word offset into the leaf data): header word with bits 12-15
+  = triangle count - 1, bits 16-31 = first vertex, bits 0-11 = a small table index
+  (0-3); then one word per triangle: A (11 bits) adds to a running base vertex (the
+  first triangle's base is the first vertex), the corners are base, base + 1 + B (9
+  bits) and base + 1 + C (9 bits); the top three bits were 7 in every S3 triangle.
+  This decodes every triangle of the tested models exactly (positions within the
+  packing step).
+- Type 3 leaves (convex hull entries) list sub-leaves: a count, then one word per
+  sub-leaf with its type in byte 1 and a 16-bit field (a type 5 field is its word offset
+  after the list); quads (type 7) are one word each. Not fully decoded.
 
 
 ## Standalone rigs and sequences

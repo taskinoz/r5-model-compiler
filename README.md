@@ -7,7 +7,7 @@ assets. This is the experimental R5 sibling of
 
 **This is an initial development compiler, not a validated replacement for
 Respawn's asset bakery.** Native render data and basic animation are implemented.
-Native Apex physics/BVH and procedural bones are unfinished. External rig/sequence
+Native PHY physics is implemented; BVH collision and procedural bones are unfinished. External rig/sequence
 output and an S3 RePak wrapper are available; limited R5R playback/render tests are
 documented in [VALIDATION.md](VALIDATION.md).
 No game assets, game binaries or extraction tools are distributed.
@@ -48,7 +48,8 @@ or explicit packed positions; normals/tangents and weights use native packing.
 Basic IK chain descriptors can be compiled, exported and compared. R5R has loaded
 and played the authored chain-bearing model; solver equivalence is not established.
 
-The compiler rejects physics/collision, procedures, RUI, IK rules,
+`$collisionmodel` and `$collisionjoints` write the native `.phy` beside the model (see
+"Physics" below). The compiler rejects procedures, RUI, IK rules,
 animation layers, transition nodes, followers, QC include-model rig imports and more than sixteen influences. Some
 inherited QC commands remain unimplemented. No TF2 collision or animation structures
 are presented as native Apex output.
@@ -64,6 +65,26 @@ between frames, use `eventcycle <name/id> <cycle> "options"`, where cycle is fin
 and between 0 and 1 inclusive. This stores the native float cycle directly.
 Numeric IDs use legacy event type 0; names use native event type 1024. The animated
 prop example includes a two-way blend and a fractional-cycle event.
+
+## Physics
+
+`$collisionmodel` (one rigid solid, optionally `$concave`) and `$collisionjoints`
+(one solid per bone, with `$jointconstrain`, `$jointmerge`, `$jointmass` and the other
+joint options) compile to the early-Apex `.phy`: convex hulls with polygon faces,
+per-hull centroid and inscribed radius, per-solid centre, inertia and bounds, and the
+keyvalue text. S3 edges also record their two faces. The header records the PHY size
+and the model checksum ties them together, so keep the `.phy` with its `.rmdl`.
+
+Each convex piece may have at most 255 vertices, 255 faces and 32 corners per face; the
+compiler fails rather than writing an unrepresentable hull. Retail measures volume and
+inertia from the stored faces, and so does the compiler. The BVH used for traces is not
+written yet, so a compiled model has physics but no trace collision. `tools/phy54.py`
+reads and checks a PHY; `tools/compare_phy54.py` compares two.
+
+```powershell
+.\build\r5studiomdl.exe --target s3 -o out\physics_box.rmdl examples\physics_prop\physics_box.qc
+python tools\phy54.py out\physics_box.phy --target s3
+```
 
 ## Piecewise root motion and IK chains
 
@@ -215,7 +236,9 @@ keep animation settings separate from sequence playback flags. Exported `seqflag
 is a compiler extension for those sequence flags; scale/single-frame bits are derived.
 Default mode rejects known unsupported metadata, including sequence layers, IK rules/locks,
 weight fixups and reference descriptors without embedded clips. `--render-only`
-explicitly discards physics, BVH, rigs and sequence metadata. A render-only pass does
+explicitly discards physics, BVH, rigs and sequence metadata; add `--with-physics` to
+keep the PHY. `--drop-bvh` exports a model whose BVH cannot be rebuilt yet, without it,
+and says so in the QC. A render-only pass does
 not establish full-model equivalence or runtime compatibility.
 
 Default `roundtrip54.py` runs compare supported animation metadata, piecewise

@@ -6,6 +6,7 @@
 // Titanfall 2 files: piece ledges, then a root convex-hull ledge, one shared point
 // array, then the ledge tree (pre-order, left child adjacent).
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include <cstring>
 #include <functional>
@@ -595,6 +596,182 @@ std::vector<uint8_t> BuildBrushPiece(const Hull& h, int& faces, int& bevels, int
     return out.Data();
 }
 
+// ---------------------------------------------------------------------------
+// Early-Apex PHY hulls: polygon faces (byte vertex indices, at most 32 per face),
+// edges with their two faces, the volume centroid and the inscribed radius.
+// ---------------------------------------------------------------------------
+
+// Volume, centroid and inertia (unit density, about the centroid) of the stored face
+// loops, each fanned from its first vertex as retail measures them; bent faces make
+// this differ slightly from the convex hull of the points.
+MassProps LoopMassProps(const CApexHull& hull) {
+    Hull fan;
+    for (auto& v : hull.verts) fan.verts.push_back(DVec3(v));
+    for (auto& f : hull.faces)
+        for (size_t k = 1; k + 1 < f.size(); k++) fan.tris.push_back({f[0], f[k], f[k + 1]});
+    return ComputeMassProps(fan);
+}
+
+CApexHull BuildApexHull(const Hull& h, const std::string& solidName) {
+    const auto& tris = h.tris;
+    // group triangles into planar faces: one per source polygon when known, else by plane
+    std::vector<std::vector<int>> loops;
+    if (!h.brushLoops.empty()) {
+        loops = h.brushLoops;
+    } else {
+        struct Group { DVec3 n; double d; int polygon; std::vector<int> tris; };
+        std::vector<Group> groups;
+        double scale = 0;
+        for (auto& v : h.verts) scale = std::max(scale, DLen(v));
+        double dEps = std::max(1e-3, scale * 1e-5);
+        std::map<int, int> polygonGroup;
+        std::vector<int> triGroup(tris.size());
+        for (size_t t = 0; t < tris.size(); t++) {
+            const DVec3 &a = h.verts[tris[t][0]], &b = h.verts[tris[t][1]], &c = h.verts[tris[t][2]];
+            DVec3 n = DCross(b - a, c - a);
+            double l = DLen(n);
+            if (l > 0) n = n * (1 / l);
+            double d = DDot(n, a);
+            int polygon = t < h.triPolygon.size() ? h.triPolygon[t] : -1;
+            int g = -1;
+            if (polygon >= 0) {
+                auto it = polygonGroup.find(polygon);
+                if (it != polygonGroup.end()) g = it->second;
+            } else {
+                for (size_t k = 0; k < groups.size(); k++)
+                    if (groups[k].polygon < 0 && DDot(groups[k].n, n) > 0.99999 && std::fabs(groups[k].d - d) < dEps) {
+                        g = static_cast<int>(k);
+                        break;
+                    }
+            }
+            if (g < 0) {
+                groups.push_back({n, d, polygon, {}});
+                g = static_cast<int>(groups.size() - 1);
+                if (polygon >= 0) polygonGroup[polygon] = g;
+            }
+            groups[g].tris.push_back(static_cast<int>(t));
+            triGroup[t] = g;
+        }
+        std::map<std::pair<int, int>, int> dirGroup;
+        for (size_t t = 0; t < tris.size(); t++)
+            for (int e = 0; e < 3; e++) dirGroup[{tris[t][e], tris[t][(e + 1) % 3]}] = triGroup[t];
+        for (size_t g = 0; g < groups.size(); g++) {
+            // boundary edges of the group, chained into one loop
+            std::map<int, int> next;
+            for (int t : groups[g].tris)
+                for (int e = 0; e < 3; e++) {
+                    int a = tris[t][e], b = tris[t][(e + 1) % 3];
+                    auto it = dirGroup.find({b, a});
+                    if (it != dirGroup.end() && it->second == static_cast<int>(g)) continue;
+                    if (next.count(a)) Fatal("collision solid %s: a face of a convex piece is not a simple polygon", solidName.c_str());
+                    next[a] = b;
+                }
+            std::vector<int> loop;
+            int start = next.begin()->first, v = start;
+            do {
+                loop.push_back(v);
+                auto it = next.find(v);
+                if (it == next.end() || loop.size() > next.size())
+                    Fatal("collision solid %s: a face of a convex piece is not a simple polygon", solidName.c_str());
+                v = it->second;
+            } while (v != start);
+            if (loop.size() != next.size())
+                Fatal("collision solid %s: a face of a convex piece has holes", solidName.c_str());
+            loops.push_back(loop);
+        }
+    }
+    // keep only vertices on a face boundary (points inside a face are not stored)
+    std::map<int, int> remap;
+    for (auto& loop : loops)
+        for (int v : loop) remap.emplace(v, 0);
+    CApexHull out;
+    for (auto& kv : remap) {
+        kv.second = static_cast<int>(out.verts.size());
+        out.verts.push_back(h.verts[kv.first].F());
+    }
+    for (auto& loop : loops) {
+        std::vector<int> f;
+        for (int v : loop) f.push_back(remap[v]);
+        out.faces.push_back(f);
+    }
+    // limits of the byte-indexed native layout (0xFF terminates a face)
+    if (out.verts.size() > 255 || out.faces.size() > 255)
+        Fatal("collision solid %s: a convex piece has %d vertices and %d faces (Apex PHY allows 255 of each)",
+              solidName.c_str(), static_cast<int>(out.verts.size()), static_cast<int>(out.faces.size()));
+    for (auto& f : out.faces)
+        if (f.size() > 32)
+            Fatal("collision solid %s: a convex piece has a %d-sided face (Apex PHY allows 32)", solidName.c_str(),
+                  static_cast<int>(f.size()));
+    std::map<std::pair<int, int>, int> dirFace;
+    for (size_t f = 0; f < out.faces.size(); f++)
+        for (size_t k = 0; k < out.faces[f].size(); k++)
+            dirFace[{out.faces[f][k], out.faces[f][(k + 1) % out.faces[f].size()]}] = static_cast<int>(f);
+    std::set<std::pair<int, int>> seen;
+    for (size_t f = 0; f < out.faces.size(); f++)
+        for (size_t k = 0; k < out.faces[f].size(); k++) {
+            int a = out.faces[f][k], b = out.faces[f][(k + 1) % out.faces[f].size()];
+            if (!seen.insert({std::min(a, b), std::max(a, b)}).second) continue;
+            auto other = dirFace.find({b, a});
+            if (other == dirFace.end())
+                Fatal("collision solid %s: a convex piece is not closed", solidName.c_str());
+            out.edges.push_back({a, b, static_cast<int>(f), other->second});
+        }
+    if (static_cast<int>(out.verts.size()) - static_cast<int>(out.edges.size()) + static_cast<int>(out.faces.size()) != 2)
+        Fatal("collision solid %s: a convex piece is not a closed polyhedron", solidName.c_str());
+    MassProps m = LoopMassProps(out);
+    out.centroid = m.center.F();
+    double radius = 1e300;
+    for (auto& f : out.faces) {
+        DVec3 n;
+        for (size_t k = 0; k < f.size(); k++) {
+            DVec3 p(out.verts[f[k]]), q(out.verts[f[(k + 1) % f.size()]]);
+            n = n + DVec3((p.y - q.y) * (p.z + q.z), (p.z - q.z) * (p.x + q.x), (p.x - q.x) * (p.y + q.y));
+        }
+        double l = DLen(n);
+        if (l <= 0) continue;
+        n = n * (1 / l);
+        double d = -1e300;
+        for (int v : f) d = std::max(d, DDot(n, DVec3(out.verts[v])));
+        radius = std::min(radius, d - DDot(n, m.center));
+    }
+    out.innerRadius = static_cast<float>(radius < 1e299 ? std::max(0.0, radius) : 0.0);
+    return out;
+}
+
+CApexSolid BuildApexSolid(const Solid& s, const QcCollision& qc) {
+    CApexSolid out;
+    double volume = 0, about[3][3] = {};
+    DVec3 weighted;
+    for (auto& h : s.pieces) {
+        out.hulls.push_back(BuildApexHull(h, s.name));
+        MassProps m = LoopMassProps(out.hulls.back());
+        volume += m.volume;
+        weighted = weighted + m.center * m.volume;
+        // parallel-axis shift of each hull's inertia to the solid-space origin
+        double c[3] = {m.center.x, m.center.y, m.center.z};
+        double c2 = c[0] * c[0] + c[1] * c[1] + c[2] * c[2];
+        for (int i = 0; i < 3; i++)
+            for (int j = 0; j < 3; j++)
+                about[i][j] += m.inertia[i][j] + m.volume * ((i == j ? c2 : 0) - c[i] * c[j]);
+    }
+    if (volume <= 0) Fatal("collision solid %s has no volume", s.name.c_str());
+    out.volume = volume;
+    out.centre = (weighted * (1 / volume)).F();
+    if (qc.hasMassCenter && !qc.joints) out.centre = qc.massCenter;
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++) out.inertia[i][j] = static_cast<float>(about[i][j] / volume);
+    // Retail starts the maximum at FLT_MIN, so a negative extent is stored as FLT_MIN
+    // (all 3,356 surveyed S0-S3 solids follow this; minima are the true extents).
+    out.mins = Vec3(FLT_MAX, FLT_MAX, FLT_MAX);
+    out.maxs = Vec3(FLT_MIN, FLT_MIN, FLT_MIN);
+    for (auto& h : out.hulls)
+        for (auto& v : h.verts) {
+            out.mins = Min(out.mins, v);
+            out.maxs = Max(out.maxs, v);
+        }
+    return out;
+}
+
 void KeyInt(std::string& s, const char* k, int v) { s += Format("\"%s\" \"%d\"\n", k, v); }
 void KeyStr(std::string& s, const char* k, const std::string& v) { s += Format("\"%s\" \"%s\"\n", k, v.c_str()); }
 void KeyFloat(std::string& s, const char* k, float v) { s += Format("\"%s\" \"%f\"\n", k, v); }
@@ -713,6 +890,9 @@ struct PointPolygons {
     std::map<PointKey, std::set<int>> byPoint;
     std::map<int, std::set<PointKey>> points;
     std::map<int,std::shared_ptr<SrcCollisionPlanes>> planeGroups;
+    // each polygon's first corner: DMX polygons are fanned from it, so it is the first
+    // point recorded (native Apex faces keep their loop start)
+    std::map<int, PointKey> first;
     bool empty() const { return byPoint.empty(); }
 };
 
@@ -721,6 +901,7 @@ void AddPolygonPoint(PointPolygons& map, const Vec3& p, int polygon, const std::
     PointKey k{static_cast<double>(p.x), static_cast<double>(p.y), static_cast<double>(p.z)};
     map.byPoint[k].insert(polygon);
     map.points[polygon].insert(k);
+    map.first.emplace(polygon, k);
     if (planes) map.planeGroups[planes->firstPolygon]=planes;
 }
 
@@ -782,6 +963,11 @@ void BuildPolygonBrush(Hull& h, const PointPolygons& index) {
             DVec3 da = h.verts[a] - c, db = h.verts[b] - c;
             return std::atan2(DDot(da, w), DDot(da, u)) < std::atan2(DDot(db, w), DDot(db, u));
         });
+        auto start = index.first.find(p);
+        if (start != index.first.end()) {
+            auto at = std::find(loop.begin(), loop.end(), vertexOf(start->second));
+            if (at != loop.end()) std::rotate(loop.begin(), at, loop.end());
+        }
         for (size_t k = 1; k + 1 < loop.size(); k++)
             area += DLen(DCross(h.verts[loop[k]] - h.verts[loop[0]], h.verts[loop[k + 1]] - h.verts[loop[0]])) / 2;
         loops.push_back(loop);
@@ -1194,6 +1380,11 @@ void BuildCollisionModel(BuildContext& ctx) {
         double len = std::sqrt(sz[0] * sz[0] + sz[1] * sz[1] + sz[2] * sz[2]);
         if (!explicitRotDamping && len > 0 && size[largest] / len > 9) s.rotdamping = 1.0f;
     }
+    std::vector<CApexSolid> apex;
+    for (auto& s : solids) {
+        apex.push_back(BuildApexSolid(s, qc));
+        s.volume = apex.back().volume;
+    }
     double totalVolume = 0;
     for (auto& solid : solids) {
         std::set<std::string> chain;
@@ -1347,6 +1538,8 @@ void BuildCollisionModel(BuildContext& ctx) {
     phy.Bytes(text.data(), text.size());
     phy.U8(0);
     ctx.out.physics.phy = phy.Data();
+    ctx.out.physics.text = text;
+    ctx.out.physics.apexSolids = std::move(apex);
     ctx.out.physics.mass = static_cast<float>(totalMass);
     ctx.out.physics.solidCount = static_cast<int>(solids.size());
     Info("collision: %d solid(s), %d piece(s), %.2f kg", static_cast<int>(solids.size()),

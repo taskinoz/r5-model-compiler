@@ -19,6 +19,9 @@ Read README.md, VALIDATION.md and docs/mdl-v54-format.md before changing writers
 - Early installs: F:/Games/Apex Detours/Apex s0 through Apex s3. Retail: C:/Games/Apex.
   Do not modify or launch current retail. Coordinate shared runtime use with other
   agents before any future self-hosted game tests.
+- PHY: tools/phy54.py (reader), tools/compare_phy54.py; layout in the format notes.
+  `roundtrip54.py --render-only --with-physics` compares PHY as well as render data.
+  Use complex-native-s0/s1 for S0/S1: s0-raw/s1-raw have broken research VVC exports.
 - GPL/AGPL references may be consulted, not copied into this MIT implementation.
 - Run Python on extracted data with -I, with scripts outside the extraction folder.
 - Packaging follows R1: package.ps1, check_package.ps1, tag-driven release.yml.

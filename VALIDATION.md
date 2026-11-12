@@ -283,9 +283,53 @@ per profile, zero measured render error and no newly differing models. Inputs an
 compiler/tool hashes are recorded in `asset-render-rebuilds.json`. These remain
 render-only comparisons; no corpus tools were changed during the run.
 
+## Native PHY (12 November 2026)
+
+The early-Apex `.phy` was decoded from all 938 installed S0-S3 files (202/229/225/282;
+every byte accounted for, `tools/phy54.py`) and is now written by the compiler for
+`$collisionmodel` and `$collisionjoints`. Layout and rules are in the format notes.
+
+Corpus: every installed model with a PHY was exported with `decompile54.py --render-only
+--with-physics`, rebuilt and compared by `roundtrip54.py --render-only --with-physics`
+(render validation plus `compare_phy54.py`). S0/S1 use the corrected complex-native
+extractions. Compiler SHA-256
+`f25c53c02a16241fd10495a134334d29507824f04310e8050850a142a064e2bd`; tools roundtrip54
+`aeb52222...`, compare_phy54 `3cfbb654...`, decompile54 `4dca0626...`, phy54
+`90dd10e5...`. Limits: vertices and bounds 0.0001 in; centroids, radii and centres
+0.0001 of the hull/solid size; inertia 0.0001 of its largest component; numeric
+keyvalues 0.00001 relative. None was widened.
+
+| Season | Pass | Differences |
+| --- | --- | --- |
+| S0 | 201 / 202 | tablet_mini |
+| S1 | 228 / 229 | tablet_mini |
+| S2 | 224 / 225 | tablet_mini |
+| S3 | 280 / 282 | wood_gib01d; w_bloodhound_axe (not exported) |
+
+All render comparisons in the run passed. Explained differences:
+
+- tablet_mini (S0-S2): retail's stored hull point lies outside its own hull (its
+  stored radius is -25.6). The rebuild stores the centroid, as S3 retail does.
+- w_bloodhound_axe (S3): a retail hull is not a closed polyhedron (V - E + F = 5);
+  the decompiler refuses it rather than exporting a different shape.
+- wood_gib01d (S3): inscribed radius 0.83919 vs retail 0.835564. Its faces are not
+  planar, and the retail plane rule is not established for 6 of 1,245 S3 hulls; the
+  compiler's rule (Newell normal, plane through the outermost face vertex) matches the
+  other 1,239.
+
+Fixes found by the corpus: polygon volume, centroid and inertia are measured from the
+stored faces fanned from their first vertex (bent faces differ from the convex hull);
+loops keep their source starting vertex; FLT_MIN-initialised bounds maxima; retail
+`concave` editparams and `jointmerge` pairs are exported. A first comparison rounded
+positions to 0.001 for face matching, which falsely failed marvin; faces are now
+matched by nearest vertex and compared as ordered loops (winding included).
+
+Runtime physics in R5Reloaded has not been tested yet. The BVH used for traces is not
+written, so compiled models have physics solids but no trace collision.
+
 ## Remaining limitations
 
-- Native PHY/BVH collision and ragdolls, procedural bones, RUI, importing arbitrary
+- BVH trace collision, runtime physics and ragdoll tests, procedural bones, RUI, importing arbitrary
   existing rig dependencies, native asset-GUID layers, IK rules, transition
   nodes and followers. Export also rejects sequence keyvalues, transitions and
   procedural weight fixups, and unknown animation/sequence flags or event types.

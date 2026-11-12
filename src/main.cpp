@@ -116,7 +116,6 @@ int main(int argc, char** argv) {
         if (!game.empty()) Info("gamedir: \"%s\"", game.c_str());
         Info("Working on \"%s\"", qc.c_str());
         auto def = ParseQC(qc, opt);
-        if(def->collision.present) Fatal("Apex native physics/BVH compilation is not implemented yet");
         for (const auto& anim : def->animations) {
             bool imported = anim->hasFmTrack || !anim->fmStream.empty();
             bool motionCommands = false;
@@ -150,7 +149,18 @@ int main(int argc, char** argv) {
                 if(!found) Fatal("material type binding '%s' does not match a texture slot",binding.first.c_str());
             }
         }
-        if (!model.physics.phy.empty()) Fatal("Apex native physics/BVH compilation is not implemented yet");
+        // Titanfall 2's IVP PHY and map-collision block are not Apex data; the native
+        // PHY is serialised from the solids for the target season.
+        std::vector<uint8_t> phy;
+        if (!model.physics.phy.empty() && model.physics.apexSolids.empty())
+            Fatal("internal: physics solids were not prepared for Apex");
+        model.physics.phy.clear();
+        model.physics.collisionBlock.clear();
+        model.physics.staticCollisionCount = 0;
+        if (!model.physics.apexSolids.empty()) {
+            phy = WritePHY54(model.physics, target == "s3", 0);
+            model.physics.apexPhySize = static_cast<int>(phy.size());
+        }
         if (!model.uiPanels.empty()) Fatal("Apex RUI compilation is not implemented yet");
         for(auto& bone:model.bones) if(bone.proctype || bone.jiggle>=0)
             Fatal("Apex procedural-bone compilation is not implemented yet");
@@ -177,6 +187,7 @@ int main(int argc, char** argv) {
             auto it=materials.find(model.textures[i]);
             if(it!=materials.end()) std::memcpy(mdl.data()+textures+i*12+4,&it->second,8);
         }
+        if (!phy.empty()) std::memcpy(phy.data() + 12, &checksum, 4);
         std::vector<uint8_t> vg;
         if(target=="s2" || target=="s3") {
             vg=WriteVG(model);
@@ -218,6 +229,13 @@ int main(int argc, char** argv) {
                 std::string extension = ".seq" + std::to_string(si) + ".rseq";
                 write(extension.c_str(), WriteSequence54(model, si));
             }
+        }
+        if(!phy.empty()) write(".phy",phy);
+        else {
+            // a stale PHY beside a model without physics would mismatch its checksum
+            auto stale=out; stale.replace_extension(".phy");
+            std::error_code removeError;
+            std::filesystem::remove(stale,removeError);
         }
         if(!vg.empty()) write(".vg",vg);
         else if(read32(0x1D0)>0) {

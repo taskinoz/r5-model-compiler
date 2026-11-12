@@ -689,6 +689,11 @@ std::vector<uint8_t> MdlWriter::Run() {
             Hdr(0x220,static_cast<int>(vvw.size()));
         }
     }
+    if (m_.physics.apexPhySize > 0) {
+        // retail stores this sentinel offset and the PHY file's size
+        Hdr(H_PHYOFFSET, -123456);
+        Hdr(H_PHYSIZE, m_.physics.apexPhySize);
+    }
     Hdr(H_LENGTH, static_cast<int>(b_.Size()));
     return b_.Data();
 }

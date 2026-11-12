@@ -242,8 +242,28 @@ struct CSequence {
     int unkC4 = 0;
 };
 
+// One convex hull of an early-Apex PHY solid (solid space, inches).
+struct CApexHull {
+    std::vector<Vec3> verts;
+    std::vector<std::vector<int>> faces;   // vertex loops, counter-clockwise seen from outside
+    std::vector<std::array<int, 4>> edges; // v0, v1, face running v0->v1, face running v1->v0
+    Vec3 centroid;
+    float innerRadius = 0;  // distance from the centroid to the nearest face plane
+};
+
+struct CApexSolid {
+    std::vector<CApexHull> hulls;
+    double volume = 0;       // of the stored face loops (keyvalue "volume")
+    Vec3 centre;             // volume centroid of the hulls (or $masscenter)
+    float inertia[3][3] = {};  // per unit mass, about the solid-space origin
+    Vec3 mins, maxs;
+};
+
 // Collision output produced by collision.cpp
 struct CPhysics {
+    std::vector<CApexSolid> apexSolids;  // early-Apex PHY solids; serialised per season
+    std::string text;                    // PHY keyvalue text (solids, constraints, editparams)
+    int apexPhySize = 0;                 // size of the season's PHY file, recorded in the header
     std::vector<uint8_t> phy;  // complete PHY file (header, solids, text)
     float mass = 1;  // studiomdl's default; retail models without physics store 1.0
     int solidCount = 0;

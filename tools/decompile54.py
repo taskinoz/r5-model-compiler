@@ -30,20 +30,126 @@ def write_smd(path,bones,frames,tris=None):
             f.write('end\n')
 
 
-def decompile(path, outdir, target, *, render_only=False):
+def _invert34(m):
+    """Inverse of a row-major 3x4 affine matrix (rotation/scale + translation)."""
+    a=[m[0:3],m[4:7],m[8:11]]; t=(m[3],m[7],m[11])
+    det=(a[0][0]*(a[1][1]*a[2][2]-a[1][2]*a[2][1])-a[0][1]*(a[1][0]*a[2][2]-a[1][2]*a[2][0])
+         +a[0][2]*(a[1][0]*a[2][1]-a[1][1]*a[2][0]))
+    inv=[[(a[(c+1)%3][(r+1)%3]*a[(c+2)%3][(r+2)%3]-a[(c+1)%3][(r+2)%3]*a[(c+2)%3][(r+1)%3])/det for c in range(3)] for r in range(3)]
+    return [row+[-sum(row[k]*t[k] for k in range(3))] for row in inv]
+
+
+def _apply34(m,p):
+    return tuple(sum(m[r][c]*p[c] for c in range(3))+m[r][3] for r in range(3))
+
+
+def _rotate34(m,n):
+    v=[sum(m[r][c]*n[c] for c in range(3)) for r in range(3)]
+    length=math.sqrt(sum(x*x for x in v)) or 1
+    return tuple(x/length for x in v)
+
+
+def export_physics(m, out, target):
+    """$collisionmodel / $collisionjoints for the model's native PHY: each hull becomes
+    one piece of DMX polygons (its stored faces), so the compiler rebuilds the same
+    hulls; per-solid keyvalues become explicit joint options."""
+    import re
+    import phy54
+    from decompile53 import write_dmx
+    parsed=phy54.parse(m.path.with_suffix('.phy').read_bytes(),target)
+    text=parsed['text']
+    props=[dict(re.findall(r'"([^"]+)"\s+"([^"]*)"',blk)) for blk in re.findall(r'\bsolid\s*\{([^}]*)\}',text)]
+    if len(props)!=len(parsed['solids']): raise ValueError('PHY solid metadata count differs from solid count')
+    names=[p.get('name','') for p in props]
+    by_name={b['name'].lower():i for i,b in enumerate(m.bones)}
+    jointed=len(parsed['solids'])>1 or 'parent' in text or 'ragdollconstraint' in text
+    for si,s in enumerate(parsed['solids']):
+        for hull in s['hulls']:
+            problems=phy54.check_hull(hull,target=='s3')
+            if problems: raise ValueError('PHY solid %d has an invalid hull: %s'%(si,', '.join(problems)))
+    # solid space -> model space: jointed solids follow their bone; rigid solids are in model space
+    bone_to_model=[_invert34(list(b['pose_to_bone'])) for b in m.bones]
+    identity=[[1,0,0,0],[0,1,0,0],[0,0,1,0]]
+    faces=[]; piece=0
+    for si,s in enumerate(parsed['solids']):
+        bone=by_name.get(names[si].lower(),0) if jointed else 0
+        if jointed and names[si].lower() not in by_name: raise ValueError('PHY solid %r has no bone'%names[si])
+        xf=bone_to_model[bone] if jointed else identity
+        for hull in s['hulls']:
+            # a distinct normal per piece keeps flush or overlapping pieces apart
+            n=len(s['hulls']); k=s['hulls'].index(hull)
+            z=1-2*(k+.5)/n; r=math.sqrt(max(0.,1-z*z)); angle=k*math.pi*(3-math.sqrt(5))
+            normal=_rotate34(xf,(r*math.cos(angle),r*math.sin(angle),z))
+            placed=[_apply34(xf,v) for v in hull['verts']]
+            for loop in hull['faces']:
+                faces.append(('phys',piece,[(placed[v],normal,[(bone,1.0)],{}) for v in loop]))
+            piece+=1
+    order=None
+    if jointed:
+        wanted=[by_name[n.lower()] for n in names]+list(range(len(m.bones)))
+        order=[]
+        for i in wanted:  # parents first, solids in retail order
+            chain=[]
+            while i!=-1 and i not in order and i not in chain:
+                chain.append(i); i=m.bones[i]['parent']
+            order+=reversed(chain)
+    skeleton=[(b['pos'],b['rot'],b['scale']) for b in m.bones]
+    write_dmx(out/'physics.dmx',m.bones,skeleton,faces,joint_order=order,model_space=True)
+    total=re.search(r'"totalmass"\s+"([^"]+)"',text)
+    lines=[('$collisionjoints' if jointed else '$collisionmodel')+' "physics.dmx"','{']
+    if total: lines.append('\t$mass '+total.group(1))
+    root=re.search(r'"rootname"\s+"([^"]*)"',text)
+    if root and root.group(1): lines.append('\t$rootbone '+qc_quote(root.group(1)))
+    if not jointed: lines.append('\t$collisionname '+qc_quote(names[0]))
+    for parent,child in re.findall(r'"jointmerge"\s+"([^",]+),([^"]+)"',text):
+        lines.append('\t$jointmerge %s %s'%(qc_quote(parent),qc_quote(child)))
+    lines.append('\t$explicitjointconstraints')
+    for name,p in zip(names,props):
+        for field,command in (('mass','jointmass'),('damping','jointdamping'),('rotdamping','jointrotdamping'),
+                              ('inertia','jointinertia'),('massbias','jointmassbias'),('drag','jointdrag')):
+            if field in p: lines.append('\t$%s %s %s'%(command,qc_quote(name),p[field]))
+        lines.append('\t$jointsurfaceprop %s %s'%(qc_quote(name),qc_quote(p.get('surfaceprop','default'))))
+        if jointed: lines.append('\t$jointparent %s %s'%(qc_quote(name),qc_quote(p.get('parent',''))))
+    # retail keeps "concave" in editparams when the source was compiled with $concave,
+    # even when that produced a single hull
+    concave='"concave" "1"' in text
+    if concave or (not jointed and len(parsed['solids'][0]['hulls'])>1): lines.append('\t$concave')
+    if jointed and any(len(s['hulls'])>1 for s in parsed['solids']): lines.append('\t$concaveperjoint')
+    for blk in re.findall(r'ragdollconstraint\s*\{([^}]*)\}',text):
+        kv=dict(re.findall(r'"([^"]+)"\s+"([^"]*)"',blk))
+        child=names[int(kv['child'])]
+        for ax in 'xyz':
+            lines.append('\t$jointconstrain %s %s limit %s %s %s'%(qc_quote(child),ax,kv[ax+'min'],kv[ax+'max'],kv[ax+'friction']))
+    for a,b in re.findall(r'"collisionpair"\s+"(\d+),(\d+)"',text):
+        lines.append('\t$jointcollide %s %s'%(qc_quote(names[int(a)]),qc_quote(names[int(b)])))
+    if re.search(r'"selfcollisions"\s+"0"',text): lines.append('\t$noselfcollisions')
+    af=re.search(r'animatedfriction\s*\{([^}]*)\}',text)
+    if af:
+        kv=dict(re.findall(r'"([^"]+)"\s+"([^"]*)"',af[1]))
+        lines.append('\t$animatedfriction '+' '.join(kv[k] for k in
+            ('animfrictionmin','animfrictionmax','animfrictiontimein','animfrictiontimehold','animfrictiontimeout')))
+    lines.append('}')
+    breaks=re.findall(r'\bbreak\s*\{([^}]*)\}',text)
+    if breaks: lines+=['$collisiontext','{']+[x for b in breaks for x in ('break','{',b.strip(),'}')]+['}']
+    return lines
+
+
+def decompile(path, outdir, target, *, render_only=False, drop_bvh=False, with_physics=False):
     m=Model(path,target); out=Path(outdir); out.mkdir(parents=True,exist_ok=True)
     # Unsupported information is never silently claimed to roundtrip.
     unsupported=[]
-    for label,offset in [('physics',0x1DC),('BVH collision',0x214),('RUI',0x12C),
+    for label,offset in [('BVH collision',0x214),('RUI',0x12C),
                          ('procedural bones',0x198),('followers',0x1E8),('include models',0x158),
                          ('IK autoplay locks',0x148),('transition nodes',0xFC)]:
-        if m.get('i',offset): unsupported.append(label)
+        if m.get('i',offset) and not (drop_bvh and label=='BVH collision'): unsupported.append(label)
     if any(b['proctype'] for b in m.bones): unsupported.append('bone procedures')
     if unsupported and not render_only:
         raise ValueError('unsupported for native export: '+', '.join(unsupported)+'; use --render-only for an explicit geometry export')
     skeleton=[(b['pos'],b['rot'],b['scale']) for b in m.bones]
     lines=['// r5 --target '+target]
-    if render_only: lines+=['// Geometry export: physics, BVH, rigs and sequence metadata are not preserved.']
+    if render_only and with_physics: lines+=['// Geometry and physics export: BVH, rigs and sequence metadata are not preserved.']
+    elif render_only: lines+=['// Geometry export: physics, BVH, rigs and sequence metadata are not preserved.']
+    elif drop_bvh and m.get('i',0x214): lines+=['// BVH collision dropped on request (--drop-bvh); the rebuild has none.']
     name=m.name.replace('\\','/')
     if name.startswith('mdl/'): name=name[4:]
     lines+=['$modelname '+qc_quote(name), '$cdmaterials ""', '$origin 0 0 0 -90']
@@ -169,6 +275,7 @@ def decompile(path, outdir, target, *, render_only=False):
         lines+=['$sequence idle "bind.smd"']
     if not m.sequences and not render_only:
         write_smd(out/'bind.smd',m.bones,[skeleton]); lines+=['$sequence idle "bind.smd"']
+    if m.get('i',0x1DC) and (with_physics or not render_only): lines+=export_physics(m,out,target)
     qc=out/'model.qc'; qc.write_text('\n'.join(lines)+'\n',encoding='utf-8')
     return qc
 
@@ -176,4 +283,8 @@ def decompile(path, outdir, target, *, render_only=False):
 if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__); p.add_argument('model'); p.add_argument('outdir')
     p.add_argument('--target',choices=PROFILES,required=True); p.add_argument('--render-only',action='store_true')
-    a=p.parse_args(); print(decompile(a.model,a.outdir,a.target,render_only=a.render_only))
+    p.add_argument('--drop-bvh',action='store_true',help='export a model whose BVH collision cannot be rebuilt yet, without it')
+    p.add_argument('--with-physics',action='store_true',help='with --render-only: also export the PHY collision')
+    a=p.parse_args()
+    if a.with_physics and not a.render_only: p.error('--with-physics extends --render-only')
+    print(decompile(a.model,a.outdir,a.target,render_only=a.render_only,drop_bvh=a.drop_bvh,with_physics=a.with_physics))
