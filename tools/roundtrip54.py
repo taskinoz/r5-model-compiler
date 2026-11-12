@@ -16,6 +16,35 @@ from compare_phy54 import compare as compare_phy
 from compare_bvh54 import compare as compare_bvh
 
 
+def compare_extras(original,rebuilt,target):
+    """Model keyvalues byte for byte (size included), and hitbox sets: names, bones by
+    name, groups, crit overrides, hit data groups and boxes within 0.0001 in. Retail
+    hitboxes flagged as generated (header flag 1) must come back generated."""
+    a,b=Model(original,target),Model(rebuilt,target); issues=[]
+    def kv(m):
+        i,n=m.get('i',0x140),m.get('i',0x144); return m.data[i:i+n]
+    if kv(a)!=kv(b): issues.append('keyvalues differ: %r vs %r'%(kv(a),kv(b)))
+    if (a.get('i',0x9C)^b.get('i',0x9C))&1: issues.append('generated-hitbox flag differs')
+    def sets(m):
+        out=[]
+        for s in range(m.get('i',0xB0)):
+            p=m.get('i',0xB4)+12*s; boxes=[]
+            for k in range(m.get('i',p+4)):
+                q=p+m.get('i',p+8)+0x2C*k
+                name=lambda off: m.string(q+m.get('i',q+off)) if m.get('i',q+off) else ''
+                boxes.append((m.bones[m.get('i',q)]['name'],m.get('i',q+4),name(0x20),m.get('i',q+0x24),name(0x28),
+                              m.get('3f',q+8)+m.get('3f',q+0x14)))
+            out.append((m.string(p+m.get('i',p)),boxes))
+        return out
+    if not a.get('i',0x9C)&1:
+        sa,sb=sets(a),sets(b)
+        if [(n,[x[:5] for x in bx]) for n,bx in sa]!=[(n,[x[:5] for x in bx]) for n,bx in sb]:
+            issues.append('hitbox sets differ')
+        elif any(abs(u-v)>1e-4 for (_,ba),(_,bb) in zip(sa,sb) for x,y in zip(ba,bb) for u,v in zip(x[5],y[5])):
+            issues.append('hitbox bounds differ')
+    return dict(issues=issues)
+
+
 def run(paths,target,compiler,out,render_only=False,jobs=1,with_physics=False,discard_work=False):
     out=Path(out).resolve(); out.mkdir(parents=True,exist_ok=True); compiler=Path(compiler).resolve()
     scope='render plus PHY' if with_physics else 'render-only' if render_only else 'implemented native subset'
@@ -35,11 +64,15 @@ def run(paths,target,compiler,out,render_only=False,jobs=1,with_physics=False,di
             result.update(status='pass',validation=validate(rebuilt,target,path,animation_metadata=not render_only))
             if result['validation']['differences']: result['status']='differ'
             retail_phy=path.with_suffix('.phy')
-            if with_physics and retail_phy.exists():
+            # the full export includes physics, like --render-only --with-physics
+            if (with_physics or not render_only) and retail_phy.exists():
                 rebuilt_phy=rebuilt.with_suffix('.phy')
                 if not rebuilt_phy.exists(): result['physics']=dict(issues=['no rebuilt PHY'])
                 else: result['physics']=compare_phy(retail_phy,rebuilt_phy,target)
                 if result['physics']['issues']: result['status']='differ'
+            # keyvalues and hitboxes are exported in every mode
+            result['extras']=compare_extras(path,rebuilt,target)
+            if result['extras']['issues']: result['status']='differ'
             # BVH collision is rebuilt from the render mesh and PHY solids in every mode
             if Model(path,target).get('i',0x214) or Model(rebuilt,target).get('i',0x214):
                 if render_only and not with_physics and path.with_suffix('.phy').exists():

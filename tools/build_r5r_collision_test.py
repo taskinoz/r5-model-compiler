@@ -77,6 +77,9 @@ qcs = {
     'nocoll_box': '$surfaceprop "metal"\n$body body "box.smd"\n$sequence idle "box.smd"\n',
 }
 qcs['phys_box_nobvh'] = qcs['phys_box']
+# no $keyvalues: the compiler's default prop_data (base ""), as retail writes, must
+# keep a prop_physics alive (without prop_data R5R deletes it)
+qcs['phys_box_nokv'] = '$surfaceprop "metal"\n$body body "box.smd"\n$sequence idle "box.smd"\n$collisionmodel "box.smd" { $mass 50 }\n'
 qcs['static_step_phy'] = qcs['static_step'] + '$collisionmodel "step.smd" { $mass 20 }\n'
 for size, mass in ((16, 5), (32, 20), (64, 500)):
     write_smd(src / ('box%d.smd' % size), bones, frames, box((-size / 2, -size / 2, 0), (size / 2, size / 2, size)))
@@ -122,20 +125,17 @@ t2 = qc2.read_text().replace('$modelname "r5c_collision/phys_box.rmdl"', '$model
 assert 'pbox64_rt' in t2
 qc2.write_text(t2 + '\n$keyvalues { prop_data { "base" "Metal.Medium" } }\n')
 compile_qc('pbox64_rt', qc2)
-# a jointed model: the retail bird (six solids), decompiled and rebuilt, with a skinned
-# material bound as the earlier runtime package did for multi-bone models
+# a jointed model: the retail bird (six solids), fully exported (sequences including its
+# ACT_DIERAGDOLL `ragdoll` descriptor, hitboxes, keyvalues, physics) and rebuilt, with a
+# skinned material bound as the earlier runtime package did for multi-bone models
 bird = next((root / 'test-output/s3-raw').rglob('bird.rmdl'))
-qc3 = decompile(bird, src / 'bird', 's3', render_only=True, with_physics=True)
+qc3 = decompile(bird, src / 'bird', 's3')
 t3 = qc3.read_text()
 old_name = '$modelname "' + Model(bird, 's3').name.replace(chr(92), '/')[4:] + '"'
 assert old_name in t3, old_name
 skin = Model(next((root / 'test-output/s3-raw').rglob('pilot_light_wraith.rmdl')), 's3').materials[0]
 skin_name = skin['name'].replace(chr(92), '/')
 t3 = t3.replace(old_name, '$modelname "r5c_collision/bird_rebuilt.rmdl"')
-# what the render-only export drops but a ragdoll needs: an ACT_DIERAGDOLL sequence
-# (retail's `ragdoll`; posed from the mesh's reference skeleton here) and prop_data
-t3 += '$sequence "ragdoll" "mesh0_lod0.dmx" activity ACT_DIERAGDOLL 1' + chr(10)
-t3 += '$keyvalues { prop_data { "base" "" } }' + chr(10)
 t3 += ''.join('$renamematerial "%s" "%s"\n' % (m['name'], skin_name) for m in Model(bird, 's3').materials)
 qc3.write_text(t3)
 compile_qc('bird_rebuilt', qc3, material=(skin_name, skin['guid']), kind='sknp')
@@ -188,6 +188,7 @@ spec = {
     'phys_box': dict(collision_traces=expect('phys_box', 'hull'), physics_drops=[[None, 0.0]]),
     # without the BVH the box still lands (PHY) but a trace cannot hit it: no trace expectation
     'phys_box_nobvh': dict(physics_drops=[]),
+    'phys_box_nokv': dict(physics_drops=[[None, 0.0]]),
     'pbox16_m5': dict(physics_drops=[[None, 0.0]]),
     'pbox32_m20': dict(physics_drops=[[None, 0.0]]),
     'pbox64_m500': dict(physics_drops=[[None, 0.0]]),

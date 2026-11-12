@@ -1,7 +1,9 @@
 // Build orchestration plus the smaller stages: attachments, IK, hitboxes, bounds,
 // sequences, skins and the final bone table.
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <functional>
 #include <limits>
 
 #include "build/context.h"
@@ -15,6 +17,85 @@ namespace r2c {
 // MurmurHash3 x86_32 over the name with every byte ANDed with 0xDF (case folding),
 // seed 0, with the terminating nul counted in the length. Reproduces all 163 retail
 // mp_common panel hashes.
+// Early-Apex model keyvalues, as Respawn's tool writes them in all 1,789 surveyed S0-S3
+// models: compact text, `mdlkeyvalue{prop_data{base "<base>"}}` plus a newline, and always
+// a prop_data block with a base (empty when the QC gives none; R5R deletes a prop_physics
+// without prop_data). The QC block arrives in studiomdl's layout (CmdKeyValues); other keys
+// keep the same compact style, siblings separated by a space (retail has no example).
+static std::string ApexKeyValues(const std::string& studiomdl) {
+    struct Node { std::string key, value; bool block = false; std::vector<Node> children; };
+    std::vector<std::string> tokens;
+    for (size_t i = 0; i < studiomdl.size();) {
+        char c = studiomdl[i];
+        if (std::isspace(static_cast<unsigned char>(c))) { i++; continue; }
+        if (c == '{' || c == '}') { tokens.emplace_back(1, c); i++; continue; }
+        if (c == '"') {
+            size_t j = studiomdl.find('"', i + 1);
+            if (j == std::string::npos) Fatal("unterminated keyvalue string");
+            tokens.push_back("\x01" + studiomdl.substr(i + 1, j - i - 1));  // quoted marker
+            i = j + 1;
+            continue;
+        }
+        size_t j = i;
+        while (j < studiomdl.size() && !std::isspace(static_cast<unsigned char>(studiomdl[j])) && studiomdl[j] != '{' &&
+               studiomdl[j] != '}' && studiomdl[j] != '"')
+            j++;
+        tokens.push_back(studiomdl.substr(i, j - i));
+        i = j;
+    }
+    auto text = [](const std::string& t) { return !t.empty() && t[0] == '\x01' ? t.substr(1) : t; };
+    size_t at = 0;
+    std::function<std::vector<Node>()> items = [&]() {
+        std::vector<Node> out;
+        while (at < tokens.size() && tokens[at] != "}") {
+            Node n;
+            n.key = text(tokens[at++]);
+            if (at < tokens.size() && tokens[at] == "{") {
+                at++;
+                n.block = true;
+                n.children = items();
+                if (at >= tokens.size()) Fatal("keyvalue block missing a closing brace");
+                at++;
+            } else {
+                if (at >= tokens.size()) Fatal("keyvalue %s has no value", n.key.c_str());
+                n.value = text(tokens[at++]);
+            }
+            out.push_back(std::move(n));
+        }
+        return out;
+    };
+    std::vector<Node> top;
+    if (!studiomdl.empty()) {
+        // the text is "mdlkeyvalue { ... }"
+        if (tokens.size() < 2 || tokens[0] != "mdlkeyvalue" || tokens[1] != "{") Fatal("unexpected keyvalue text");
+        at = 2;
+        top = items();
+    }
+    auto prop = std::find_if(top.begin(), top.end(), [](const Node& n) { return n.block && IEquals(n.key, "prop_data"); });
+    if (prop == top.end()) {
+        Node p;
+        p.key = "prop_data";
+        p.block = true;
+        top.insert(top.begin(), p);
+        prop = top.begin();
+    }
+    if (std::none_of(prop->children.begin(), prop->children.end(), [](const Node& n) { return !n.block && IEquals(n.key, "base"); })) {
+        Node b;
+        b.key = "base";
+        prop->children.insert(prop->children.begin(), b);
+    }
+    std::function<std::string(const std::vector<Node>&)> write = [&](const std::vector<Node>& nodes) {
+        std::string s;
+        for (size_t i = 0; i < nodes.size(); i++) {
+            if (i) s += ' ';
+            s += nodes[i].key;
+            s += nodes[i].block ? "{" + write(nodes[i].children) + "}" : " \"" + nodes[i].value + "\"";
+        }
+        return s;
+    };
+    return "mdlkeyvalue{" + write(top) + "}\n";
+}
+
 static uint32_t UIPanelHash(const std::string& name) {
     auto rol = [](uint32_t x, int r) { return (x << r) | (x >> (32 - r)); };
     auto mix = [&](uint32_t k) { return rol(k * 0xcc9e2d51u, 15) * 0x1b873593u; };
@@ -321,6 +402,25 @@ void BuildContext::BuildSequences() {
         s.unkC4 = qs.unkC4;
         for (auto& am : qs.activityModifiers) s.activityModifiers.push_back({am.name, am.negate});
         if (!qs.cyclePose.empty()) s.cyclePose = qc.FindPoseParam(qs.cyclePose);
+        if (qs.referencePose) {
+            // a descriptor without a clip: 1x1, weights from its list (else every bone),
+            // bounds as given (else empty), as retail's ref and ragdoll descriptors
+            s.groupSize[0] = s.groupSize[1] = 1;
+            if (!qs.assetPose.empty()) s.assetAnim = animIndex(qs.assetPose);
+            s.weights.assign(bones.size(), 1.f);
+            if (!qs.seqWeights.empty()) {
+                auto it = weightLists.find(ToLower(qs.seqWeights));
+                if (it == weightLists.end()) Fatal("sequence %s: unknown weightlist '%s'", qs.name.c_str(), qs.seqWeights.c_str());
+                s.weights = it->second;
+            }
+            if (qs.bboxSet) {
+                s.bmin = qs.bboxMin;
+                s.bmax = qs.bboxMax;
+                s.explicitBox = true;
+            }
+            out.sequences.push_back(s);
+            continue;
+        }
         // anim index grid: offset = k * groupsize[0] + j for blend (j, k)
         s.animIndices.assign(s.groupSize[0] * s.groupSize[1], 0);
         for (int i = 0; i < static_cast<int>(qs.animations.size()); i++) {
@@ -704,6 +804,26 @@ CompiledModel Build(QcModelDef& qc) {
     ctx.BuildSequences();
     ProcessIKRules(ctx);
     EncodeAnimations(ctx);
+    {
+        // asset-only animations (referencepose clips) go last, outside the model's table
+        auto& anims = ctx.out.animations;
+        std::vector<int> order, remap(anims.size());
+        for (int pass = 0; pass < 2; pass++)
+            for (size_t i = 0; i < anims.size(); i++)
+                if (anims[i].assetOnly == (pass == 1)) order.push_back(static_cast<int>(i));
+        std::vector<CAnimation> sorted;
+        for (size_t n = 0; n < order.size(); n++) {
+            remap[order[n]] = static_cast<int>(n);
+            sorted.push_back(std::move(anims[order[n]]));
+        }
+        anims = std::move(sorted);
+        ctx.out.modelAnimations = 0;
+        for (auto& a : anims) ctx.out.modelAnimations += a.assetOnly ? 0 : 1;
+        for (auto& s : ctx.out.sequences) {
+            for (auto& ai : s.animIndices) ai = static_cast<int16_t>(remap[ai]);
+            if (s.assetAnim >= 0) s.assetAnim = remap[s.assetAnim];
+        }
+    }
     ctx.BuildSkins();
     ctx.FinalizeBones();
 
@@ -715,7 +835,7 @@ CompiledModel Build(QcModelDef& qc) {
     if (!EndsWithI(out.name, ".mdl")) out.name += ".mdl";
     out.surfaceProp = qc.surfaceProp;
     out.contents = qc.contents;
-    out.keyValues = qc.keyValues;
+    out.keyValues = ApexKeyValues(qc.keyValues);
     out.sourceFiles = qc.sourceFiles;
     for (auto& t : qc.srcBoneTransforms) {
         CompiledModel::SrcBoneTransform c;

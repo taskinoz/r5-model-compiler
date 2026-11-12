@@ -100,11 +100,17 @@ Runtime use in R5R (see VALIDATION.md for what was measured):
   does. Ordinary traces (`TraceLine`) hit its physics hull, so give it a
   `$collisionmodel` if bullets should stop on it; `TraceLineHighDetail` hits the exact
   trace mesh, with or without a PHY.
-- A physics model spawns as a `prop_physics`, which needs a `prop_data` keyvalue
-  (`$keyvalues { prop_data { "base" "Metal.Medium" } }`) or the game deletes it.
+- A physics model spawns as a `prop_physics`, which needs a `prop_data` keyvalue or
+  the game deletes it. The compiler always writes one, as retail does in every model:
+  `base` comes from `$keyvalues { prop_data { "base" "Metal.Medium" } }`, else it is
+  empty. Keyvalues are stored in retail's compact form.
 - A jointed model becomes a ragdoll (`BecomeRagdoll`) only if a sequence has the
-  `ACT_DIERAGDOLL` activity, as retail's `ragdoll` sequence does:
-  `$sequence "ragdoll" "ref.smd" activity ACT_DIERAGDOLL 1`.
+  `ACT_DIERAGDOLL` activity, as retail's `ragdoll` sequence does. Retail stores it as a
+  reference-pose descriptor (no clip); write that as
+  `$sequence "ragdoll" { referencepose activity ACT_DIERAGDOLL 1 }` (it needs a `$body`
+  before it). `--external-assets` builds embed a one-frame bind-pose clip in such a
+  sequence, as R5R divides by its frame count otherwise; plain builds keep retail's
+  descriptor, and its sequence asset always carries the clip.
 - Traces report the model's `$surfaceprop`.
 
 ```powershell
@@ -262,9 +268,13 @@ and SMD animations. Supported animation export includes rectangular blend grids,
 pose parameters/keys, per-blend FPS and flags, numeric/named events, fades, activity
 names/modifiers, bounds and sequence bone weights. Named `$animation` definitions
 keep animation settings separate from sequence playback flags. Exported `seqflags`
-is a compiler extension for those sequence flags; scale/single-frame bits are derived.
+is a compiler extension for those sequence flags; scale/single-frame bits are derived
+(a clip-less descriptor keeps its single-frame bit as stored). Descriptors without a
+clip (retail `ref` and `ragdoll`) export as `referencepose` sequences. Model keyvalues
+and hitbox sets (unless generated) are exported in every mode, and an include-model
+count of -1 (the external-rig linkage most retail models use) is accepted.
 Default mode rejects known unsupported metadata, including sequence layers, IK rules/locks,
-weight fixups and reference descriptors without embedded clips. `--render-only`
+weight fixups, RUI and procedural bones. `--render-only`
 explicitly discards physics, rigs and sequence metadata; add `--with-physics` to
 keep the PHY. The BVH is not exported: the compiler rebuilds it from the render mesh
 (`$staticprop` trace mesh) and the PHY solids, and `roundtrip54.py` compares it with

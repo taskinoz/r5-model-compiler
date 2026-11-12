@@ -181,6 +181,7 @@ struct CMovement {
 // Encoded animation (one or more sections, each a chain of per-bone RLE records).
 struct CAnimation {
     std::vector<std::vector<uint8_t>> nativeSections;
+    bool assetOnly = false;  // left out of the model's table; used by sequence assets
     std::string name;
     float fps = 30;
     int flags = 0;
@@ -211,6 +212,7 @@ struct CAutoLayer {
 
 struct CSequence {
     std::string label;
+    int assetAnim = -1;  // a referencepose sequence: the clip its standalone asset carries
     std::string activityName;
     int flags = 0;
     int actWeight = 0;
@@ -323,6 +325,7 @@ struct CompiledModel {
     std::vector<CAttachment> attachments;
     std::vector<CHitboxSet> hitboxSets;
     std::vector<CAnimation> animations;
+    int modelAnimations = -1;  // descriptors in the model's table (asset-only ones follow)
     std::vector<CSequence> sequences;
     std::vector<std::string> textures;  // material names (rename applied)
     bool packedPositions = false;

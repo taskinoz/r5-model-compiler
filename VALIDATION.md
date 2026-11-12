@@ -15,7 +15,7 @@ Independent reader SHA-256: `294ecb9eff3f705a0e35c24fa8d83b77575abebcec3353c3f25
 
 ## Automated checks
 
-- All 70 native compiler/packaging/runtime-harness regressions pass on ordinary Python 3.10 and locked uv/Python 3.14.
+- All 73 native compiler/packaging/runtime-harness regressions pass on ordinary Python 3.10 and locked uv/Python 3.14.
 - Both CTest groups pass: convex-hull math and native compiler regressions. The
   inherited hull tests are not Apex physics emission evidence.
 - Complex-skinning tests exercise mixed 1/2/3/4/8/16-influence vertices across all
@@ -379,12 +379,14 @@ retail trace vertices sit up to 0.001 in above the stored render vertices.
 ### In game (R5R v2.6.52)
 
 `tools/build_r5r_collision_test.py` builds an S3 package (RPak SHA-256
-`e7c92367c420dd60ee4982af3917b3d9801250780cf976fbd7ea8eb93678961d`, compiler
-`394d5e4c...`, which writes quad and list leaves): static and physics boxes, an
+`35033d6a038b7204e0c7e1e6b48b8d116343f512ebf62368d2b0d0db693cb2c1`, compiler
+`261be5b46cd43351f28c83577dce5c943448181ef381822bd64bcdc18872cc09`): static and physics boxes, a
+physics box without `$keyvalues`, an
 L-shaped step with and without a PHY, a box without collision, a physics box built with
 `--no-bvh`, boxes of 16/32/64 in at 5/20/500 mass, a decompiled and rebuilt physics box,
-a decompiled and rebuilt retail rocket (`bangalore_rockets_projectile`) and a
-decompiled and rebuilt jointed bird (six solids), with retail controls (`error`,
+a decompiled and rebuilt retail rocket (`bangalore_rockets_projectile`) and the retail
+jointed bird (six solids) exported in full by `decompile54.py` and rebuilt unchanged,
+with retail controls (`error`,
 `coin`, `concrete_chunk02a`, the rocket and the bird). `ingame54.py --collision` spawns
 trace targets as `SOLID_VPHYSICS` prop_dynamics 240 in above the ground (as R5R's map
 editor does) and traces each point straight down three ways: an ordinary shot trace, a
@@ -392,7 +394,7 @@ solid-mask trace and a high-detail trace. It drops each physics model as a prop_
 from 160 in onto one level spot found by a ground search, samples it for 8 s, traces it
 and removes it; and turns each jointed model into a ragdoll. Expected heights come from
 the compiled BVH entries. Final run: passed, exit code 0; 204 traces of each kind (99
-ordinary and 149 high-detail ones checked against expectations), 7 drops and 2
+ordinary and 149 high-detail ones checked against expectations), 8 drops and 2
 ragdolls as declared. Report, netconsole and script logs:
 `test-output/r5r-collision/evidence`.
 
@@ -406,12 +408,20 @@ ragdolls as declared. Report, netconsole and script logs:
   the rebuilds. On the step with a PHY the two differ as the entries do: half an inch
   onto the low side an ordinary trace stops at 63.31 on the hull's slope, a high-detail
   one at 16.03 on the exact L.
+- The box without `$keyvalues` gets the compiler's default `prop_data` (retail's form)
+  and lands like the others; before that default a prop_physics without prop_data was
+  deleted on spawn.
 - Every physics drop settles on the ground within 0.13 in at under 0.07 in/s and is then
   hit by a trace. The rebuilt rocket rests at 6.719 in, exactly where retail's does.
   Without the BVH the box still lands but no trace hits it, so traces use the BVH.
-- Jointed: the rebuilt bird and the retail bird both switch to ragdolls (the server
-  entity is replaced within 0.3 s). Apex ragdolls are client-side, so their motion was
-  not measured; screenshots did not capture them (the birds fell out of view). Jointed
+- Jointed: the bird exported and rebuilt by these tools and the retail bird both switch
+  to ragdolls (the server entity is replaced within 0.3 s). The export keeps retail's
+  clip-less `ragdoll` descriptor (ACT_DIERAGDOLL); built that way for R5R, BecomeRagdoll
+  crashed (integer divide by zero, r5apex.exe+0x1CAEFA), and with the bind-pose clip that
+  `--external-assets` now embeds it switches like retail's. Ragdoll motion was not
+  measured: R5R has no server `prop_ragdoll`, the client copy of the prop disappears at
+  the switch, the ragdoll is not found by `GetClientEntArrayBySignifier` under ten
+  candidate classes, and screenshots did not capture the birds. Jointed
   BVH entries are not traced on a standing prop_dynamic, retail's or rebuilt: shot
   traces hit only retail's hitboxes, solid-mask traces neither.
 - Surfaces: traces report the model's `$surfaceprop` (our concrete and metal boxes 15
@@ -423,10 +433,52 @@ ragdolls as declared. Report, netconsole and script logs:
   stages the PHY, which RePak requires; a jointed model needs an `ACT_DIERAGDOLL`
   sequence to become a ragdoll (the render-only export drops it, so the test adds one).
 
+## Full native export (12 November 2026)
+
+`decompile54.py` now exports model keyvalues, hitbox sets and clip-less (reference-pose)
+sequence descriptors, and accepts the external-rig include count of -1, so the full
+(non-render-only) export covers most retail models; `roundtrip54.py` compares keyvalues
+byte for byte, hitbox sets (bones, groups, names, crit overrides, hit data groups,
+boxes within 0.0001 in) and, in full mode too, the PHY and BVH. The compiler writes
+retail's compact keyvalue form with a default `prop_data`.
+
+Corpus: every installed model, full mode (S0 360, S1 420, S2 428, S3 581), and every
+model with a BVH in `--render-only --with-physics` mode, as before. Compiler SHA-256
+`8abcc24daaadfcc634b63d6711630aa12028f4d3cec1cd2b4a02ff5e7b1f222e` (the final
+`261be5b4...` differs only in `--external-assets` output, which these runs do not use);
+tools roundtrip54 `6e5e2410...`, decompile54 `9abe2055...`, compare_bvh54 `b5fbf041...`,
+bvh54 `819009db...`, compare_phy54 `3cfbb654...`, phy54 `90dd10e5...`, validate54
+`75a1a51a...`, mdl54 `294ecb9e...`. Limits unchanged.
+
+| Season | Full mode: pass / refused / differ | Render + physics: pass / 1,128 |
+| --- | --- | --- |
+| S0 | 260 / 97 / 3 | 227 / 229 |
+| S1 | 315 / 102 / 3 | 270 / 272 |
+| S2 | 324 / 102 / 2 | 271 / 273 |
+| S3 | 419 / 160 / 2 | 351 / 354 |
+
+- Refused (460, plus w_bloodhound_axe): RUI panels (346), procedural bones (81) or
+  both (33), which the native export does not support yet; the decompiler says so.
+- Differences: the PHY and BVH cases explained above (wood_gib01c, tablet_mini,
+  wood_gib01d), and `pov_pilot_medium_bloodhound_legendary_02` in S0 and S1, whose
+  normals differ by up to 0.103 (limit 0.006). This first-person model had not been
+  rebuilt before (the export refused its include count of -1); the cause is not known.
+- Found by this run: retail clip-less descriptors exist with and without the
+  single-frame bit, so the export keeps it as stored and the compiler adds it only to
+  sequences with clips.
+- Known limit: a rigid physics model with an embedded first animation round-trips its
+  PHY only within the animation's rotation quantization. The compiler poses the rigid
+  hull by animation 0 frame 0 (studiomdl's rule), using the exact source angle; the
+  native format stores rotations in steps of 0.00019175 rad, in which the root's 90
+  degrees (8,191.75 steps) cannot be stored exactly, so a full rebuild sees it 4.8e-5 rad
+  off (the physics example: 0.0022 in at 45 in radius). No retail model is affected
+  (none embeds a first animation in a rigid physics model); the package check
+  round-trips the physics example in render + PHY mode.
+
 ## Remaining limitations
 
-- Measuring client-side ragdoll motion in game, exporting what a ragdoll needs
-  (`ACT_DIERAGDOLL` sequences, include models) in the native export, procedural
+- Measuring client-side ragdoll motion in game (not reachable from R5R scripts),
+  the normal difference of pov_pilot_medium_bloodhound_legendary_02, procedural
   bones, RUI, importing arbitrary
   existing rig dependencies, native asset-GUID layers, IK rules, transition
   nodes and followers. Export also rejects sequence keyvalues, transitions and

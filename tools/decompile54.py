@@ -134,6 +134,51 @@ def export_physics(m, out, target):
     return lines
 
 
+def export_keyvalues(m):
+    """The model keyvalues (studiohdr 0x140) as a $keyvalues block. Retail text is compact,
+    `mdlkeyvalue{prop_data{base "X"}}`; the compiler writes the same form back."""
+    import re
+    index,size=m.get('i',0x140),m.get('i',0x144)
+    if not size: return []
+    text=m.data[index:index+size].split(b'\0')[0].decode('utf-8')
+    tokens=re.findall(r'"[^"]*"|[{}]|[^\s{}"]+',text)
+    if tokens[:2]!=['mdlkeyvalue','{'] or tokens[-1]!='}': raise ValueError('unexpected model keyvalue text')
+    lines=['$keyvalues','{']; depth=1; i=2
+    while i<len(tokens)-1:
+        t=tokens[i]
+        if t=='}': depth-=1; lines.append('  '*depth+'}'); i+=1; continue
+        key=t.strip('"')
+        if i+1<len(tokens) and tokens[i+1]=='{':
+            lines+=['  '*depth+key,'  '*depth+'{']; depth+=1; i+=2
+        else:
+            lines.append('  '*depth+qc_quote(key)+' '+qc_quote(tokens[i+1].strip('"'))); i+=2
+    if depth!=1: raise ValueError('unbalanced model keyvalue text')
+    return lines+['}']
+
+
+def export_hitboxes(m):
+    """Hitbox sets (studiohdr 0xB0/0xB4; 0x2C-byte boxes: bone, group, min, max, name,
+    crit override, hit data group). Models whose hitboxes were generated (header flag 1)
+    get none, so the compiler generates them again."""
+    if m.get('i',0x9C)&1: return []
+    lines=[]
+    count,index=m.get('i',0xB0),m.get('i',0xB4)
+    for s in range(count):
+        p=index+12*s
+        name=m.string(p+m.get('i',p)); boxes=m.get('i',p+4); start=p+m.get('i',p+8)
+        lines.append('$hboxset '+qc_quote(name))
+        for k in range(boxes):
+            q=start+0x2C*k
+            bone,group=m.get('i',q),m.get('i',q+4)
+            box=list(m.get('3f',q+8))+list(m.get('3f',q+0x14))
+            off=m.get('i',q+0x20); label=m.string(q+off) if off else ''
+            crit=m.get('i',q+0x24); off=m.get('i',q+0x28); hitdata=m.string(q+off) if off else ''
+            if not 0<=bone<len(m.bones): raise ValueError('hitbox bone outside the skeleton')
+            lines.append('$hbox '+str(group)+' '+qc_quote(m.bones[bone]['name'])+' '+' '.join(format(x,'.9g') for x in box)
+                         +' '+qc_quote(label)+' '+str(crit)+(' '+qc_quote(hitdata) if hitdata else ''))
+    return lines
+
+
 def decompile(path, outdir, target, *, render_only=False, with_physics=False):
     m=Model(path,target); out=Path(outdir); out.mkdir(parents=True,exist_ok=True)
     # Unsupported information is never silently claimed to roundtrip.
@@ -143,6 +188,9 @@ def decompile(path, outdir, target, *, render_only=False, with_physics=False):
     for label,offset in [('RUI',0x12C),
                          ('procedural bones',0x198),('followers',0x1E8),('include models',0x158),
                          ('IK autoplay locks',0x148),('transition nodes',0xFC)]:
+        # include-model count -1 is not an include model: it is the external-rig linkage
+        # (the loader builds the virtual rig from asset references), 386 of 581 S3 models
+        if offset==0x158 and m.get('i',offset)==-1: continue
         if m.get('i',offset): unsupported.append(label)
     if any(b['proctype'] for b in m.bones): unsupported.append('bone procedures')
     if unsupported and not render_only:
@@ -210,6 +258,7 @@ def decompile(path, outdir, target, *, render_only=False, with_physics=False):
         lines+=['$lod '+format(distance,'.9g')+' {']
         lines+=['  replacemodel '+qc_quote(f'mesh{mi}_lod0.dmx')+' '+qc_quote(f'mesh{mi}_lod{li}.dmx') for mi in range(len(m.meshes))]
         lines+=['}']
+    lines+=export_keyvalues(m)+export_hitboxes(m)
     for a in m.attachments:
         lines+=['$attachment '+qc_quote(a['name'])+' '+qc_quote(m.bones[a['bone']]['name'])+' 0 0 0 matrix '+' '.join(format(x,'.9g') for x in a['matrix'])]
     if not render_only:
@@ -219,7 +268,8 @@ def decompile(path, outdir, target, *, render_only=False, with_physics=False):
             if any(m.get('i',p+off) for off in (0x40,0x64,0x70,0x74,0x78,0x88,0x8C,0x90,0x94,0xA4,0xB0,0xCC)) or any(m.get('f',p+off) for off in (0x7C,0x80,0x84)):
                 raise ValueError('sequence nodes/layers/IK/keyvalues need a richer native export')
             meta=m.sequence_metadata(seq)
-            if not seq['animations']: raise ValueError('reference-pose sequence without an embedded animation is not yet exportable')
+            # a 1x1 descriptor without a clip holds the reference pose (retail ref, ragdoll)
+            reference=not seq['animations']
             if seq['flags'] & ~0xA47BF: raise ValueError('unsupported sequence flags')
             names=[]
             for ai,desc in enumerate(seq['animations']):
@@ -248,8 +298,9 @@ def decompile(path, outdir, target, *, render_only=False, with_physics=False):
             weightname=f'r5c_weights_{si}'
             lines+=['$weightlist '+qc_quote(weightname)+' {']
             lines+=['  '+qc_quote(b['name'])+' '+format(w,'.9g') for b,w in zip(m.bones,meta['weights'])]
-            lines+=['}', '$sequence '+qc_quote(seq['name'])+' {','  '+' '.join(qc_quote(n) for n in names),
-                    '  seqflags '+str(seq['flags']&~0xA0000),'  seqweights '+qc_quote(weightname),
+            lines+=['}', '$sequence '+qc_quote(seq['name'])+' {','  referencepose' if reference else '  '+' '.join(qc_quote(n) for n in names),
+                    # a clip-less descriptor keeps its single-frame bit (retail has both)
+                    '  seqflags '+str(seq['flags']&~(0x20000 if reference else 0xA0000)),'  seqweights '+qc_quote(weightname),
                     '  blendwidth '+str(meta['grid'][0]),
                     '  fadein '+format(meta['fade'][0],'.9g')+' fadeout '+format(meta['fade'][1],'.9g'),
                     '  bbox '+' '.join(format(x,'.9g') for x in meta['bounds']),

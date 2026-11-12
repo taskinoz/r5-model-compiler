@@ -103,7 +103,8 @@ def _uncovered(entry, candidates, tol, reverse=False):
 
 def _render(path):
     from mdl54 import Model, PROFILES
-    data = open(path, 'rb').read()
+    with open(path, 'rb') as f:
+        data = f.read()
     for target in ('s3', 's2', 's1', 's0'):  # the render reader needs the profile
         try:
             return [tuple(tuple(v['pos']) for v in t) for mesh in Model(path, target).render()[0] for t in mesh['triangles']]

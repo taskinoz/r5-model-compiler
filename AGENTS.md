@@ -37,6 +37,11 @@ Read README.md, VALIDATION.md and docs/mdl-v54-format.md before changing writers
   locals ("Too many locals"), so generated probes call helper functions; ragdolls are
   client-side (the server only sees its entity replaced) and need an ACT_DIERAGDOLL
   sequence; traces report the model's $surfaceprop, not the BVH surface table.
+  An empty (clip-less) ragdoll descriptor crashes BecomeRagdoll in a RePak build
+  (divide by zero), so --external-assets embeds the bind-pose clip; `ref` must stay
+  empty. R5R has no server prop_ragdoll, and client ragdolls are not found by
+  GetClientEntArrayBySignifier, so ragdoll motion is not script-measurable there.
+  Retail keyvalues are always compact `mdlkeyvalue{prop_data{base "X"}}`.
 - GPL/AGPL references may be consulted, not copied into this MIT implementation.
 - Run Python on extracted data with -I, with scripts outside the extraction folder.
 - Packaging follows R1: package.ps1, check_package.ps1, tag-driven release.yml.

@@ -372,6 +372,69 @@ class Compiler54(unittest.TestCase):
         self.assertEqual((len(entry['quads']),len(entry['plain'])),(1,2))
         self.assertEqual(compare(out,out)['issues'],[])  # the trace still equals the render triangles
 
+    def test_keyvalues_retail_form(self):
+        import bvh54
+        def kv(path):
+            data=path.read_bytes(); i,n=struct.unpack_from('<2i',data,0x140); return data[i:i+n]
+        # every surveyed S0-S3 model: compact text, a prop_data base, two trailing NULs
+        out,_=self.run_compiler(name='kv_default')
+        self.assertEqual(kv(out),b'mdlkeyvalue{prop_data{base ""}}\n\0\0')
+        out,_=self.run_compiler(self.qc+'$keyvalues { prop_data { "base" "Metal.Small" } }\n',name='kv_base')
+        self.assertEqual(kv(out),b'mdlkeyvalue{prop_data{base "Metal.Small"}}\n\0\0')
+        # other keys keep the compact form, and allowstatic still gives the trace mesh
+        out,_=self.run_compiler(self.qc+'$keyvalues { prop_data { "base" "Wooden.Small" "allowstatic" "1" } }\n',
+                                target='s3',name='kv_allow')
+        self.assertEqual(kv(out),b'mdlkeyvalue{prop_data{base "Wooden.Small" allowstatic "1"}}\n\0\0')
+        self.assertEqual(bvh54.from_model(out)['trace'],0)
+
+    def test_reference_pose_sequences(self):
+        from pack54 import SequenceAsset
+        qc=self.qc+'$sequence "ragdoll" {\n  referencepose\n  activity "ACT_DIERAGDOLL" 1\n}\n'
+        plain,_=self.run_compiler(qc,target='s3',name='refpose')
+        model=Model(plain,'s3')
+        ragdoll=next(s for s in model.sequences if s['name']=='ragdoll')
+        # the model keeps a descriptor without a clip, as retail's bird does
+        self.assertEqual(ragdoll['animations'],[])
+        self.assertEqual(model.sequence_metadata(ragdoll)['activity'],'ACT_DIERAGDOLL')
+        # a descriptor without a clip keeps the flags it is given (retail has both forms)
+        self.assertEqual(ragdoll['flags']&0x80000,0)
+        single,_=self.run_compiler(qc.replace('  referencepose\n','  referencepose\n  seqflags 524288\n'),target='s3',name='refpose_single')
+        self.assertEqual(next(x for x in Model(single,'s3').sequences if x['name']=='ragdoll')['flags']&0x80000,0x80000)
+        self.assertEqual(model.get('2i',ragdoll['offset']+0x44),(1,1))
+        # runtime builds: the descriptor embeds the bind-pose clip (R5R divides by its
+        # frame count otherwise); `ref` stays empty; the sequence asset carries the clip
+        out,_=self.run_compiler(qc,target='s3',name='refpose_ext',extra=['--external-assets'])
+        model=Model(out,'s3'); rig=Model(out.with_suffix('.rrig'),'s3')
+        names=[s['name'] for s in model.sequences]
+        self.assertEqual(names[0],'ref'); self.assertEqual(model.sequences[0]['animations'],[])
+        index=names.index('ragdoll')
+        self.assertEqual(len(model.sequences[index]['animations']),1)
+        asset=SequenceAsset(out.with_suffix('.seq%d.rseq'%index),rig)
+        (seq,)=asset.sequences
+        self.assertEqual([len(asset.animation(d)) for d in seq['animations']],[1])
+        self.assertEqual(asset.sequence_metadata(seq)['activity'],'ACT_DIERAGDOLL')
+        with self.assertRaises(AssertionError):  # a referencepose sequence takes no clip
+            self.run_compiler(self.qc+'$sequence "bad" {\n  referencepose\n  "mesh.smd"\n}\n',name='refpose_bad',ok=True)
+
+    def test_hitboxes_and_keyvalues_round_trip(self):
+        from decompile54 import decompile
+        from roundtrip54 import compare_extras
+        qc=self.qc+('$hboxset "default"\n$hbox 3 "root" -1 -2 -3 4 5 6 "body" 1 "hitdata"\n'
+                    '$hbox 0 "arm" 0 0 0 1 1 1\n$keyvalues { prop_data { "base" "Glass.Window" } }\n')
+        out,_=self.run_compiler(qc,target='s3',name='hb')
+        source=decompile(out,self.work/'hb_src','s3')
+        text=source.read_text()
+        self.assertIn('$hbox 3 "root" -1 -2 -3 4 5 6 "body" 1 "hitdata"',text)
+        self.assertIn('"base" "Glass.Window"',text)
+        def build(qc_text,name):  # beside the exported meshes it refers to
+            q=source.with_name(name+'.qc'); q.write_text(qc_text); target=source.with_name(name+'.rmdl')
+            run=subprocess.run([str(self.compiler),'--target','s3','-quiet','-o',str(target),str(q)],capture_output=True,text=True,timeout=40)
+            self.assertEqual(run.returncode,0,run.stdout+run.stderr); return target
+        self.assertEqual(compare_extras(out,build(text,'hb_rebuilt'),'s3')['issues'],[])
+        # the comparison notices a changed keyvalue and a changed box
+        changed=build(text.replace('Glass.Window','Glass.Pane').replace('-1 -2 -3 4 5 6','-1 -2 -3 4 5 7'),'hb_changed')
+        self.assertEqual(len(compare_extras(out,changed,'s3')['issues']),2)
+
     def test_phy_face_limit_fails_explicitly(self):
         # a 40-sided prism: its caps exceed the 32 vertices a native face can hold
         ring=[(math.cos(2*math.pi*k/40)*4,math.sin(2*math.pi*k/40)*4) for k in range(40)]
@@ -631,13 +694,17 @@ class Compiler54(unittest.TestCase):
         m=Model(out,'s0')
         with self.assertRaisesRegex(ValueError,'blend grid'): m.sequence_metadata(m.sequences[0])
 
-    def test_reference_descriptor_is_not_an_embedded_clip(self):
+    def test_reference_descriptor_exports_as_reference_pose(self):
         out,_=self.run_compiler(); m=Model(out,'s0'); data=bytearray(out.read_bytes())
         p=m.sequences[0]['offset']; struct.pack_into('<i',data,p+0x38,0); out.write_bytes(data)
         reference=m; m=Model(out,'s0'); self.assertEqual(m.sequence_metadata(m.sequences[0])['grid'],(1,1))
         self.assertIn('sequence 0 blend count',compare_animation_metadata(m,reference))
-        with self.assertRaisesRegex(ValueError,'without an embedded animation'):
-            decompile(out,self.work/'refexport','s0')
+        # it exports as a referencepose sequence and rebuilds as a descriptor without a clip
+        source=decompile(out,self.work/'refexport','s0')
+        self.assertIn('  referencepose',source.read_text())
+        rebuilt,_=self.run_compiler(source.read_text(),target='s0',name='refrebuilt',extra=['-path',str(source.parent)])
+        r=Model(rebuilt,'s0'); self.assertEqual(r.sequences[0]['animations'],[])
+        self.assertEqual(r.sequence_metadata(r.sequences[0])['grid'],(1,1))
 
     def test_single_frame_events_and_delta_roundtrip(self):
         write_smd(self.work/'delta.smd',self.bones,[[((.5,0,0),(0,0,.2),(0,0,0)),((0,.2,0),(.1,0,0),(0,0,0))]])

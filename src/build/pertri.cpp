@@ -38,9 +38,10 @@ void BuildPerTriAABB(BuildContext& ctx) {
     // static props, and props that may become static (prop_data "allowstatic" "1"),
     // get the tree; everything else is version 0, header only
     const std::string& kv = ctx.out.keyValues;
-    size_t at = kv.find("\"allowstatic\"");
-    if (at != std::string::npos) at = kv.find_first_not_of(' ', at + 13);
-    bool allowStatic = at != std::string::npos && kv.compare(at, 3, "\"1\"") == 0;
+    // compact keyvalue text: allowstatic "1" (the key unquoted, see ApexKeyValues)
+    size_t at = kv.find("allowstatic");
+    if (at != std::string::npos) at = kv.find_first_not_of(" \"", at + 11);
+    bool allowStatic = at != std::string::npos && kv.compare(at, 2, "1\"") == 0;
     if (ctx.qc.perTriMode != 2 && !ctx.qc.staticProp && !allowStatic) return;
     ctx.out.bvhTrace = true;
 

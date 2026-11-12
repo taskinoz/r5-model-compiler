@@ -15,10 +15,15 @@ try {
             $model = Join-Path $work ("out\$target\" + $qc.BaseName + '.rmdl')
             & $exe --target $target -quiet -o $model $qc.FullName
             if ($LASTEXITCODE) { throw "Compiling $($qc.Name) for $target failed." }
-            $models += $model
+            if ($qc.BaseName -ne 'physics_box') { $models += $model }
         }
         & python -I (Join-Path $work 'tools\roundtrip54.py') --target $target --compiler $exe --out (Join-Path $work "roundtrip\$target") @models
         if ($LASTEXITCODE) { throw "Packaged $target examples did not round-trip." }
+        # The physics example embeds its first animation, which the native format stores
+        # with the root's 90 degrees rounded (0.00019175 rad steps); a full rebuild poses its
+        # hull with that rounded angle (see VALIDATION.md), so it round-trips render + PHY.
+        & python -I (Join-Path $work 'tools\roundtrip54.py') --target $target --compiler $exe --out (Join-Path $work "roundtrip-phy\$target") --render-only --with-physics (Join-Path $work "out\$target\physics_box.rmdl")
+        if ($LASTEXITCODE) { throw "Packaged $target physics example did not round-trip." }
         # the physics example writes a native PHY the packaged reader accepts
         & python -I (Join-Path $work 'tools\phy54.py') (Join-Path $work "out\$target\physics_box.phy") --target $target | Out-Null
         if ($LASTEXITCODE) { throw "Packaged $target physics example has no valid PHY." }
@@ -29,7 +34,7 @@ try {
         & python -I (Join-Path $work "tools\$tool") --help | Out-Null
         if ($LASTEXITCODE) { throw "Packaged $tool did not start." }
     }
-    Write-Output 'Package check passed: seven examples, four targets, 28 round trips, PHY and BVH checked.'
+    Write-Output 'Package check passed: seven examples, four targets, 28 round trips (physics in render + PHY mode), PHY and BVH checked.'
 } finally {
     $resolvedWork = [IO.Path]::GetFullPath($work)
     $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())

@@ -977,6 +977,10 @@ void Parser::CmdSequence(bool declare) {
             seq.actWeight = I("weight");
             return true;
         }
+        if (Is("referencepose")) {
+            seq.referencePose = true;
+            return true;
+        }
         if (StartsWithI(T(), "ACT_")) {
             seq.activity = T();
             seq.actWeight = I("weight");
@@ -1205,6 +1209,32 @@ void Parser::CmdSequence(bool declare) {
             anims.push_back(ImpliedAnimation(seq.name, T()));
         return true;
     });
+    if (seq.referencePose) {
+        if (!anims.empty()) Fatal("%s: referencepose sequence \"%s\" cannot have animations", tk_.Where().c_str(), seq.name.c_str());
+        if (!seq.events.empty() || !seq.layers.empty() || !seq.ikLocks.empty())
+            Fatal("%s: referencepose sequence \"%s\" cannot have events, layers or IK locks", tk_.Where().c_str(), seq.name.c_str());
+        seq.groupSize[0] = seq.groupSize[1] = 1;
+        // The model keeps a descriptor without a clip, as retail does; the standalone
+        // sequence asset needs a clip (R5R divides by its frame count when a ragdoll
+        // evaluates ACT_DIERAGDOLL), so it carries one bind-pose frame from the first body.
+        const std::string poseName = "@r5c_referencepose";
+        if (m_.FindAnimation(poseName) < 0) {
+            std::string file;
+            for (auto& bp : m_.bodyParts)
+                for (auto& sm : bp.models)
+                    if (file.empty() && !sm.blank && !sm.file.empty()) file = sm.file;
+            if (file.empty()) Fatal("%s: referencepose sequence \"%s\" needs a $body before it", tk_.Where().c_str(), seq.name.c_str());
+            auto pose = ImpliedAnimation("r5c_referencepose", file);
+            pose->assetOnly = true;
+            pose->endFrame = pose->startFrame;  // one frame
+        }
+        seq.assetPose = poseName;
+        if (existing >= 0)
+            m_.sequences[existing] = seq;
+        else
+            m_.sequences.push_back(seq);
+        return;
+    }
     if (anims.empty()) Fatal("%s: sequence \"%s\" has no animations", tk_.Where().c_str(), seq.name.c_str());
     int numblends = static_cast<int>(anims.size());
     if (seq.groupSize[0] == 0) {

@@ -188,6 +188,7 @@ struct QcAnimCmd {
 
 struct QcAnimation {
     std::string name;
+    bool assetOnly = false;  // only in standalone sequence assets (a referencepose clip)
     std::string file;
     std::shared_ptr<Source> source;
     float sourceScale = 1.f;  // $scale in effect when the file was loaded
@@ -271,6 +272,9 @@ struct QcSequence {
     bool bboxSet = false;  // "bbox" (r2c extension): the stored box instead of a computed one
     Vec3 bboxMin, bboxMax;
     bool isOverride = false;  // $declaresequence
+    std::string assetPose;  // referencepose: the bind-pose clip its sequence asset carries
+    bool referencePose = false;  // "referencepose" (r5 extension): a 1x1 descriptor without
+                                 // a clip, holding the reference pose (retail ref/ragdoll)
 };
 
 struct QcJiggleBone {

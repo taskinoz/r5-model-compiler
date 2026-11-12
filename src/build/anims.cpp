@@ -1435,6 +1435,7 @@ void ProcessIKRules(BuildContext& ctx) {
     // sequence number their rules (others keep index 0, as studiomdl leaves them)
     for (auto& s : ctx.out.sequences) {
         s.numIKRules = 0;
+        if (s.animIndices.empty()) continue;  // reference-pose descriptor
         for (int16_t ai : s.animIndices) s.numIKRules = std::max(s.numIKRules, static_cast<int>(ctx.anims[ai].ikRules.size()));
         const auto& first = ctx.anims[s.animIndices[0]].ikRules;
         for (int16_t ai : s.animIndices) {
@@ -1513,6 +1514,7 @@ void EncodeAnimations(BuildContext& ctx) {
             // trailing section with only the final frame
             ca.sections.push_back(EncodeChain(ctx, a, posScales, a.numFrames - 1, a.numFrames - 1));
         }
+        ca.assetOnly = a.qc && a.qc->assetOnly;
         ctx.out.animations.push_back(std::move(ca));
     }
 }

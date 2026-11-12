@@ -185,8 +185,33 @@ def collision_probe(models,literal):
            '  phys.Destroy()',
            '  wait 0.5',  # removal completes after the frame
            '}',
-           # Apex ragdolls are client-side: the server entity is replaced, so the server
-           # records only that the switch happened; the result is checked on screenshots
+           # a server-side ragdoll (prop_ragdoll) dropped from 100 units: sampled while it
+           # falls and settles, then traced from above
+           'void function R5C_ServerRagdoll( asset model, int i, vector rest, entity player )','{',
+           '  entity r = CreateEntity( "prop_ragdoll" )',
+           '  r.SetValueForModelKey( model )',
+           '  r.SetOrigin( rest + <0,0,100> )',
+           '  r.SetAngles( <0,0,0> )',
+           '  DispatchSpawn( r )',
+           '  file.props.append( r )',
+           '  float started = Time()',
+           '  for ( int sample = 0; sample < 16; sample++ )','  {',
+           '    wait 0.5',
+           f'    if ( !IsValid( r ) ) {{ print( format( "R5C_COL_SRAG_GONE %d{nl}", i ) ); return }}',
+           '    vector p = r.GetOrigin()',
+           f'    print( format( "R5C_COL_SRAG %d %.2f %.4f %.4f %.4f %.4f{nl}", i, Time() - started, p.x - rest.x, p.y - rest.y, p.z - rest.z, Length( r.GetVelocity() ) ) )',
+           '  }',
+           '  vector q = r.GetOrigin()',
+           '  array<vector> offsets = [ <0,0,0>, <4,0,0>, <-4,0,0>, <0,4,0>, <0,-4,0> ]',
+           '  foreach ( vector o in offsets )','  {',
+           '    TraceResults t = TraceLine( q + o + <0,0,150>, q + o - <0,0,30>, [player], TRACE_MASK_SOLID, TRACE_COLLISION_GROUP_NONE )',
+           f'    print( format( "R5C_COL_SRAGTRACE %d %.1f %.1f %.4f %d %s{nl}", i, o.x, o.y, t.endPos.z - rest.z, t.hitEnt == r ? 1 : 0, IsValid( t.hitEnt ) ? t.hitEnt.GetClassName() : "-" ) )',
+           '  }',
+           '  r.Destroy()',
+           '  wait 0.5',
+           '}',
+           # Apex BecomeRagdoll ragdolls are client-side: the server entity is replaced, so
+           # the server records only that the switch happened
            'void function R5C_Ragdoll( asset model, int i, vector spot )','{',
            '  entity rag = CreatePropDynamic( model, spot + <0,0,60>, <0,0,0>, SOLID_VPHYSICS )',
            '  file.props.append( rag )',
@@ -194,7 +219,7 @@ def collision_probe(models,literal):
            '  rag.BecomeRagdoll( <0,0,0>, false )',
            '  float started = Time()',
            '  while ( IsValid( rag ) && Time() - started < 3.0 ) wait 0.1',
-           f'  print( format( "R5C_COL_RAGDOLL %d %d %.2f{nl}", i, IsValid( rag ) ? 0 : 1, Time() - started ) )',
+           f'  print( format( "R5C_COL_RAGDOLL %d %d %.2f %.3f{nl}", i, IsValid( rag ) ? 0 : 1, Time() - started, spot.z ) )',
            '  if ( IsValid( rag ) ) rag.Destroy()',
            '}',
            # its global declaration is with the others at the top of the probe
@@ -217,18 +242,19 @@ def collision_probe(models,literal):
         lines+=[f'  R5C_TracePair( {i}, prop, origin, {dx:.3f}, {dy:.3f}, player )' for dx,dy in points]
     drop_list=[(i,m,d,onto) for i,m in enumerate(models) for d,(onto,want) in enumerate(m.get('physics_drops',[]))]
     ragdolls=[(i,m) for i,m in enumerate(models) if m.get('ragdoll')]
-    if drop_list or ragdolls:
+    server_ragdolls=[(i,m) for i,m in enumerate(models) if m.get('server_ragdoll') is not None]
+    if drop_list or ragdolls or server_ragdolls:
         lines+=['  vector flat = R5C_FlatSpot( player, base )']
     for i,model,d,onto in drop_list:
         rest=f'placed[{literal(onto)}]' if onto else 'flat'
         lines+=[f'  R5C_Drop( ${literal(model["path"])}, {i}, {d}, {rest}, player )']
-    # ragdolls side by side on the level spot, with earlier props removed and the player
-    # 150 units back looking down at it, then left to settle for the screenshot the
-    # harness takes at the end of the probe
+    for i,model in server_ragdolls:
+        lines+=[f'  R5C_ServerRagdoll( ${literal(model["path"])}, {i}, flat, player )']
+    # client ragdolls on the level spot, earlier props removed
     if ragdolls:
         lines+=['  R5C_Cleanup()','  wait 0.5']
     for k,(i,model) in enumerate(ragdolls):
-        lines+=[f'  {{ vector c = player.GetOrigin() + forward * 130 + right * {(k-(len(ragdolls)-1)/2)*50:.1f}',
+        lines+=[f'  {{ vector c = flat + right * {(k-(len(ragdolls)-1)/2)*50:.1f}',
                 '    TraceResults g = TraceLine( c + <0,0,100>, c - <0,0,200>, [player], TRACE_MASK_SOLID, TRACE_COLLISION_GROUP_NONE )',
                 f'    R5C_Ragdoll( ${literal(model["path"])}, {i}, g.endPos ) }}']
     if ragdolls:
@@ -350,6 +376,7 @@ def write_probe(runtime,models,controls=()):
     visual=['global function CodeCallback_RFiveCompiler_Test_ModInit',
             'global function R5C_Visual',
             'global function R5C_VisualSelect',
+            'global function R5C_ClientRagdolls',
             'struct { array<entity> props } file',
             'void function CodeCallback_RFiveCompiler_Test_ModInit() {}',
             'void function R5C_Visual()', '{',
@@ -382,6 +409,32 @@ def write_probe(runtime,models,controls=()):
                 if not 0<=cycle<=1: raise ValueError('visual cycle must be between zero and one')
                 visual+=[f'  if ( selected == {i} ) {{ file.props[{i}].SetCycle( {cycle:.6f} ); file.props[{i}].Anim_SetPaused( true ) }}']
     visual+=['  print( "R5C_VIS_SELECTED\\n" )','}']
+    # client ragdolls: client prop_dynamics of a ragdoll model are sampled every 0.5 s for
+    # 6 s. In R5R v2.6.52 the client copy disappears at the switch and the ragdoll itself
+    # is not found under any of the classes below, so this records only the switch
+    rag=[(i,m) for i,m in enumerate(list(models)+list(controls)) if m.get('ragdoll')]
+    visual+=['void function R5C_ClientRagdolls() { thread R5C_ClientRagdollSamples() }',
+             'void function R5C_ClientRagdollSamples()','{',
+             ('  array<asset> names = [ '+', '.join('$'+literal(m['path']) for _,m in rag)+' ]') if rag else '  array<asset> names',
+             ('  array<int> indices = [ '+', '.join(str(i) for i,_ in rag)+' ]') if rag else '  array<int> indices',
+             # candidate client classes for the ragdoll (exploratory): each match is
+             # reported with its class index
+             '  array<string> classes = [ "prop_dynamic", "client_ragdoll", "C_ClientRagdoll", "prop_ragdoll", "ragdoll", "prop_physics", "C_RagdollProp", "C_BaseAnimating", "dynamic_prop", "class C_ClientRagdoll" ]',
+             '  float started = Time()',
+             '  for ( int sample = 0; sample < 13; sample++ )','  {',
+             '    for ( int c = 0; c < classes.len(); c++ )','    {',
+             '      foreach ( entity e in GetClientEntArrayBySignifier( classes[c] ) )','      {',
+             '        int k = names.find( e.GetModelName() )',
+             '        if ( k >= 0 )','        {',
+             '          int a = e.LookupAttachment( "ORIGIN" )',
+             '          vector p = a > 0 ? e.GetAttachmentOrigin( a ) : e.GetOrigin()',
+             '          print( format( "R5C_CRAG %d %.2f %.3f %.3f %.3f %d %d\\n", indices[k], Time() - started, p.x, p.y, p.z, a, c ) )',
+             '        }',
+             '      }',
+             '    }',
+             '    wait 0.5',
+             '  }',
+             '  print( "R5C_CRAG_DONE\\n" )','}']
     (scripts/'r5c_visual.nut').write_text('\n'.join(visual)+'\n')
     (scripts/'scripts.rson').write_text('When: "SERVER"\nScripts:\n[\n r5c_probe.nut\n]\nWhen: "CLIENT"\nScripts:\n[\n r5c_visual.nut\n]\n')
 
@@ -528,6 +581,9 @@ def main():
                     f.write(text); f.flush(); log+=text
                     if not probe_started and text.strip()=='R5C_VM_READY':
                         connection.command('script R5C_Run()'); probe_started=True
+                    if 'R5C_COL_RAGDOLL ' in text and 'R5C_CRAG_STARTED' not in log:
+                        # the first ragdoll exists: sample the client side while it falls
+                        log+='R5C_CRAG_STARTED\n'; connection.command('script_client R5C_ClientRagdolls()')
                     if 'R5C_DONE' in text and a.collision and 'R5C_COL_DONE' not in log:
                         if 'R5C_COL_STARTED' not in log:
                             log+='R5C_COL_STARTED\n'; connection.command('script R5C_Collision()')
@@ -562,6 +618,12 @@ def main():
             if attempt<12: time.sleep(0.5)
         (runtime/'r5c-script.log').write_text(native_log,encoding='utf-8')
         report['visual']=summarize_visual(native_log,len(package['models']))
+        if a.collision:
+            import re
+            samples={}
+            for i,t,x,y,z,att,cls in re.findall(r'R5C_CRAG (\d+) (\S+) (\S+) (\S+) (\S+) (-?\d+) (\d+)',native_log):
+                samples.setdefault(i,[]).append(dict(time=float(t),origin=[float(x),float(y),float(z)],attachment=int(att),client_class=int(cls)))
+            report['collision']['client_ragdolls']=samples
         report['failures']+=report['visual']['failures']
         if process.poll() not in (None,0):
             report['failures'].append('R5R exited with code '+str(process.poll()))

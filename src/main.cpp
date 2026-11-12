@@ -178,10 +178,24 @@ int main(int argc, char** argv) {
         if(externalAssets && (model.sequences.empty() || model.sequences.front().label!="ref")) {
             CSequence reference;
             reference.label="ref";
+            reference.flags=0x80000;  // STUDIO_SINGLEFRAME, as retail's ref descriptors
             reference.weights.assign(model.bones.size(),1.f);
             model.sequences.insert(model.sequences.begin(),reference);
         }
         model.externalAssetRig = externalAssets;
+        if (externalAssets) {
+            // Runtime builds: R5R evaluates a referencepose sequence's own descriptor (an
+            // empty ragdoll descriptor divides by zero in BecomeRagdoll), so these embed the
+            // bind-pose clip their assets carry. `ref` stays empty (R5R rejects a clip
+            // there). Plain builds keep retail's empty descriptors.
+            bool embedded = false;
+            for (auto& seq : model.sequences)
+                if (seq.animIndices.empty() && seq.assetAnim >= 0 && seq.label != "ref") {
+                    seq.animIndices = {static_cast<int16_t>(seq.assetAnim)};
+                    embedded = true;
+                }
+            if (embedded) model.modelAnimations = static_cast<int>(model.animations.size());
+        }
         // Keep embedded playback data while also linking the RPak rig assets.
         std::vector<uint8_t> mdl = WriteMDL(model,target=="s2" || target=="s3");
         auto read32=[&](size_t p) { int32_t v; std::memcpy(&v,mdl.data()+p,4); return v; };

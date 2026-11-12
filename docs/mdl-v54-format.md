@@ -306,6 +306,26 @@ confirmed in R5R where noted.
   rebuilt (TRACE_MASK_SHOT hits hitboxes instead).
 
 
+## Keyvalues, hitboxes and reference-pose sequences
+
+- Keyvalues (0x140 offset, 0x144 size): in all 1,789 S0-S3 models exactly
+  `mdlkeyvalue{prop_data{base "X"}}` plus a newline, compact (keys unquoted, no
+  spaces), stored with two NULs (size = text length + 2); `base` is empty in 1,268
+  models. The compiler writes this form and always a prop_data block with a base.
+  R5R deletes a prop_physics whose model has no prop_data.
+- Hitbox sets (0xB0 count, 0xB4 offset): 12-byte sets (name offset, box count, box
+  offset, relative to the set), 0x2C-byte boxes: bone, group, min (vec3), max (vec3),
+  name offset, crit override, hit-data-group offset (relative to the box). Header
+  flag 1 marks generated hitboxes.
+- Include-model count (0x158) -1, in 386 of 581 S3 models: not an include model but the
+  external-rig linkage (the loader builds the virtual rig from asset references).
+- Reference-pose descriptors: a 1x1 sequence without a clip, holding the reference
+  pose (retail `ref`, and `ragdoll` with ACT_DIERAGDOLL in the bird); its flags have
+  the single-frame bit 0x80000 or not. In S3 the pose for runtime use comes from the
+  sequence asset. In R5R v2.6.52 a RePak-built model's own descriptor is evaluated by
+  BecomeRagdoll: an empty one divides by zero (r5apex.exe+0x1CAEFA); with a one-frame
+  bind-pose clip the ragdoll switch works as retail's does.
+
 ## Standalone rigs and sequences
 
 `--external-assets` writes a render model retaining embedded clips with an empty

@@ -207,9 +207,10 @@ void MdlWriter::WriteBoneTable() {
 void MdlWriter::WriteAnimations() {
     // Descriptors are referenced by sequence-relative int32 offsets in v54.
     HdrHere(H_LOCALANIMINDEX);
-    size_t base = b_.Reserve(kAnimDescSize * m_.animations.size());
+    size_t count = m_.modelAnimations >= 0 ? static_cast<size_t>(m_.modelAnimations) : m_.animations.size();
+    size_t base = b_.Reserve(kAnimDescSize * count);
     animationBase_ = base;
-    for (size_t i = 0; i < m_.animations.size(); ++i) {
+    for (size_t i = 0; i < count; ++i) {
         const auto& a = m_.animations[i];
         size_t p = base + i * kAnimDescSize;
         b_.PatchI32(p, 0); // native animation descriptors, including embedded clips
@@ -267,7 +268,9 @@ void MdlWriter::WriteSequences() {
         bool single = true;
         for (int16_t ai : s.animIndices)
             if (m_.animations[ai].numFrames > 1) single = false;
-        if (single) flags |= 0x80000;  // STUDIO_SINGLEFRAME, as retail sets it
+        // STUDIO_SINGLEFRAME, as retail sets it; a descriptor without a clip keeps the
+        // flags it was given (retail has them both with and without the bit)
+        if (single && !s.animIndices.empty()) flags |= 0x80000;
         I(0x0C, flags);
         I(0x10, -1);  // activity, resolved at load time
         I(0x14, s.actWeight);
@@ -565,10 +568,11 @@ void MdlWriter::WriteTextures() {
 void MdlWriter::WriteKeyValues() {
     HdrHere(H_KEYVALUEINDEX);
     if (!m_.keyValues.empty()) {
-        const std::string& kv = m_.keyValues;  // already "mdlkeyvalue { ... }" text, as studiomdl writes it
+        const std::string& kv = m_.keyValues;  // compact "mdlkeyvalue{...}" text (ApexKeyValues)
         b_.Bytes(kv.data(), kv.size());
         b_.U8(0);
-        Hdr(H_KEYVALUESIZE, static_cast<int>(kv.size() + 1));
+        b_.U8(0);  // retail stores two NULs: size = length + 2 in all S0-S3 models
+        Hdr(H_KEYVALUESIZE, static_cast<int>(kv.size() + 2));
     }
     b_.Align(4);
     HdrHere(H_SRCBONETRANSFORMINDEX);
@@ -724,6 +728,9 @@ std::vector<uint8_t> WriteSequence54(const CompiledModel& model, size_t index) {
     if (index >= model.sequences.size()) Fatal("sequence index outside model");
     CompiledModel subset;
     subset.sequences.push_back(model.sequences[index]);
+    // a referencepose sequence's asset carries its bind-pose clip
+    if (subset.sequences[0].animIndices.empty() && subset.sequences[0].assetAnim >= 0)
+        subset.sequences[0].animIndices = {static_cast<int16_t>(subset.sequences[0].assetAnim)};
     std::map<int, int> indices;
     for (auto& ai : subset.sequences[0].animIndices) {
         auto found = indices.find(ai);
