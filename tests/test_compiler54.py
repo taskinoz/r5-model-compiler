@@ -286,6 +286,68 @@ class Compiler54(unittest.TestCase):
                 self.assertEqual(result['issues'],[])
                 self.assertIn('ragdollconstraint',rebuilt.with_suffix('.phy').read_bytes().decode('latin-1'))
 
+    def test_bvh_roles_and_header(self):
+        import bvh54
+        write_smd(self.work/'box.smd',self.bones,self.frames,self.box_tris((-1,2,0),(3,5,4)))
+        base='$body body "box.smd"\n'
+        cases={'static':('$staticprop\n',(-1,0),['trace']),
+               'static_phy':('$staticprop\n$collisionmodel "box.smd" { $mass 5 }\n',(1,0),['trace','hull']),
+               'rigid':('$collisionmodel "box.smd" { $mass 5 }\n',(0,-1),['hull']),
+               'none':('',None,[])}
+        for name,(extra,roles,kinds) in cases.items():
+            with self.subTest(name=name):
+                # no base mesh.smd body: the trace mesh is exactly the box
+                out,_=self.run_compiler('$modelname "test/model.rmdl"\n$sequence idle "box.smd"\n'+base+extra,target='s3',name='bvh_'+name)
+                data=out.read_bytes(); block=struct.unpack_from('<i',data,0x214)[0]
+                hull=struct.unpack_from('<6f',data,0x6C)
+                if roles is None:
+                    self.assertEqual(block,0); self.assertEqual(struct.unpack_from('<2h',data,0x218),(0,0))
+                    self.assertEqual(struct.unpack_from('<6f',data,0x1F0),hull)
+                    continue
+                self.assertEqual(block%64,0)
+                parsed=bvh54.from_model(out,strict=True)
+                self.assertEqual((parsed['hull'],parsed['trace']),roles)
+                self.assertEqual([e['role'] for e in parsed['entries']],kinds)
+                self.assertEqual(parsed['bounds'],tuple([min(x,0.0) for x in hull[:3]]+[max(x,0.0) for x in hull[3:]]))
+                for e in parsed['entries']:
+                    self.assertEqual(e['problems'],[]); self.assertEqual(len(e['triangles']),12)
+                    volume=sum((a[0]*(b[1]*c[2]-b[2]*c[1])-a[1]*(b[0]*c[2]-b[2]*c[0])+a[2]*(b[0]*c[1]-b[1]*c[0]))/6 for a,b,c in e['triangles'])
+                    # 4 x 3 x 4; as retail, hulls wind clockwise from outside, trace meshes
+                    # counter-clockwise (matched triangle by triangle in the S3 round trips)
+                    self.assertAlmostEqual(volume,48 if e['role']=='trace' else -48,places=2)
+
+    def test_bvh_pages_and_float_vertices(self):
+        import bvh54
+        from compare_bvh54 import compare
+        # a 40 x 40 grid of separate quads: 6,400 render vertices, so later leaves start
+        # on 1024-vertex pages (the in-game step test found a plain vertex number there wrong)
+        tris=[]
+        for i in range(40):
+            for j in range(40):
+                x,y=i*2.0,j*2.0
+                quad=[(x,y,0),(x+1.5,y,0),(x+1.5,y+1.5,(i+j)%3),(x,y+1.5,0)]
+                for a,b,c in ((0,1,2),(0,2,3)):
+                    tris.append(('mat',[(quad[k],(0,0,1),(0,0),[(0,1.0)]) for k in (a,b,c)]))
+        write_smd(self.work/'grid.smd',self.bones,self.frames,tris)
+        out,_=self.run_compiler('$modelname "test/grid.rmdl"\n$staticprop\n$body body "grid.smd"\n$sequence idle "grid.smd"\n',target='s3',name='grid')
+        parsed=bvh54.from_model(out,strict=True)
+        (entry,)=parsed['entries']
+        self.assertTrue(entry['packed']); self.assertEqual(entry['problems'],[])
+        self.assertEqual(len(entry['triangles']),3200)
+        data=out.read_bytes(); block=struct.unpack_from('<i',data,0x214)[0]
+        packed,nodes,verts,leaves=struct.unpack_from('<4i',data,block+16)
+        pages={struct.unpack_from('<I',data,block+leaves+4*k)[0]>>16 for k in range((nodes-leaves)//4)}
+        self.assertTrue(max(pages)>0)
+        self.assertEqual(compare(out,out)['issues'],[])  # the rule check: trace = render triangles
+        # a model too large for packed vertices uses float vertices (type 4)
+        write_smd(self.work/'big.smd',self.bones,self.frames,self.box_tris((-600,-600,0),(600,600,1200)))
+        big,_=self.run_compiler('$modelname "test/big.rmdl"\n$staticprop\n$body body "big.smd"\n$sequence idle "big.smd"\n',target='s3',name='big')
+        (entry,)=bvh54.from_model(big,strict=True)['entries']
+        self.assertFalse(entry['packed']); self.assertEqual(entry['problems'],[])
+        self.assertEqual({bvh54.FLOAT_TRIS}&set(entry['types']),{bvh54.FLOAT_TRIS})
+        corners={p for t in entry['triangles'] for p in t}
+        self.assertEqual(corners,{(x,y,z) for x in (-600.,600.) for y in (-600.,600.) for z in (0.,1200.)})
+
     def test_phy_face_limit_fails_explicitly(self):
         # a 40-sided prism: its caps exceed the 32 vertices a native face can hold
         ring=[(math.cos(2*math.pi*k/40)*4,math.sin(2*math.pi*k/40)*4) for k in range(40)]

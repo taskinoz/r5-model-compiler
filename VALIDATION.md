@@ -15,7 +15,7 @@ Independent reader SHA-256: `294ecb9eff3f705a0e35c24fa8d83b77575abebcec3353c3f25
 
 ## Automated checks
 
-- All 59 native compiler/packaging/runtime-harness regressions pass on ordinary Python 3.10 and locked uv/Python 3.14.
+- All 64 native compiler/packaging/runtime-harness regressions pass on ordinary Python 3.10 and locked uv/Python 3.14.
 - Both CTest groups pass: convex-hull math and native compiler regressions. The
   inherited hull tests are not Apex physics emission evidence.
 - Complex-skinning tests exercise mixed 1/2/3/4/8/16-influence vertices across all
@@ -324,12 +324,86 @@ loops keep their source starting vertex; FLT_MIN-initialised bounds maxima; reta
 positions to 0.001 for face matching, which falsely failed marvin; faces are now
 matched by nearest vertex and compared as ordered loops (winding included).
 
-Runtime physics in R5Reloaded has not been tested yet. The BVH used for traces is not
-written, so compiled models have physics solids but no trace collision.
+## BVH collision (12 November 2026)
+
+The BVH block (studiohdr 0x214) is decoded far enough to write it: header, entries,
+packed and float vertices, BVH4 nodes and triangle leaves (format notes). The compiler
+writes the trace mesh (static props), the physics hull (`$collisionmodel`) or one entry
+per solid in bone order (`$collisionjoints`), and the 0x1F0 box and 0x218 roles.
+
+Corpus: every installed model with a BVH (S0 229, S1 272, S2 273, S3 354) was exported
+(`decompile54.py --render-only --with-physics`), rebuilt and compared by
+`roundtrip54.py`, which now runs `compare_bvh54.py` on every model with a BVH. Compiler
+SHA-256 `7afbe4bdc7269d650378c1a592d00c45e2528a97abaed2716c70bb433744e507`; tools
+roundtrip54 `2d5811c8...`, compare_bvh54 `b8342a0f...`, bvh54 `dd61f902...`,
+compare_phy54 `3cfbb654...`, decompile54 `ff535740...`, phy54 `90dd10e5...`.
+
+The comparison checks, for every model: entry roles and count, the 0x1F0 box (0.0001
+in), a valid rebuilt tree (every child box contains its geometry, each node reached
+once), and that the rebuilt trace mesh is its own LOD 0 render triangles with matching
+winding (1.5 packing steps). Against retail, per entry: trace meshes triangle by
+triangle with winding (1.5 steps plus the model's measured retail offset, at most 0.001
+in); hulls and solids by vertex set (1.5 steps) and enclosed volume (0.1%). Retail
+entries that use the undecoded leaf types 3 or 7 are listed as not compared: 1,154 of
+3,865 entries. 2,711 entries were compared; 311 models had every entry compared.
+
+| Season | Pass | Differences |
+| --- | --- | --- |
+| S0 | 227 / 229 | tablet_mini (PHY), wood_gib01c |
+| S1 | 270 / 272 | tablet_mini (PHY), wood_gib01c |
+| S2 | 271 / 273 | tablet_mini (PHY), wood_gib01c |
+| S3 | 351 / 354 | wood_gib01c; wood_gib01d (PHY); w_bloodhound_axe (not exported) |
+
+- tablet_mini, wood_gib01d, w_bloodhound_axe: the PHY differences explained above; their
+  BVHs compare equal (w_bloodhound_axe cannot be exported).
+- wood_gib01c: hull volume -53.5881 vs retail -53.4481 (0.26%); the vertex sets match.
+  A hull face is bent, and retail splits it along the other diagonal. Fanning faces
+  from their first vertex matches the other 93 S0/S3 hull entries stored as plain
+  triangles; no fan start, index rule or convexity rule matches all of them.
+
+Found by the corpus: retail drops trace triangles whose corners share a stored position
+(wood_gib01c has two in its render mesh); retail orders jointed entries by bone index
+(bird); the hull box at 0x6C must be kept exactly on export (`$bbox`), since collision can
+widen a computed box. Two comparison defects were fixed before the final run: node boxes
+are checked only on the rebuilt tree (retail shares child nodes between slots), and
+retail trace vertices sit up to 0.001 in above the stored render vertices.
+
+### In game (R5R v2.6.52)
+
+`tools/build_r5r_collision_test.py` builds an S3 package (RPak SHA-256
+`547dd22969c6b4ece25c6571a010a5231056249d9cdb28f2ff2f26f3e99b2b99`, final compiler above):
+static and physics boxes, an L-shaped step with and without a PHY, a box without
+collision, a physics box built with `--no-bvh`, boxes of 16/32/64 in at 5/20/500 mass, a
+decompiled and rebuilt physics box, and a decompiled and rebuilt retail rocket
+(`bangalore_rockets_projectile`), with retail controls. `ingame54.py --collision` spawns
+trace targets as `SOLID_VPHYSICS` prop_dynamics 240 in above the ground (as R5R's map
+editor does), traces straight down, then drops each physics model as a prop_physics from
+160 in onto one level spot found by a ground search, samples it for 8 s, traces it and
+removes it. Final run: passed, exit code 0, 103 traces and 7 drops as declared. Report,
+netconsole and script logs: `test-output/r5r-collision/evidence`.
+
+- Traces follow the physics-hull entry: 98 grid traces over the physics box and the
+  step-with-PHY hit at the hull's height, computed from the compiled hull (64 in, and
+  22/37/52 on the step hull's slope); worst difference 0.057 in, one packing step.
+  The concrete chunk control hits its hull similarly.
+- Every physics drop settles on the ground within 0.13 in at under 0.07 in/s and is then
+  hit by a trace. The rebuilt rocket rests at 6.719 in, exactly where retail's does.
+  Without the BVH the box still lands but no trace hits it, so traces use the BVH.
+- Static models without a PHY (`static_box`, `static_step`) are not hit by traces as
+  prop_dynamics, and neither are retail `mdl/error.rmdl` and
+  `rock_set_backwater_02`, so the trace-mesh entry is not exercised this way; it is
+  checked against retail by the corpus only. Jointed BVH entries and ragdolls were not
+  tested in game.
+- Defects found in game: the leaf header's high 16 bits are a 1024-vertex page, not a
+  vertex number (every leaf after the first traced at the wrong place on the step; now
+  fixed, and `crypto_drone_holo`'s 2,812 triangles decode only this way); prop_physics
+  needs a `prop_data` keyvalue, without which the game deletes it; the packager now
+  stages the PHY, which RePak requires.
 
 ## Remaining limitations
 
-- BVH trace collision, runtime physics and ragdoll tests, procedural bones, RUI, importing arbitrary
+- BVH leaf types 3 and 7 (read only as not comparable), in-game tests of trace meshes, jointed
+  BVHs and ragdolls, procedural bones, RUI, importing arbitrary
   existing rig dependencies, native asset-GUID layers, IK rules, transition
   nodes and followers. Export also rejects sequence keyvalues, transitions and
   procedural weight fixups, and unknown animation/sequence flags or event types.

@@ -117,7 +117,121 @@ def prepare(game,runtime):
     return runtime
 
 
-def write_probe(runtime,models):
+def collision_probe(models,literal):
+    """Server functions for --collision.
+
+    Models with `collision_traces` ([dx, dy, expected height or null for no hit]) are
+    spawned as SOLID_VPHYSICS prop_dynamics 240 units above the ground, so a vertical
+    trace can only hit the prop or nothing (no terrain or clutter). `physics_drops`
+    ([onto model path or null, expected rest height]) spawn a prop_physics 160 units
+    above the measured ground, or above a placed prop, and sample it as it settles."""
+    # its global declaration is with the others at the top of the probe
+    lines=['void function R5C_Collision() { thread R5C_CollisionProbe() }',
+           'void function R5C_CollisionProbe()','{',
+           '  entity player = GetPlayerArray()[0]',
+           '  vector forward = AnglesToForward( <0, player.EyeAngles().y, 0> )',
+           '  vector right = AnglesToRight( <0, player.EyeAngles().y, 0> )',
+           '  vector base = player.GetOrigin() + forward * 360',
+           '  table<string, vector> placed']
+    solid=[(i,m) for i,m in enumerate(models) if m.get('collision_traces')]
+    for k,(i,model) in enumerate(solid):
+        lines+=['  {',f'    asset model = ${literal(model["path"])}',
+                f'    vector origin = base + right * {(k-(len(solid)-1)/2)*160:.3f} + <0,0,240>',
+                '    entity prop = CreatePropDynamic( model, origin, <0,0,0>, SOLID_VPHYSICS )',
+                # as R5R's map editor places solid props (CreateEditorProp*)
+                '    prop.kv.solid = 6',
+                '    prop.kv.CollisionGroup = TRACE_COLLISION_GROUP_PLAYER',
+                '    file.props.append( prop )',
+                f'    placed[{literal(model["path"])}] <- origin',
+                '    wait 0.5']
+        for dx,dy,_ in model['collision_traces']:
+            lines+=[f'    {{ TraceResults t = TraceLine( origin + <{dx:.3f},{dy:.3f},150>, origin + <{dx:.3f},{dy:.3f},-100>, [player], TRACE_MASK_SHOT, TRACE_COLLISION_GROUP_NONE )',
+                    f'      print( format( "R5C_COL_TRACE {i} {dx:.3f} {dy:.3f} %.4f %d %.4f\\n", t.endPos.z - origin.z, t.hitEnt == prop ? 1 : 0, t.fraction ) ) }}']
+        lines+=['  }']
+    drop_list=[(i,m,d,onto,want) for i,m in enumerate(models) for d,(onto,want) in enumerate(m.get('physics_drops',[]))]
+    if drop_list:
+        # drops need level ground: search a grid around the player for the spot whose
+        # surface is most nearly horizontal and whose surroundings are at its height
+        lines+=['  vector flat = base',
+                '  float best = -1.0',
+                '  for ( int gx = -6; gx <= 6; gx++ )',
+                '  {',
+                '    for ( int gy = -6; gy <= 6; gy++ )',
+                '    {',
+                '      vector c = player.GetOrigin() + <gx * 96.0, gy * 96.0, 0>',
+                '      TraceResults g = TraceLine( c + <0,0,400>, c - <0,0,800>, [player], TRACE_MASK_SOLID, TRACE_COLLISION_GROUP_NONE )',
+                '      if ( g.fraction >= 1.0 ) continue',
+                '      float level = g.surfaceNormal.z',
+                '      foreach ( vector o in [ <48,0,0>, <-48,0,0>, <0,48,0>, <0,-48,0> ] )',
+                '      {',
+                '        TraceResults n = TraceLine( g.endPos + o + <0,0,64>, g.endPos + o - <0,0,64>, [player], TRACE_MASK_SOLID, TRACE_COLLISION_GROUP_NONE )',
+                '        if ( n.fraction >= 1.0 || fabs( n.endPos.z - g.endPos.z ) > 1.0 ) level = -1.0',
+                '      }',
+                '      if ( level > best && Distance2D( g.endPos, player.GetOrigin() ) > 128 ) { best = level; flat = g.endPos }',
+                '    }',
+                '  }',
+                '  print( format( "R5C_COL_FLAT %.4f %.1f %.1f %.1f\\n", best, flat.x, flat.y, flat.z ) )']
+    for k,(i,model,d,onto,want) in enumerate(drop_list):
+        if onto:
+            rest=f'    vector rest = placed[{literal(onto)}]'
+        else:
+            # the level ground found once above: a trace now could hit the previous prop
+            rest='    vector rest = flat'
+        lines+=['  {',rest,
+                f'    entity phys = CreatePropPhysics( ${literal(model["path"])}, rest + <0,0,160>, <0,0,0> )',
+                '    file.props.append( phys )',
+                '    float started = Time()',
+                '    for ( int sample = 0; sample < 16; sample++ )',
+                '    {',
+                '      wait 0.5',
+                '      if ( !IsValid( phys ) ) { print( "R5C_COL_FAIL physics prop removed\\n" ); break }',
+                '      vector p = phys.GetOrigin()',
+                f'      print( format( "R5C_COL_DROP {i} {d} %.2f %.4f %.4f\\n", Time() - started, p.z - rest.z, Length( phys.GetVelocity() ) ) )',
+                '    }',
+                '    if ( IsValid( phys ) )',
+                '    {',
+                '      vector p = phys.GetOrigin()',
+                '      TraceResults t = TraceLine( p + <0,0,150>, p - <0,0,30>, [player], TRACE_MASK_SHOT, TRACE_COLLISION_GROUP_NONE )',
+                f'      print( format( "R5C_COL_DROPTRACE {i} {d} %.4f %d\\n", t.endPos.z - p.z, t.hitEnt == phys ? 1 : 0 ) )',
+                '      phys.Destroy()',
+                '      wait 0.5',  # removal completes after the frame
+                '    }','  }']
+    lines+=['  print( "R5C_COL_DONE\\n" )','}']
+    return lines
+
+
+def summarize_collision(log,models,tolerance=0.5):
+    """Check traces and drops against each model's declared expectations."""
+    import re
+    failures=[]; traces=[]; drops={}
+    for i,dx,dy,height,hit,fraction in re.findall(r'R5C_COL_TRACE (\d+) (\S+) (\S+) (\S+) (\d) (\S+)',log):
+        traces.append(dict(model=int(i),dx=float(dx),dy=float(dy),height=float(height),hit_prop=hit=='1',fraction=float(fraction)))
+    for i,d,t,z,speed in re.findall(r'R5C_COL_DROP (\d+) (\d+) (\S+) (\S+) (\S+)',log):
+        drops.setdefault(f'{i}.{d}',[]).append(dict(time=float(t),height=float(z),speed=float(speed)))
+    drop_traces={f'{i}.{d}':dict(height=float(h),hit_prop=hit=='1') for i,d,h,hit in re.findall(r'R5C_COL_DROPTRACE (\d+) (\d+) (\S+) (\d)',log)}
+    for i,model in enumerate(models):
+        for dx,dy,expected in model.get('collision_traces',[]):
+            got=[t for t in traces if t['model']==i and abs(t['dx']-dx)<1e-3 and abs(t['dy']-dy)<1e-3]
+            if not got: failures.append(f'{model["path"]}: no trace at {dx},{dy}'); continue
+            t=got[0]
+            if expected is None:
+                if t['hit_prop']: failures.append(f'{model["path"]}: trace at {dx},{dy} hit a model without collision')
+            elif not t['hit_prop'] or abs(t['height']-expected)>tolerance:
+                failures.append(f'{model["path"]}: trace at {dx},{dy} hit {"the prop" if t["hit_prop"] else "something else"} at {t["height"]:.3f}, expected {expected}')
+        for d,(onto,want) in enumerate(model.get('physics_drops',[])):
+            key=f'{i}.{d}'; samples=drops.get(key,[])
+            if len(samples)<16: failures.append(f'{model["path"]} drop {d}: incomplete physics samples'); continue
+            if abs(samples[-1]['height']-want)>2.0 or samples[-1]['speed']>1.0:
+                failures.append(f'{model["path"]} drop {d}: rests at {samples[-1]["height"]:.3f} (speed {samples[-1]["speed"]:.3f}), expected {want}')
+            dt=drop_traces.get(key)
+            if dt is None or not dt['hit_prop']: failures.append(f'{model["path"]} drop {d}: the resting prop was not hit by a trace')
+    if 'R5C_COL_DONE' not in log: failures.append('collision probe did not finish')
+    if 'R5C_COL_FAIL' in log: failures.append('collision probe reported a failure')
+    return dict(traces=traces,drops=drops,drop_traces=drop_traces,failures=failures,passed=not failures,
+                scope='server traces against SOLID_VPHYSICS props and physics drops')
+
+
+def write_probe(runtime,models,controls=()):
     """Generate an isolated server probe with literal, validated asset names."""
     import re
     def literal(text):
@@ -127,9 +241,10 @@ def write_probe(runtime,models):
     lines=['global function CodeCallback_RFiveCompiler_Test_ModInit',
            'global function R5C_Run',
            'global function R5C_Cleanup',
+           'global function R5C_Collision',
            'struct { array<entity> props } file',
            'void function CodeCallback_RFiveCompiler_Test_ModInit()', '{',
-           *[f'  PrecacheModel( ${literal(model["path"])} )' for model in models], '}',
+           *[f'  PrecacheModel( ${literal(model["path"])} )' for model in list(models)+list(controls)], '}',
            'void function R5C_Run() { thread R5C_Probe() }',
            'void function R5C_Probe()', '{',
            '  while ( GetPlayerArray().len() == 0 ) wait 0.5',
@@ -168,6 +283,8 @@ def write_probe(runtime,models):
         lines += ['  }']
     lines += ['  print( "R5C_DONE\\n" )','}',
               'void function R5C_Cleanup() { foreach ( entity prop in file.props ) { if ( IsValid(prop) ) prop.Destroy() } file.props.clear() }']
+    # controls: installed game models given the same collision checks
+    lines += collision_probe(list(models)+list(controls),literal)
     mod=Path(runtime)/'mods'/'r5c_compiler_test'
     scripts=mod/'scripts'/'vscripts'; scripts.mkdir(parents=True,exist_ok=True)
     (mod/'mod.vdf').write_text('"mod" { "name" "R5C compiler test" "id" "RFiveCompiler.Test" "description" "Isolated authored models" "version" "1.0" "author" "R5C" "PakLoadOnPlaylists" { "dev_default" "1" "survival_dev" "1" } }\n')
@@ -282,6 +399,7 @@ def main():
     p.add_argument('--pak',required=True); p.add_argument('--port',type=int,default=37025)
     p.add_argument('--timeout',type=int,default=180); p.add_argument('--map',default='mp_rr_canyonlands_staging')
     p.add_argument('--keep-open',action='store_true',help='leave the isolated game open for manual inspection')
+    p.add_argument('--collision',action='store_true',help='also run traces and physics drops declared in the package report')
     a=p.parse_args()
     pak=Path(a.pak).resolve()
     package=json.loads(pak.with_suffix('.report.json').read_text())
@@ -298,7 +416,7 @@ def main():
     if not (Path(a.game)/'build.txt').read_text().startswith('R5R-'):
         p.error('expected an explicitly installed R5R runtime')
     runtime=prepare(a.game,a.runtime)
-    write_probe(runtime,package['models'])
+    write_probe(runtime,package['models'],package.get('collision_controls',[]))
     for suffix in ('.rpak','.starpak'):
         source=pak.with_suffix(suffix); dest=runtime/'paks'/'Win64'/source.name
         if dest.exists() and os.path.samefile(source,dest): continue
@@ -353,7 +471,13 @@ def main():
                     f.write(text); f.flush(); log+=text
                     if not probe_started and text.strip()=='R5C_VM_READY':
                         connection.command('script R5C_Run()'); probe_started=True
-                    if 'R5C_DONE' in text:
+                    if 'R5C_DONE' in text and a.collision and 'R5C_COL_DONE' not in log:
+                        if 'R5C_COL_STARTED' not in log:
+                            log+='R5C_COL_STARTED\n'; connection.command('script R5C_Collision()')
+                        continue
+                    if 'R5C_COL_DONE' in text or ('R5C_DONE' in text and not a.collision):
+                        if a.collision: time.sleep(2)  # leave the drops on screen
+                        connection.command('screenshot'); time.sleep(1)
                         connection.command('script R5C_Cleanup()'); time.sleep(1)
                         connection.command('script_client R5C_Visual()'); time.sleep(3)
                         connection.command('screenshot'); time.sleep(1)
@@ -364,6 +488,9 @@ def main():
                 except socket.timeout: continue
                 except ConnectionError: break
         report.update(summarize(log,package['models'])); report['state']='finished'
+        if a.collision:
+            report['collision']=summarize_collision(log,package['models']+package.get('collision_controls',[]))
+            report['failures']+=report['collision']['failures']
         # Native disk logging is buffered. Wait for the final client selection
         # marker instead of reporting a false failure before its flush.
         for attempt in range(13):

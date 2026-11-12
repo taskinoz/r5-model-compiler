@@ -43,7 +43,7 @@ int main(int argc, char** argv) {
     std::string qc, game, outFile, outDir, target;
     std::map<std::string,uint64_t> materials;
     std::map<std::string,uint8_t> materialTypes;
-    bool externalAssets = false, packedPositions = false;
+    bool externalAssets = false, packedPositions = false, noBvh = false;
     QcOptions opt;
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
@@ -63,6 +63,7 @@ int main(int argc, char** argv) {
             }
             else if (l == "--external-assets") externalAssets = true;
             else if (l == "--packed-positions") packedPositions = true;
+            else if (l == "--no-bvh") noBvh = true;  // diagnostics only
             else if (l == "--material-type") {
                 auto value=next(); auto eq=value.find('=');
                 const std::vector<std::string> names={"rgdu","rgdp","rgdc","sknu","sknp","sknc","wldu","wldc","ptcu","ptcs"};
@@ -155,6 +156,9 @@ int main(int argc, char** argv) {
         if (!model.physics.phy.empty() && model.physics.apexSolids.empty())
             Fatal("internal: physics solids were not prepared for Apex");
         model.physics.phy.clear();
+        // Apex replaces the per-triangle tree with the BVH block
+        model.perTri = CPerTri();
+        if (!noBvh) model.bvh = BuildBvh54(model);
         model.physics.collisionBlock.clear();
         model.physics.staticCollisionCount = 0;
         if (!model.physics.apexSolids.empty()) {

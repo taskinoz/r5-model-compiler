@@ -134,25 +134,29 @@ def export_physics(m, out, target):
     return lines
 
 
-def decompile(path, outdir, target, *, render_only=False, drop_bvh=False, with_physics=False):
+def decompile(path, outdir, target, *, render_only=False, with_physics=False):
     m=Model(path,target); out=Path(outdir); out.mkdir(parents=True,exist_ok=True)
     # Unsupported information is never silently claimed to roundtrip.
     unsupported=[]
-    for label,offset in [('BVH collision',0x214),('RUI',0x12C),
+    # The BVH is rebuilt by the compiler from the render mesh ($staticprop trace) and the
+    # PHY solids, so it is not listed here; roundtrip54 compares it.
+    for label,offset in [('RUI',0x12C),
                          ('procedural bones',0x198),('followers',0x1E8),('include models',0x158),
                          ('IK autoplay locks',0x148),('transition nodes',0xFC)]:
-        if m.get('i',offset) and not (drop_bvh and label=='BVH collision'): unsupported.append(label)
+        if m.get('i',offset): unsupported.append(label)
     if any(b['proctype'] for b in m.bones): unsupported.append('bone procedures')
     if unsupported and not render_only:
         raise ValueError('unsupported for native export: '+', '.join(unsupported)+'; use --render-only for an explicit geometry export')
     skeleton=[(b['pos'],b['rot'],b['scale']) for b in m.bones]
     lines=['// r5 --target '+target]
-    if render_only and with_physics: lines+=['// Geometry and physics export: BVH, rigs and sequence metadata are not preserved.']
-    elif render_only: lines+=['// Geometry export: physics, BVH, rigs and sequence metadata are not preserved.']
-    elif drop_bvh and m.get('i',0x214): lines+=['// BVH collision dropped on request (--drop-bvh); the rebuild has none.']
+    if render_only and with_physics: lines+=['// Geometry and physics export: rigs and sequence metadata are not preserved.']
+    elif render_only: lines+=['// Geometry export: physics, rigs and sequence metadata are not preserved.']
     name=m.name.replace('\\','/')
     if name.startswith('mdl/'): name=name[4:]
     lines+=['$modelname '+qc_quote(name), '$cdmaterials ""', '$origin 0 0 0 -90']
+    # the stored hull box (it also sets the BVH box at 0x1F0); collision can widen a
+    # computed one, so keep retail's exactly
+    lines+=['$bbox '+' '.join(format(x,'.9g') for x in m.get('6f',0x6C))]
     if m.get('i',0x9C)&16: lines+=['$staticprop']
     if not render_only:
         for pose in m.pose_parameters():
@@ -283,8 +287,7 @@ def decompile(path, outdir, target, *, render_only=False, drop_bvh=False, with_p
 if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__); p.add_argument('model'); p.add_argument('outdir')
     p.add_argument('--target',choices=PROFILES,required=True); p.add_argument('--render-only',action='store_true')
-    p.add_argument('--drop-bvh',action='store_true',help='export a model whose BVH collision cannot be rebuilt yet, without it')
     p.add_argument('--with-physics',action='store_true',help='with --render-only: also export the PHY collision')
     a=p.parse_args()
     if a.with_physics and not a.render_only: p.error('--with-physics extends --render-only')
-    print(decompile(a.model,a.outdir,a.target,render_only=a.render_only,drop_bvh=a.drop_bvh,with_physics=a.with_physics))
+    print(decompile(a.model,a.outdir,a.target,render_only=a.render_only,with_physics=a.with_physics))

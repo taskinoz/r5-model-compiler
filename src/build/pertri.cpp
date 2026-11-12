@@ -42,6 +42,7 @@ void BuildPerTriAABB(BuildContext& ctx) {
     if (at != std::string::npos) at = kv.find_first_not_of(' ', at + 13);
     bool allowStatic = at != std::string::npos && kv.compare(at, 3, "\"1\"") == 0;
     if (ctx.qc.perTriMode != 2 && !ctx.qc.staticProp && !allowStatic) return;
+    ctx.out.bvhTrace = true;
 
     // LOD 0 triangles of the default model of every body part. Like retail, each mesh
     // vertex is its own point (vertices that only share a position are not merged).

@@ -23,6 +23,15 @@ Read README.md, VALIDATION.md and docs/mdl-v54-format.md before changing writers
   `roundtrip54.py --render-only --with-physics` compares PHY as well as render data.
   Corpora: complex-native-s0/s1 (corrected VVC exports) and s2-raw/s3-raw. Keep only
   active corpora, the runtime and final reports in test-output; delete regenerated work.
+  Corpus runs: `roundtrip54.py --discard-work` keeps only results.json (a full run is
+  otherwise gigabytes); shard lists need LF line endings.
+- BVH: tools/bvh54.py (reader), tools/compare_bvh54.py (run by roundtrip54 for every
+  model with a BVH). In-game collision: tools/build_r5r_collision_test.py, then
+  `ingame54.py --collision`. Lessons: R5R traces a SOLID_VPHYSICS prop_dynamic against
+  its physics-hull entry and ignores props without a PHY (retail too); prop_physics
+  needs prop_data or the game deletes it; drop physics props on level ground found by a
+  search (slopes and terrain holes make them slide or fall away); trace declarations go
+  at the top of the Squirrel file; close the test runtime's crashmsg.exe after a crash.
 - GPL/AGPL references may be consulted, not copied into this MIT implementation.
 - Run Python on extracted data with -I, with scripts outside the extraction folder.
 - Packaging follows R1: package.ps1, check_package.ps1, tag-driven release.yml.

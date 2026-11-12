@@ -60,6 +60,14 @@ def package(models, output, name, repak, target):
         if rig.bones!=m.bones: raise ValueError('model/rig bone layout mismatch')
         if rig.ik_chains()!=m.ik_chains(): raise ValueError('model/rig IK chain layout mismatch')
         copy(path,native); copy(path.with_suffix('.vg'),native[:-5]+'.vg'); copy(rigfile,rigpath)
+        if m.get('i',0x1DC):
+            # the native PHY: RePak reads it beside the model; its checksum must match
+            phy=path.with_suffix('.phy')
+            if not phy.exists(): raise ValueError('model records a PHY but none was found: '+str(phy))
+            data=phy.read_bytes()
+            if len(data)!=m.get('i',0x1DC) or data[12:16]!=path.read_bytes()[8:12]:
+                raise ValueError('PHY size/checksum does not match its model: '+str(phy))
+            copy(phy,native[:-5]+'.phy')
         sequences=[]; labels=[]
         for i in range(count):
             source=path.with_suffix(f'.seq{i}.rseq'); seq=SequenceAsset(source,rig)

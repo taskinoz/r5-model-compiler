@@ -756,6 +756,7 @@ CApexSolid BuildApexSolid(const Solid& s, const QcCollision& qc) {
     }
     if (volume <= 0) Fatal("collision solid %s has no volume", s.name.c_str());
     out.volume = volume;
+    out.bone = s.bone;
     out.centre = (weighted * (1 / volume)).F();
     if (qc.hasMassCenter && !qc.joints) out.centre = qc.massCenter;
     for (int i = 0; i < 3; i++)
@@ -1540,6 +1541,7 @@ void BuildCollisionModel(BuildContext& ctx) {
     ctx.out.physics.phy = phy.Data();
     ctx.out.physics.text = text;
     ctx.out.physics.apexSolids = std::move(apex);
+    ctx.out.physics.jointed = qc.joints;
     ctx.out.physics.mass = static_cast<float>(totalMass);
     ctx.out.physics.solidCount = static_cast<int>(solids.size());
     Info("collision: %d solid(s), %d piece(s), %.2f kg", static_cast<int>(solids.size()),

@@ -655,6 +655,24 @@ std::vector<uint8_t> MdlWriter::Run() {
     st_.Write(b_);
     b_.Align(4);
 
+    // BVH collision (0x214) on a 64-byte boundary, as retail places it. 0x1F0 holds the
+    // hull box, extended to the origin when a BVH is present; 0x218 names the physics-
+    // hull and trace entries ((0, 0) without a BVH). Measured on 1,789 S0-S3 models.
+    Vec3 boxMin = m_.hullMin, boxMax = m_.hullMax;
+    if (!m_.bvh.block.empty()) {
+        b_.Align(64);
+        HdrHere(0x214);
+        b_.Append(m_.bvh.block);
+        boxMin = Min(boxMin, Vec3(0, 0, 0));
+        boxMax = Max(boxMax, Vec3(0, 0, 0));
+        b_.PatchAt<int16_t>(0x218, static_cast<int16_t>(m_.bvh.hullEntry));
+        b_.PatchAt<int16_t>(0x21A, static_cast<int16_t>(m_.bvh.traceEntry));
+    }
+    for (int a = 0; a < 3; a++) {
+        b_.PatchAt<float>(0x1F0 + 4 * a, boxMin[a]);
+        b_.PatchAt<float>(0x1FC + 4 * a, boxMax[a]);
+    }
+
     // checksum over the model body, studiomdl style (shift-add over dwords)
     uint32_t ck = 0;
     for (size_t i = 0; i + 4 <= b_.Size(); i += 4) {

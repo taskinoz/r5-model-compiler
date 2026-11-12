@@ -229,39 +229,51 @@ The compiler limits each hull to 255 vertices and faces and 32 vertices per face
 indices with a 0xFF terminator) and fails beyond them. TF2's IVP surfaces and
 map-collision block are not written for Apex.
 
-## BVH (decoding in progress; not written by the compiler)
+## BVH collision (studiohdr 0x214)
 
-Models with collision also carry a BVH at header 0x214 (bounds at 0x1F0..0x207). Models
-with a BVH can be exported only with `--drop-bvh` or `--render-only`, which state that
-it is not preserved. Measured over the S3 corpus (354 models, 1,394 entries):
+The block traces use (bullets, line of sight). Written by the compiler (`src/write/bvh54.cpp`);
+read by `tools/bvh54.py`. Measured over the S3 corpus (354 models, 1,394 entries) and
+confirmed in R5R where noted.
 
-- Block header: int a, int b, int c, int entry count. b = 0x10 + 0x20 * count; a follows
-  b by 8 (sometimes 16-32) bytes of a small table whose words look like surface
-  references (e.g. 0x001D0000); c = a + 4 and the word at a is 1 (8 in three models).
-- Entries (0x20 each, at 0x10): int 1, then node, packed-vertex and leaf offsets
-  (relative to the block), an integer origin (vec3) and a power-of-two scale
-  (2^-30..2^-23). A packed vertex is three int16; position = origin + (v << 16) * scale.
-- Entry roles: header 0x218 holds two int16: the physics-hull entry and the trace-mesh
-  entry (-1 for none). Rigid models with a PHY have (1, 0) (entry 0 the collision mesh,
-  entry 1 the convex hull) or (0, -1); static models (-1, 0); jointed models (-1, -1)
-  with one entry per PHY solid.
+- Placement: on a 64-byte boundary after the string table. 0x1F0..0x207 hold the hull
+  box (0x6C) extended to include the origin when a BVH is present (all 1,128 S0-S3
+  models with a BVH), else the hull box unchanged (all 227 S3 models without one).
+- Block header: contents offset, table offset, contents end, entry count (relative to
+  the block). table = 0x10 + 0x20 * count; the table is 8 (sometimes 16-32) bytes of
+  words that look like surface references (0x001D0000; zero in 283 of 354 models); the
+  contents list holds one word, 1 (CONTENTS_SOLID; 8 in three models).
+- Entries (0x20 each, at 0x10): packed flag (1 packed int16 vertices, 0 float vec3
+  vertices; only the 2,400-inch `mp_setting_menu` uses floats), node, vertex and leaf
+  offsets, an integer origin (vec3) and a power-of-two scale (2^-30..2^-23). A packed
+  vertex is three int16; position = origin + (v << 16) * scale.
+- Entry roles: header 0x218 holds two int16, the physics-hull entry and the trace-mesh
+  entry (-1 for none; (0, 0) without a BVH). Static models with a PHY have (1, 0)
+  (entry 0 the trace mesh, entry 1 the convex hull); dynamic rigid models (0, -1);
+  static models without a PHY (-1, 0); jointed models (-1, -1) with one entry per PHY
+  solid, ordered by bone index (not PHY solid order).
+- The trace mesh is the LOD 0 render triangles (retail positions sit 0-0.001 in above
+  the stored render vertices: retail built it from source positions). Its triangles keep
+  the render winding; hull and solid triangles wind the other way (negative volume).
 - Nodes (BVH4, 0x40): per axis eight int16, four child minima then four child maxima,
-  in the packed-vertex units of the entry (minima rounded down, maxima up). Then four
-  words: child index in the high 24 bits; the low byte of word 2 holds the types of
-  children 0 and 1 (low nibble first), that of word 3 children 2 and 3. Child types:
-  0 node, 1 empty, 3 leaf list, 4 unpacked triangles, 5 packed triangles, 7 packed
-  quads. Two slots of a node may point at the same child node with different boxes,
-  each covering part of it (a DAG, not a strict tree).
-- Type 5 leaves (index = word offset into the leaf data): header word with bits 12-15
-  = triangle count - 1, bits 16-31 = first vertex, bits 0-11 = a small table index
-  (0-3); then one word per triangle: A (11 bits) adds to a running base vertex (the
-  first triangle's base is the first vertex), the corners are base, base + 1 + B (9
-  bits) and base + 1 + C (9 bits); the top three bits were 7 in every S3 triangle.
-  This decodes every triangle of the tested models exactly (positions within the
-  packing step).
-- Type 3 leaves (convex hull entries) list sub-leaves: a count, then one word per
+  in the entry's packed units (minima rounded down, maxima up). An empty slot has an
+  inverted box. Then four words: child index in the high 24 bits; the low byte of word
+  2 holds the types of children 0 and 1 (low nibble first), that of word 3 children 2
+  and 3. Child types: 0 node, 1 empty, 3 leaf list, 4 float-vertex triangles, 5 packed
+  triangles, 7 packed quads. Retail may point two slots of a node at one child node,
+  each box covering part of it (a DAG); the compiler writes a plain tree.
+- Type 4/5 leaves (index = word offset into the leaf data): a header word, bits 12-15
+  = triangle count - 1, bits 16-31 = a 1024-vertex page, bits 0-11 = a small table index
+  (0-3 in retail; 0 from the compiler). Then one word per triangle: A (11 bits) adds to
+  a running base, which starts at page * 1024; the corners are base, base + 1 + B
+  (9 bits) and base + 1 + C (9 bits); the top three bits were 7 in every S3 triangle.
+  The page unit was found in R5R: with the first vertex stored as a plain number, every
+  leaf after the first traced at the wrong place (`static_step` in VALIDATION.md); with
+  pages, `crypto_drone_holo` (2,711 vertices) decodes all 2,812 triangles, against
+  1,305 read as a plain number.
+- Type 3 leaves (in convex hull entries) list sub-leaves: a count, then one word per
   sub-leaf with its type in byte 1 and a 16-bit field (a type 5 field is its word offset
-  after the list); quads (type 7) are one word each. Not fully decoded.
+  after the list); quads (type 7) are one word each. Not fully decoded; the compiler
+  writes only types 4 and 5, which R5R accepts for hulls, solids and trace meshes.
 
 
 ## Standalone rigs and sequences

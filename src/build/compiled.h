@@ -254,6 +254,7 @@ struct CApexHull {
 struct CApexSolid {
     std::vector<CApexHull> hulls;
     double volume = 0;       // of the stored face loops (keyvalue "volume")
+    int bone = 0;            // the bone a jointed solid follows
     Vec3 centre;             // volume centroid of the hulls (or $masscenter)
     float inertia[3][3] = {};  // per unit mass, about the solid-space origin
     Vec3 mins, maxs;
@@ -264,6 +265,7 @@ struct CPhysics {
     std::vector<CApexSolid> apexSolids;  // early-Apex PHY solids; serialised per season
     std::string text;                    // PHY keyvalue text (solids, constraints, editparams)
     int apexPhySize = 0;                 // size of the season's PHY file, recorded in the header
+    bool jointed = false;                // $collisionjoints: one solid per bone
     std::vector<uint8_t> phy;  // complete PHY file (header, solids, text)
     float mass = 1;  // studiomdl's default; retail models without physics store 1.0
     int solidCount = 0;
@@ -271,6 +273,13 @@ struct CPhysics {
     std::vector<uint8_t> collisionBlock;
     int staticCollisionCount = 0;
     bool noMapCollision = false;  // header collisionOffset stays 0, as in the retail models without a block
+};
+
+// Early-Apex BVH collision block (studiohdr 0x214) and its header fields
+struct CBvh {
+    std::vector<uint8_t> block;
+    Vec3 mins, maxs;          // studiohdr 0x1F0
+    int hullEntry = -1, traceEntry = -1;  // studiohdr 0x218
 };
 
 // Per-triangle AABB tree for static props
@@ -341,6 +350,8 @@ struct CompiledModel {
     bool hasUV2 = false;
 
     CPhysics physics;
+    bool bvhTrace = false;  // static props get a BVH trace mesh (TF2 wrote a per-tri tree)
+    CBvh bvh;
     CPerTri perTri;
 };
 

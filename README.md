@@ -7,7 +7,7 @@ assets. This is the experimental R5 sibling of
 
 **This is an initial development compiler, not a validated replacement for
 Respawn's asset bakery.** Native render data and basic animation are implemented.
-Native PHY physics is implemented; BVH collision and procedural bones are unfinished. External rig/sequence
+Native PHY physics and BVH collision are implemented; procedural bones are unfinished. External rig/sequence
 output and an S3 RePak wrapper are available; limited R5R playback/render tests are
 documented in [VALIDATION.md](VALIDATION.md).
 No game assets, game binaries or extraction tools are distributed.
@@ -77,13 +77,31 @@ and the model checksum ties them together, so keep the `.phy` with its `.rmdl`.
 
 Each convex piece may have at most 255 vertices, 255 faces and 32 corners per face; the
 compiler fails rather than writing an unrepresentable hull. Retail measures volume and
-inertia from the stored faces, and so does the compiler. The BVH used for traces is not
-written yet, so a compiled model has physics but no trace collision. `tools/phy54.py`
+inertia from the stored faces, and so does the compiler. `tools/phy54.py`
 reads and checks a PHY; `tools/compare_phy54.py` compares two.
+
+The model also carries a BVH collision block, which traces (bullets, line-of-sight)
+use. Like retail, the compiler writes:
+
+- for `$staticprop` (or `prop_data` with `"allowstatic" "1"`): a trace mesh of the LOD 0
+  render triangles of each body part's default model;
+- for `$collisionmodel`: the physics hull, as triangles;
+- for `$collisionjoints`: one entry per solid, in bone order.
+
+Coordinates are packed into int16 on a power-of-two grid around a whole-inch origin; a
+model too large for packing uses float vertices. `tools/bvh54.py` reads a BVH and
+checks it; `tools/compare_bvh54.py` compares two. `--no-bvh` omits the block, for
+diagnostics only.
+
+Runtime use in R5R: spawn a static model as a `prop_dynamic` with `SOLID_VPHYSICS`, as
+R5R's map editor does; a physics model as a `prop_physics`, which also needs a
+`prop_data` keyvalue (`$keyvalues { prop_data { "base" "Metal.Medium" } }`) or the game
+deletes it. See VALIDATION.md for what was measured in game.
 
 ```powershell
 .\build\r5studiomdl.exe --target s3 -o out\physics_box.rmdl examples\physics_prop\physics_box.qc
 python tools\phy54.py out\physics_box.phy --target s3
+python tools\bvh54.py out\physics_box.rmdl
 ```
 
 ## Piecewise root motion and IK chains
@@ -187,6 +205,8 @@ python -I tools\pack54.py --target s3 --repak "C:\Tools\RePak\repak.exe" --out o
 Replace the example GUID with an asset available in the target game. Every
 material slot must have a nonzero binding. The wrapper validates the component set,
 stages model/rig/sequence asset paths, invokes RePak and writes a hashed report.
+A model with physics needs its `.phy` beside it; the wrapper checks its size and
+checksum against the model and stages it for RePak.
 It produces an RPak v8 with model v10, rig v4 and sequence v7 assets plus the
 mandatory streaming file. RePak and game data are not included in this repository.
 A successful bake alone does not establish runtime compatibility. S0/S1/S2 RPak
@@ -236,9 +256,10 @@ keep animation settings separate from sequence playback flags. Exported `seqflag
 is a compiler extension for those sequence flags; scale/single-frame bits are derived.
 Default mode rejects known unsupported metadata, including sequence layers, IK rules/locks,
 weight fixups and reference descriptors without embedded clips. `--render-only`
-explicitly discards physics, BVH, rigs and sequence metadata; add `--with-physics` to
-keep the PHY. `--drop-bvh` exports a model whose BVH cannot be rebuilt yet, without it,
-and says so in the QC. A render-only pass does
+explicitly discards physics, rigs and sequence metadata; add `--with-physics` to
+keep the PHY. The BVH is not exported: the compiler rebuilds it from the render mesh
+(`$staticprop` trace mesh) and the PHY solids, and `roundtrip54.py` compares it with
+`compare_bvh54.py`. A render-only pass does
 not establish full-model equivalence or runtime compatibility.
 
 Default `roundtrip54.py` runs compare supported animation metadata, piecewise

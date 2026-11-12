@@ -10,9 +10,10 @@ import hashlib
 import json
 import subprocess
 from decompile54 import decompile
-from mdl54 import PROFILES
+from mdl54 import Model, PROFILES
 from validate54 import validate
 from compare_phy54 import compare as compare_phy
+from compare_bvh54 import compare as compare_bvh
 
 
 def run(paths,target,compiler,out,render_only=False,jobs=1,with_physics=False,discard_work=False):
@@ -39,6 +40,13 @@ def run(paths,target,compiler,out,render_only=False,jobs=1,with_physics=False,di
                 if not rebuilt_phy.exists(): result['physics']=dict(issues=['no rebuilt PHY'])
                 else: result['physics']=compare_phy(retail_phy,rebuilt_phy,target)
                 if result['physics']['issues']: result['status']='differ'
+            # BVH collision is rebuilt from the render mesh and PHY solids in every mode
+            if Model(path,target).get('i',0x214) or Model(rebuilt,target).get('i',0x214):
+                if render_only and not with_physics and path.with_suffix('.phy').exists():
+                    result['bvh']=dict(issues=[],notes=['PHY not exported; BVH not compared'])
+                else:
+                    result['bvh']=compare_bvh(path,rebuilt)
+                    if result['bvh']['issues']: result['status']='differ'
         except Exception as e: result.update(status='error',error=str(e))
         if discard_work:
             import shutil
