@@ -202,8 +202,10 @@ def export_jiggle_bones(m):
 
 
 def export_ui_panels(m):
-    """RUI panel meshes as $uipanel blocks: parents, vertices, faces, per-face bounds and
-    the v54 per-face masks and mask count (stored verbatim; their rule is not known)."""
+    """RUI panel meshes as $uipanel blocks: parents, vertices, faces, per-face bounds.
+    v54 stores TF2's ccw faces last, after mask_count other faces: those faces get `ccw`,
+    so the compiler derives the count. Per-face masks follow from the bounds; they are
+    written (all of them) only if one differs from the derived mask."""
     from decompile53 import ui_panel_hash
     fmt=lambda v: format(v,'.9g')
     lines=[]
@@ -212,10 +214,11 @@ def export_ui_panels(m):
         lines+=['$uipanel '+qc_quote(p['name'])+hsh,'{']
         lines+=['\tparent '+qc_quote(m.bones[b]['name']) for b in p['parents']]
         lines+=['\tvertex %d %s %s %s'%(v[0],fmt(v[1]),fmt(v[2]),fmt(v[3])) for v in p['vertices']]
-        lines+=['\tface %d %d %d'%tuple(f) for f in p['faces']]
+        lines+=['\tface %d %d %d%s'%(*f,' ccw' if k>=p['mask_count'] else '') for k,f in enumerate(p['faces'])]
         lines+=['\tbounds '+' '.join(fmt(x) for x in b) for b in p['bounds']]
-        lines+=['\tfacemask 0x%04x'%x for x in p['masks']]
-        lines+=['\tmaskcount %d'%p['mask_count'],'}']
+        if any(x!=Model.ui_face_mask(b) for x,b in zip(p['masks'],p['bounds'])):
+            lines+=['\tfacemask 0x%04x'%x for x in p['masks']]
+        lines+=['}']
     return lines
 
 

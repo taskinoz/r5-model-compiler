@@ -114,6 +114,63 @@ static uint32_t UIPanelHash(const std::string& name) {
     return h ^ (h >> 16);
 }
 
+// A v54 RUI face's mask: bit (4 * row + column) for each cell of a 4x4 grid over the
+// panel's [0,1] x [0,1] coordinates whose interior the convex hull of the face's four
+// bounds points overlaps (touching an edge does not count). Separating-axis test on the
+// grid axes and the hull's edge normals, in double. Reproduces all 33,173 S0-S3 faces.
+static uint16_t UIPanelFaceMask(const std::array<float, 8>& bounds) {
+    using P = std::pair<double, double>;
+    std::vector<P> pts;
+    for (int i = 0; i < 4; i++) pts.push_back({bounds[i], bounds[4 + i]});
+    std::sort(pts.begin(), pts.end());
+    pts.erase(std::unique(pts.begin(), pts.end()), pts.end());
+    std::vector<P> hull = pts;
+    if (pts.size() > 2) {  // Andrew's monotone chain, collinear points dropped
+        auto cross = [](const P& o, const P& a, const P& b) {
+            return (a.first - o.first) * (b.second - o.second) - (a.second - o.second) * (b.first - o.first);
+        };
+        std::vector<P> lower, upper;
+        for (const P& p : pts) {
+            while (lower.size() >= 2 && cross(lower[lower.size() - 2], lower.back(), p) <= 0) lower.pop_back();
+            lower.push_back(p);
+        }
+        for (auto it = pts.rbegin(); it != pts.rend(); ++it) {
+            while (upper.size() >= 2 && cross(upper[upper.size() - 2], upper.back(), *it) <= 0) upper.pop_back();
+            upper.push_back(*it);
+        }
+        hull.assign(lower.begin(), lower.end() - 1);
+        hull.insert(hull.end(), upper.begin(), upper.end() - 1);
+    }
+    std::vector<P> axes = {{1, 0}, {0, 1}};
+    for (size_t i = 0; i < hull.size(); i++) {
+        const P& a = hull[i];
+        const P& b = hull[(i + 1) % hull.size()];
+        axes.push_back({-(b.second - a.second), b.first - a.first});
+    }
+    uint16_t mask = 0;
+    for (int row = 0; row < 4; row++)
+        for (int col = 0; col < 4; col++) {
+            const P box[4] = {{col / 4.0, row / 4.0}, {(col + 1) / 4.0, row / 4.0},
+                              {col / 4.0, (row + 1) / 4.0}, {(col + 1) / 4.0, (row + 1) / 4.0}};
+            bool overlap = true;
+            for (const P& ax : axes) {
+                if (ax.first == 0 && ax.second == 0) continue;
+                double pmin = 1e300, pmax = -1e300, cmin = 1e300, cmax = -1e300;
+                for (const P& q : hull) {
+                    double d = ax.first * q.first + ax.second * q.second;
+                    pmin = std::min(pmin, d); pmax = std::max(pmax, d);
+                }
+                for (const P& q : box) {
+                    double d = ax.first * q.first + ax.second * q.second;
+                    cmin = std::min(cmin, d); cmax = std::max(cmax, d);
+                }
+                if (pmax <= cmin || cmax <= pmin) { overlap = false; break; }
+            }
+            if (overlap) mask |= static_cast<uint16_t>(1u << (4 * row + col));
+        }
+    return mask;
+}
+
 void EncodeAnimations(BuildContext& ctx);
 void ProcessIKRules(BuildContext& ctx);
 void BuildCollisionModel(BuildContext& ctx);
@@ -740,19 +797,29 @@ void BuildContext::FinalizeBones() {
         CUIPanel p;
         p.name = qp.name;
         p.hash = qp.hasHash ? qp.hash : UIPanelHash(qp.name);
-        p.ccw = qp.ccw;
-        p.bounds = qp.bounds;
-        // v54 per-face masks: given, else full coverage (0xFFFF) with the count equal to
-        // the face count, retail's most common form for simple panels
-        p.faceMasks = qp.faceMasks.empty() ? std::vector<uint16_t>(qp.faces.size(), 0xFFFF) : qp.faceMasks;
-        p.maskCount = qp.maskCount >= 0 ? qp.maskCount : static_cast<int>(qp.faces.size());
+        // v54 face order: the faces drawn with the stored winding, then the ccw faces
+        // (drawn reversed); the mask count is the number of the former. The client's
+        // panel draw (r5apex.exe 0x1402FF7A0) switches index writers at that face.
+        std::vector<size_t> order;
+        for (int pass = 0; pass < 2; pass++)
+            for (size_t i = 0; i < qp.faces.size(); i++)
+                if (qp.ccw[i] == pass) order.push_back(i);
+        int front = static_cast<int>(std::count(qp.ccw.begin(), qp.ccw.end(), 0));
+        p.maskCount = qp.maskCount >= 0 ? qp.maskCount : front;
+        for (size_t i : order) {
+            p.bounds.push_back(qp.bounds[i]);
+            // per-face mask: the cells of a 4x4 grid over the panel that the face's
+            // bounds polygon overlaps, given or derived (all 33,173 S0-S3 retail faces)
+            p.faceMasks.push_back(qp.faceMasks.empty() ? UIPanelFaceMask(qp.bounds[i]) : qp.faceMasks[i]);
+        }
         for (auto& name : qp.parents) p.parents.push_back(needBone(name, qp.name));
         for (auto& v : qp.vertices) {
             if (v.parent < 0 || v.parent >= static_cast<int>(p.parents.size()))
                 Fatal("$uipanel %s: vertex parent slot %d out of range", qp.name.c_str(), v.parent);
             p.vertices.push_back({v.parent, v.pos});
         }
-        for (auto& f : qp.faces) {
+        for (size_t fi : order) {
+            const auto& f = qp.faces[fi];
             for (int i : f)
                 if (i < 0 || i >= static_cast<int>(p.vertices.size()))
                     Fatal("$uipanel %s: face vertex %d out of range", qp.name.c_str(), i);

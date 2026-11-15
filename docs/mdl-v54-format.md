@@ -335,18 +335,35 @@ of the name with every byte ANDed with 0xDF, as in TF2. The include-model index
 
 v54 changes the mesh header from TF2's: uint16 parent, vertex, face and mask counts,
 then int32 offsets (relative to the mesh) of the parents, vertices, masks, faces and
-bounds, and the zero-padded name at +28. There is no winding (ccw) field. The arrays
-are packed backwards from the 16-aligned vertex array:
+bounds, and the zero-padded name at +28. There is no winding (ccw) bitfield; the mask
+count replaces it (below). The arrays are packed backwards from the 16-aligned vertex
+array:
 
 - `vertices = align16(28 + len(name) + 1 + 2*parents + 6*faces + 2*faces)`;
 - `masks = vertices - 2*faces` (one uint16 per face), `faces = masks - 6*faces`
   (three int16 vertex indices), `parents = faces - 2*parents` (int16 bones);
 - `bounds = vertices + 16*vertexcount` (eight floats per face).
 
-Vertices are 16 bytes (int32 parent slot, vec3). The per-face masks look like 4x4
-coverage bits; the mask count is at most the face count, by a rule not yet known, so
-both are stored verbatim (`facemask`, `maskcount`). Retail maxima: 2 parents, 238
+Vertices are 16 bytes (int32 parent slot, vec3). As in TF2, bounds points 0-2 are
+the panel coordinates of the face's three vertices (the client solves each face's
+panel-to-model map from them, r5apex.exe 0x1403006F0). Retail maxima: 2 parents, 238
 vertices, 85 faces, mask count 47.
+
+- **Per-face mask:** bit `4*row + column` is set for each cell of a 4x4 grid over the
+  panel's unit square (x across, y down the rows) whose interior the convex hull of the
+  face's four bounds points overlaps; a hull that only touches a cell's edge does not
+  set it. This reproduces all 33,173 S0-S3 retail faces (a bounding-box test misses
+  118). The panel draw skips faces whose mask misses a mask it computes for the panel
+  (for panels of 8 or more faces).
+- **Mask count:** the client's panel draw (r5apex.exe 0x1402FF7A0) loops over the faces
+  and switches from one index writer to one with the opposite winding at face index
+  `maskcount`. So it is the number of leading faces drawn with the stored winding; the
+  rest are TF2's `ccw` faces, stored last. The flag cannot be derived from the stored
+  geometry: the two faces of the health injector's panel have the same stored normal
+  and bounds, but only the second is drawn reversed. It does follow the source winding:
+  32,766 of the 32,779 surveyed v54 faces with a clear Z direction have a +Z normal
+  exactly when they are trailing faces, and in TF2's ptpov_rspn101 all 78 such faces
+  have a +Z normal exactly when their ccw bit is set.
 
 ## Jiggle bones (studiohdr 0x198..0x1A0)
 

@@ -443,13 +443,37 @@ class Compiler54(unittest.TestCase):
                '\tvertex 0 0 0 0\n\tvertex 0 2 0 0\n\tvertex 0 2 1 0\n\tvertex 0 0 1 0\n'
                '\tface 0 1 2\n\tface 0 2 3\n'
                '\tbounds 0 2 2 0 0 0 1 1\n\tbounds 0 2 0 0 0 1 1 1\n%s}\n')
-        # default masks: full coverage, count = faces (retail's common simple form)
+        # derived masks (the 4x4 grid cells each face's bounds polygon overlaps: the
+        # second face misses two) and, with no ccw face, a count equal to the face count
         out,_=self.run_compiler(self.qc+panel%'',target='s3',name='rui')
         (p,)=Model(out,'s3').ui_panels()
         self.assertEqual(p['hash'],ui_panel_hash('models/test/screen_rui'))
         self.assertEqual([Model(out,'s3').bones[k]['name'] for k in p['parents']],['arm'])
-        self.assertEqual((len(p['vertices']),p['faces'],p['masks'],p['mask_count']),(4,[(0,1,2),(0,2,3)],[0xFFFF,0xFFFF],2))
+        self.assertEqual((len(p['vertices']),p['faces'],p['masks'],p['mask_count']),(4,[(0,1,2),(0,2,3)],[0xFFFF,0xFFF3],2))
         self.assertEqual(p['bounds'][1],(0,2,0,0,0,1,1,1))
+        # retail mask shapes: a quadrant, an edge-touching cell and a triangle's cells
+        self.assertEqual(Model.ui_face_mask((1,.5,.5,1,0,0,.5,.5)),0x00cc)
+        self.assertEqual(Model.ui_face_mask((.25,.25,0,0,.5,.25,.25,.5)),0x0010)
+        self.assertEqual(Model.ui_face_mask((.748,.8262,.818,.818,.0539,.4958,.001,.001)),0x008c)
+        # TF2's ccw faces: written after the others, the count is the number of others,
+        # and each face keeps its own bounds and derived mask
+        tri=('$uipanel "models/test/tri_rui"\n{\n\tparent "arm"\n'
+             '\tvertex 0 0 0 0\n\tvertex 0 1 0 0\n\tvertex 0 1 1 0\n'
+             '\tface 0 1 2 ccw\n\tface 2 1 0\n\tface 1 2 0 ccw\n\tface 0 2 1\n'
+             '\tbounds 0 .5 .5 .5 0 0 .5 .5\n\tbounds .5 1 1 1 .5 .5 1 1\n'
+             '\tbounds .5 1 1 1 0 0 .5 .5\n\tbounds 0 .5 .5 .5 .5 .5 1 1\n}\n')
+        out,_=self.run_compiler(self.qc+tri,target='s3',name='rui_ccw')
+        (p,)=Model(out,'s3').ui_panels()
+        self.assertEqual((p['faces'],p['mask_count']),([(2,1,0),(0,2,1),(0,1,2),(1,2,0)],2))
+        self.assertEqual(p['masks'],[0x8c00,0x2300,0x0023,0x008c])
+        self.assertEqual([Model.ui_face_mask(b) for b in p['bounds']],p['masks'])
+        source=decompile(out,self.work/'rui_ccw_src','s3'); text=source.read_text()
+        self.assertEqual((text.count(' ccw\n'),'facemask' in text,'maskcount' in text),(2,False,False))
+        q=source.with_name('rebuilt.qc'); q.write_text(text); rebuilt=source.with_name('rebuilt.rmdl')
+        run=subprocess.run([str(self.compiler),'--target','s3','-quiet','-o',str(rebuilt),str(q)],capture_output=True,text=True,timeout=40)
+        self.assertEqual(run.returncode,0,run.stdout+run.stderr)
+        self.assertEqual(compare_extras(out,rebuilt,'s3')['issues'],[])
+        self.assertEqual(Model(rebuilt,'s3').ui_panels(),Model(out,'s3').ui_panels())
         # the include-model index points at the panel table, as in every retail model
         data=out.read_bytes(); self.assertEqual(struct.unpack_from('<i',data,0x15C)[0],struct.unpack_from('<i',data,0x130)[0])
         # explicit masks and count, stored verbatim; exact decompile/rebuild
@@ -461,8 +485,10 @@ class Compiler54(unittest.TestCase):
         run=subprocess.run([str(self.compiler),'--target','s3','-quiet','-o',str(rebuilt),str(q)],capture_output=True,text=True,timeout=40)
         self.assertEqual(run.returncode,0,run.stdout+run.stderr)
         self.assertEqual(compare_extras(out,rebuilt,'s3')['issues'],[])
-        # v54 has no winding flag: ccw is refused, not dropped
-        self.run_compiler(self.qc+panel.replace('face 0 1 2','face 0 1 2 ccw')%'',target='s3',name='rui_ccw',ok=False)
+        # explicit masks are written as given and kept by the decompiler
+        self.assertIn('facemask 0x00ff',source.read_text())
+        # ccw and an explicit count conflict; masks need one line per face
+        self.run_compiler(self.qc+panel.replace('face 0 1 2','face 0 1 2 ccw')%'\tmaskcount 1\n',target='s3',name='rui_ccwcount',ok=False)
         self.run_compiler(self.qc+panel%'\tfacemask 0xffff\n',target='s3',name='rui_onemask',ok=False)
 
     def test_jiggle_bones(self):

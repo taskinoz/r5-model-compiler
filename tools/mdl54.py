@@ -204,10 +204,41 @@ class Model(Reader):
                             **dict(zip(self.JIGGLE_FIELDS,self.get('30f',r+4))),raw=self.data[r:r+0x7C]))
         return out
 
+    @staticmethod
+    def ui_face_mask(bounds):
+        """A v54 RUI face's mask: bit 4*row+column for each cell of a 4x4 grid over the
+        panel's unit square whose interior the convex hull of the face's four bounds points
+        overlaps (separating axes: the grid axes and the hull's edge normals)."""
+        pts=sorted(set(zip(bounds[:4],bounds[4:])))
+        hull=pts
+        if len(pts)>2:
+            cross=lambda o,a,b:(a[0]-o[0])*(b[1]-o[1])-(a[1]-o[1])*(b[0]-o[0])
+            lower=[];upper=[]
+            for p in pts:
+                while len(lower)>=2 and cross(lower[-2],lower[-1],p)<=0: lower.pop()
+                lower.append(p)
+            for p in reversed(pts):
+                while len(upper)>=2 and cross(upper[-2],upper[-1],p)<=0: upper.pop()
+                upper.append(p)
+            hull=lower[:-1]+upper[:-1]
+        axes=[(1,0),(0,1)]+[(-(hull[(i+1)%len(hull)][1]-hull[i][1]),hull[(i+1)%len(hull)][0]-hull[i][0])
+                            for i in range(len(hull))]
+        mask=0
+        for row in range(4):
+            for col in range(4):
+                box=[(col/4,row/4),((col+1)/4,row/4),(col/4,(row+1)/4),((col+1)/4,(row+1)/4)]
+                for ax in axes:
+                    if ax==(0,0): continue
+                    p=[ax[0]*q[0]+ax[1]*q[1] for q in hull]; c=[ax[0]*q[0]+ax[1]*q[1] for q in box]
+                    if max(p)<=min(c) or max(c)<=min(p): break
+                else: mask|=1<<(4*row+col)
+        return mask
+
     def ui_panels(self):
         """RUI panel meshes (studiohdr 0x12C count, 0x130 offset). v54 mesh: uint16 parent,
         vertex, face and mask counts; int32 parent, vertex, mask, face and bounds offsets
-        (relative to the mesh); the name at +28."""
+        (relative to the mesh); the name at +28. Faces from mask_count on are drawn with
+        reversed winding (TF2's ccw faces)."""
         out=[]
         count,offset=self.get('i',0x12C),self.get('i',0x130)
         for i in range(count):

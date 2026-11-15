@@ -1,5 +1,6 @@
 // QC parser. Command semantics follow Valve's studiomdl (2005 SDK) with the
 // Respawn-era additions that rsx and Crowbar emit for v53 decompiles.
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -1632,10 +1633,11 @@ void Parser::CmdProceduralBones() {
     }
 }
 
-// $uipanel "name" [hash] { parent "bone" | vertex <parent> x y z | face a b c |
+// $uipanel "name" [hash] { parent "bone" | vertex <parent> x y z | face a b c [ccw] |
 //                          bounds x0 x1 x2 x3 y0 y1 y2 y3 | facemask <16-bit> | maskcount <n> }
-// facemask and maskcount (r5 extensions) are v54 per-face data stored verbatim: one
-// facemask line per face, in face order (retail values look like 4x4 coverage masks).
+// TF2's syntax. v54 has no winding bitfield: it stores the ccw faces last and the number
+// of other faces (the mask count). facemask and maskcount (r5 extensions) override the
+// derived per-face masks and count verbatim: one facemask line per face, in face order.
 void Parser::CmdUIPanel() {
     QcUIPanel p;
     p.name = S("panel name");
@@ -1656,16 +1658,14 @@ void Parser::CmdUIPanel() {
             p.vertices.push_back(v);
         } else if (Is("face")) {
             std::array<int, 3> f = {I("a"), I("b"), I("c")};
+            char ccw = 0;
             if (Avail()) {
                 tk_.Get(false);
-                if (Is("ccw")) {
-                    // the winding bitfield is 32 bits wide
-                    if (p.faces.size() >= 32) Fatal("$uipanel %s: only the first 32 faces can be ccw", p.name.c_str());
-                    p.ccw |= 1u << p.faces.size();
-                }
+                if (Is("ccw")) ccw = 1;
                 else tk_.Unget();
             }
             p.faces.push_back(f);
+            p.ccw.push_back(ccw);
         } else if (Is("bounds")) {
             std::array<float, 8> b;
             for (auto& v : b) v = F("bound");
@@ -1686,7 +1686,9 @@ void Parser::CmdUIPanel() {
     if (p.vertices.size() > 32767) Fatal("$uipanel %s: at most 32767 vertices", p.name.c_str());
     if (p.faces.size() > 65535) Fatal("$uipanel %s: at most 65535 faces", p.name.c_str());
     if (p.bounds.size() != p.faces.size()) Fatal("$uipanel %s: needs one bounds line per face", p.name.c_str());
-    if (p.ccw) Fatal("$uipanel %s: MDL v54 panels have no winding flag (ccw)", p.name.c_str());
+    bool anyCcw = std::find(p.ccw.begin(), p.ccw.end(), 1) != p.ccw.end();
+    if (anyCcw && p.maskCount >= 0)
+        Fatal("$uipanel %s: maskcount and ccw faces both set the count; use one", p.name.c_str());
     if (!p.faceMasks.empty() && p.faceMasks.size() != p.faces.size())
         Fatal("$uipanel %s: needs one facemask line per face", p.name.c_str());
     if (p.maskCount < -1 || p.maskCount > static_cast<int>(p.faces.size()))

@@ -55,7 +55,6 @@ struct CUIPanel {
     std::vector<int> parents;  // bone indices
     std::vector<std::pair<int, Vec3>> vertices;  // parent slot, position
     std::vector<std::array<int16_t, 3>> faces;
-    uint32_t ccw = 0;
     std::vector<std::array<float, 8>> bounds;
     std::vector<uint16_t> faceMasks;  // one per face
     int maskCount = 0;

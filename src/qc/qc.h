@@ -324,9 +324,9 @@ struct QcUIPanel {
     };
     std::vector<Vertex> vertices;
     std::vector<std::array<int, 3>> faces;
-    uint32_t ccw = 0;  // bit per face (MDL v53 only; v54 has no winding field)
+    std::vector<char> ccw;  // per face: drawn with reversed winding (TF2's "ccw")
     std::vector<std::array<float, 8>> bounds;  // per face: x[4], y[4]
-    std::vector<uint16_t> faceMasks;  // v54: one 16-bit mask per face ("facemask")
+    std::vector<uint16_t> faceMasks;  // v54: one 16-bit mask per face ("facemask"); empty = derived
     int maskCount = -1;               // v54 header count ("maskcount"); -1 = derived
 };
 

@@ -50,6 +50,10 @@ Read README.md, VALIDATION.md and docs/mdl-v54-format.md before changing writers
   A game crash leaves its netconsole port bound by a dead process: pass a new --port.
   The corpus round trip passed models that R5R still mishandled (missing linear bones,
   rig-side jiggle data), so check new runtime-facing structures in game.
+- RUI panels: v54 replaced TF2's ccw bitfield by face order (ccw faces last) and the
+  mask count; per-face masks derive from the bounds. Both rules came from r5apex.exe
+  (R5R): scan .pdata functions with capstone for the mesh-header field offsets
+  (+4/+6 uint16, +0x10/+0x14/+0x18 int32) and read what the loop does with them.
 - GPL/AGPL references may be consulted, not copied into this MIT implementation.
 - Run Python on extracted data with -I, with scripts outside the extraction folder.
 - Packaging follows R1: package.ps1, check_package.ps1, tag-driven release.yml.

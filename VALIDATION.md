@@ -10,8 +10,9 @@ This is not a stable release or proof of full Apex model equivalence.
 Retail and later self-hostable seasons remain future targets.
 
 Windows x64 MSVC Release: build/r5studiomdl.exe
-SHA-256: `00f58e02143edc2e5bdd8a4d823bb52550c9b81a1ad8dda2114cafa20a9eb9b2` (15 November 2026).
-Independent reader SHA-256: `59b293911d28bf9cd674981fcfaffccf73fbab854d2efbc8c88639439c22d4a4`.
+SHA-256: `5e84e3ea361d739798dd346e4a95b06dcefb28f20b56a66aa19a2a43c62c494e` (15 November 2026;
+only RUI panel writing differs from `00f58e02...`, the build of the full corpus run below).
+Independent reader SHA-256: `8b4ccac3d28c2e6c6157d5dd7ba67ee5bb732d72f1207e12d6b3057424247964`.
 
 ## Automated checks
 
@@ -545,11 +546,27 @@ screenshots (it is placed relative to the eye), so its rendering and its RUI pan
 (read by weapon scripts) are not shown in game; it loaded, spawned and was drawn
 alongside the charms without errors.
 
+## RUI masks and winding (15 November 2026)
+
+The v54 RUI per-face masks and mask count are no longer copied verbatim: the masks are
+derived from each face's bounds, and the mask count is the number of faces before TF2's
+`ccw` faces, which v54 stores last (rules and the r5apex.exe evidence in the format
+notes). The decompiler writes `face a b c ccw` and no `facemask` or `maskcount`; no retail
+face needs an explicit mask.
+
+- Survey: the derived mask matches all 33,173 S0-S3 retail faces (in the compiler and
+  in the independent `Model.ui_face_mask`).
+- Corpus: all 379 RUI models (84/89/89/117 for S0-S3) pass the full-mode round trip
+  with compiler `5e84e3ea...`, decompile54 `a0de009e...`, mdl54 `8b4ccac3...`
+  (roundtrip54 and validate54 unchanged). The round trip compares the panels exactly,
+  masks and count included. Models without panels are written as before.
+- The `ccw` meaning comes from the client's draw loop and TF2's flags, not from a
+  live test: rebuilt viewmodel panels have still not been seen in game.
+
 ## Remaining limitations
 
 - Measuring client-side ragdoll motion in game (not reachable from R5R scripts),
-  non-jiggle procedural bones (none in S0-S3), RUI panels in a weapon's view and the
-  rule for the v54 RUI mask count, importing arbitrary
+  non-jiggle procedural bones (none in S0-S3), RUI panels in a weapon's view, importing arbitrary
   existing rig dependencies, native asset-GUID layers, IK rules, transition
   nodes and followers. Export also rejects sequence keyvalues, transitions and
   procedural weight fixups, and unknown animation/sequence flags or event types.

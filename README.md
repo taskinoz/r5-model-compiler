@@ -169,10 +169,13 @@ established by chain-field comparisons.
 
 ## RUI panels and jiggle bones
 
-`$uipanel "name" [hash] { ... }` takes TF2's syntax (`parent`, `vertex`, `face`,
-`bounds`) with one to two parents and no `ccw` (v54 panels have no winding flag; it is
-refused). Two v54 options are stored verbatim: `facemask 0xNNNN` (one per face, default
-0xffff) and `maskcount N` (default the face count, at most the face count).
+`$uipanel "name" [hash] { ... }` takes TF2's syntax (`parent`, `vertex`, `face a b c
+[ccw]`, `bounds`) with one to two parents. v54 has no winding bitfield: the compiler
+writes the `ccw` faces (drawn with reversed winding) after the others and stores the
+number of others as the mask count, so there is no 32-face limit. Each face's 4x4 mask
+is derived from its bounds. Two options override the derived values verbatim:
+`facemask 0xNNNN` (one per face, in face order) and `maskcount N` (not with `ccw`
+faces).
 
 `$jigglebone` takes studiomdl's syntax. The records are written in `$jigglebone` order,
 which is the order the tables use. v54 additions:
