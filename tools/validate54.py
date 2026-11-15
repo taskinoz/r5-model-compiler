@@ -78,6 +78,25 @@ def compare_animation_metadata(model, reference, metrics=None):
                             if channel==1: error=abs((x-y+math.pi)%(2*math.pi)-math.pi)
                             if error>(.001,.0002,.0016)[channel]: bad=True
             if bad: differences.append(f'sequence {index} blend {blend} poses')
+        # a reference descriptor's inline clip: present, name, frames, fps, whether it has
+        # tracks, and its poses within the animation limits above
+        clip,rclip=seq.get('reference_clip'),ref.get('reference_clip')
+        if (clip is None)!=(rclip is None): differences.append(f'sequence {index} reference clip presence')
+        elif clip is not None:
+            if (model.string(clip+model.get('i',clip+4))!=reference.string(rclip+reference.get('i',rclip+4))
+                    or model.get('i',clip+16)!=reference.get('i',rclip+16)
+                    or abs(model.get('f',clip+8)-reference.get('f',rclip+8))>1e-6
+                    or (model.get('i',clip+12)^reference.get('i',rclip+12))&0x20000):
+                differences.append(f'sequence {index} reference clip descriptor')
+            frames,rframes=model.reference_frames(seq),reference.reference_frames(ref)
+            bad=len(frames)!=len(rframes)
+            for frame,rframe in zip(frames,rframes):
+                for bone,rbone in zip(frame,rframe):
+                    for channel,(values,rvalues) in enumerate(zip(bone,rbone)):
+                        for x,y in zip(values,rvalues):
+                            error=abs(x-y) if channel!=1 else abs((x-y+math.pi)%(2*math.pi)-math.pi)
+                            if not math.isfinite(error) or error>(.001,.0002,.0016)[channel]: bad=True
+            if bad: differences.append(f'sequence {index} reference clip poses')
     return differences
 
 

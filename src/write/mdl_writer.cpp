@@ -78,6 +78,7 @@ private:
     void WriteBoneTable();
     void WriteAnimations();
     void WriteSequences();
+    void WriteAnimDesc(size_t p, const CAnimation& a, bool inlineClip);
     void WriteNodes();
     void WriteBodyParts();
     void WriteIK();
@@ -250,9 +251,14 @@ void MdlWriter::WriteAnimations() {
     size_t count = m_.modelAnimations >= 0 ? static_cast<size_t>(m_.modelAnimations) : m_.animations.size();
     size_t base = b_.Reserve(kAnimDescSize * count);
     animationBase_ = base;
-    for (size_t i = 0; i < count; ++i) {
-        const auto& a = m_.animations[i];
-        size_t p = base + i * kAnimDescSize;
+    for (size_t i = 0; i < count; ++i) WriteAnimDesc(base + i * kAnimDescSize, m_.animations[i], false);
+}
+
+// One animation descriptor (reserved at p) and its data. A reference descriptor's
+// inline clip starts its data on a 16-byte boundary, as retail's do; a clip without
+// tracks (flag 0x20000 clear) has no data, its offset pointing at that boundary.
+void MdlWriter::WriteAnimDesc(size_t p, const CAnimation& a, bool inlineClip) {
+    {
         b_.PatchI32(p, 0); // native animation descriptors, including embedded clips
         Str(p + 4, p, a.name);
         b_.PatchAt<float>(p + 8, a.fps);
@@ -274,7 +280,11 @@ void MdlWriter::WriteAnimations() {
             b_.Append(a.frameMovement);
         }
         // Native sections include the boundary sample for interpolation.
-        if (a.nativeSections.size() == 1) {
+        if (inlineClip) b_.Align(16);
+        if (a.nativeSections.empty()) {
+            if (!inlineClip) b_.Align(16);
+            b_.PatchI32(p + 0x20, Rel(p));
+        } else if (a.nativeSections.size() == 1) {
             b_.PatchI32(p + 0x20, Rel(p));
             b_.Append(a.nativeSections[0]);
         } else {
@@ -391,6 +401,14 @@ void MdlWriter::WriteSequences() {
         for (int16_t ai : s.animIndices) {
             animationRefs_.push_back({b_.Tell(), p, ai});
             b_.I32(static_cast<int32_t>(animationBase_ + ai * kAnimDescSize) - static_cast<int32_t>(p));
+        }
+        if (s.animIndices.empty() && s.assetAnim >= 0) {
+            // A reference descriptor (no counted blends) still holds one entry, read through
+            // its 1x1 grid: its clip, inline right after the entry (every S0-S3 ref and
+            // ragdoll descriptor). Without it R5R reads a descriptor from unrelated bytes.
+            b_.I32(static_cast<int32_t>(b_.Tell() + 4 - p));  // sequence-relative
+            size_t desc = b_.Reserve(kAnimDescSize);
+            WriteAnimDesc(desc, m_.animations.at(s.assetAnim), true);
         }
         b_.Align(4);
         // keyvalues

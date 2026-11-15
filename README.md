@@ -108,11 +108,13 @@ Runtime use in R5R (see VALIDATION.md for what was measured):
   empty. Keyvalues are stored in retail's compact form.
 - A jointed model becomes a ragdoll (`BecomeRagdoll`) only if a sequence has the
   `ACT_DIERAGDOLL` activity, as retail's `ragdoll` sequence does. Retail stores it as a
-  reference-pose descriptor (no clip); write that as
+  reference-pose descriptor; write that as
   `$sequence "ragdoll" { referencepose activity ACT_DIERAGDOLL 1 }` (it needs a `$body`
-  before it). `--external-assets` builds embed a one-frame bind-pose clip in such a
-  sequence, as R5R divides by its frame count otherwise; plain builds keep retail's
-  descriptor, and its sequence asset always carries the clip.
+  before it). A reference-pose descriptor has no counted blends but holds one clip,
+  `@<label>`, inline as retail's do: `referencepose "pose.smd"` gives it (any number of
+  frames), otherwise it is one bind-pose frame. A clip equal to the bind pose is written
+  without tracks, as retail writes it. Collision and delta bases treat it as the bind
+  pose.
 - Traces report the model's `$surfaceprop`.
 
 ```powershell
@@ -198,7 +200,7 @@ VALIDATION.md, `ingame54.py --jiggle`).
 Default output contains model components. `--external-assets` additionally writes a
 `.rrig` skeleton, numbered `.seqN.rseq` sequence assets and a `.assetset` manifest.
 The render model retains embedded playback clips and reserves index zero for the
-native empty `ref` sequence. The native external-rig sentinel enables the runtime
+native `ref` reference-pose sequence. The native external-rig sentinel enables the runtime
 virtual-rig mapping, including IK chains. Separate rig/sequence-only playback is not yet proved.
 The manifest records the target and sequence count so
 stale sequence files cannot enter the package. This output is available for all
@@ -297,8 +299,9 @@ pose parameters/keys, per-blend FPS and flags, numeric/named events, fades, acti
 names/modifiers, bounds and sequence bone weights. Named `$animation` definitions
 keep animation settings separate from sequence playback flags. Exported `seqflags`
 is a compiler extension for those sequence flags; scale/single-frame bits are derived
-(a clip-less descriptor keeps its single-frame bit as stored). Descriptors without a
-clip (retail `ref` and `ragdoll`) export as `referencepose` sequences. Model keyvalues
+(a reference descriptor keeps its single-frame bit as stored). Reference descriptors
+(retail `ref` and `ragdoll`) export as `referencepose` sequences, with their clip as an
+SMD when it has tracks. Model keyvalues
 and hitbox sets (unless generated) are exported in every mode, and an include-model
 count of -1 (the external-rig linkage most retail models use) is accepted.
 Default mode rejects known unsupported metadata, including sequence layers, IK rules/locks,

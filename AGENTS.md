@@ -37,9 +37,9 @@ Read README.md, VALIDATION.md and docs/mdl-v54-format.md before changing writers
   locals ("Too many locals"), so generated probes call helper functions; ragdolls are
   client-side (the server only sees its entity replaced) and need an ACT_DIERAGDOLL
   sequence; traces report the model's $surfaceprop, not the BVH surface table.
-  An empty (clip-less) ragdoll descriptor crashes BecomeRagdoll in a RePak build
-  (divide by zero), so --external-assets embeds the bind-pose clip; `ref` must stay
-  empty. R5R has no server prop_ragdoll, and client ragdolls are not found by
+  Every reference descriptor (ref, ragdoll) holds an inline clip that its blend count
+  (0) does not count; without one R5R reads a descriptor from whatever follows (the
+  r5apex.exe+0x1CA771/0x1CA80B crashes) or divides by zero in BecomeRagdoll. R5R has no server prop_ragdoll, and client ragdolls are not found by
   GetClientEntArrayBySignifier, so ragdoll motion is not script-measurable there.
   Retail keyvalues are always compact `mdlkeyvalue{prop_data{base "X"}}`.
 - Jiggle bones in game: tools/build_r5r_jiggle_test.py, then `ingame54.py --jiggle`.
@@ -47,7 +47,10 @@ Read README.md, VALIDATION.md and docs/mdl-v54-format.md before changing writers
   and samples an attachment on a jiggle bone (the charm's MENU_CAMERA_FOCUS) relative to
   the prop. Retail rigs (.rrig, exported with the patched RSX in test-output/bin/rsx from
   the S3 install at F:\Games\Apex Detours\Apex s3) were the reference for the rig rules.
-  A game crash leaves its netconsole port bound by a dead process: pass a new --port.
+  A crashed game's crashmsg.exe (the runtime's bin/crashmsg.exe) keeps its netconsole
+  port bound; closing those dialogs frees the ports. Weapon views: `ingame54.py --weapon`
+  (tools/build_r5r_rui_test.py); a rebuilt viewmodel is drawn only when its RePak entry
+  also names the retail rig (its animations), which RePak accepts unpackaged.
   The corpus round trip passed models that R5R still mishandled (missing linear bones,
   rig-side jiggle data), so check new runtime-facing structures in game.
 - RUI panels: v54 replaced TF2's ccw bitfield by face order (ccw faces last) and the

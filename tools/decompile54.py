@@ -364,7 +364,17 @@ def decompile(path, outdir, target, *, render_only=False, with_physics=False):
             weightname=f'r5c_weights_{si}'
             lines+=['$weightlist '+qc_quote(weightname)+' {']
             lines+=['  '+qc_quote(b['name'])+' '+format(w,'.9g') for b,w in zip(m.bones,meta['weights'])]
-            lines+=['}', '$sequence '+qc_quote(seq['name'])+' {','  referencepose' if reference else '  '+' '.join(qc_quote(n) for n in names),
+            pose=''
+            if reference and seq['reference_clip'] is not None:
+                # its clip ('@' + label, 30 fps): exported when it has tracks; without them
+                # it is the bind pose, which the compiler writes the same way
+                desc=seq['reference_clip']; flags=m.get('i',desc+12)
+                if flags&~0x20000 or abs(m.get('f',desc+8)-30)>1e-6 or m.string(desc+m.get('i',desc+4))!='@'+seq['name']:
+                    raise ValueError('unsupported reference clip')
+                if flags&0x20000:
+                    filename=f'ref{si}.smd'
+                    write_smd(out/filename,m.bones,m.reference_frames(seq)); pose=' '+qc_quote(filename)
+            lines+=['}', '$sequence '+qc_quote(seq['name'])+' {','  referencepose'+pose if reference else '  '+' '.join(qc_quote(n) for n in names),
                     # a clip-less descriptor keeps its single-frame bit (retail has both)
                     '  seqflags '+str(seq['flags']&~(0x20000 if reference else 0xA0000)),'  seqweights '+qc_quote(weightname),
                     '  blendwidth '+str(meta['grid'][0]),

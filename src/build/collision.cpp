@@ -1139,9 +1139,11 @@ void BuildCollisionModel(BuildContext& ctx) {
     };
 
     if (!qc.joints) {
-        // single rigid body in entity space, posed by animation 0 frame 0 (studiomdl ConvertToWorldSpace)
+        // single rigid body in entity space, posed by animation 0 frame 0 (studiomdl
+        // ConvertToWorldSpace); a reference clip (asset-only) stands for the bind pose:
+        // retail's collision ignores it (bangalore_rockets_projectile's ref is turned 90°)
         std::vector<Mat3x4> b2w;
-        if (!ctx.anims.empty())
+        if (!ctx.anims.empty() && !ctx.anims[0].IsReferenceClip())
             ctx.CalcBoneTransforms(ctx.anims[0], 0, b2w);
         else {
             b2w.resize(bones.size());
@@ -1606,7 +1608,7 @@ void BuildCollisionModel(BuildContext& ctx) {
     // differs only when that frame moves the root bone.
     if (!qc.joints && !ctx.out.sequences.empty() && !ctx.out.sequences[0].explicitBox) {
         Mat3x4 unpose;
-        if (!ctx.anims.empty()) {
+        if (!ctx.anims.empty() && !ctx.anims[0].IsReferenceClip()) {
             std::vector<Mat3x4> b2w;
             ctx.CalcBoneTransforms(ctx.anims[0], 0, b2w);
             unpose = Invert(Concat(b2w[0], Invert(bones[0].boneToPose)));

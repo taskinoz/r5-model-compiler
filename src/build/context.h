@@ -61,6 +61,8 @@ struct BoneXf {
 };
 
 struct WAnim {
+    // a reference descriptor's clip (asset-only): not a pose source for collision or deltas
+    bool IsReferenceClip() const { return qc && qc->assetOnly; }
     std::shared_ptr<QcAnimation> qc;
     SrcInst* inst = nullptr;
     std::string name;

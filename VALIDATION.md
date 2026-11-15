@@ -10,9 +10,8 @@ This is not a stable release or proof of full Apex model equivalence.
 Retail and later self-hostable seasons remain future targets.
 
 Windows x64 MSVC Release: build/r5studiomdl.exe
-SHA-256: `5e84e3ea361d739798dd346e4a95b06dcefb28f20b56a66aa19a2a43c62c494e` (15 November 2026;
-only RUI panel writing differs from `00f58e02...`, the build of the full corpus run below).
-Independent reader SHA-256: `8b4ccac3d28c2e6c6157d5dd7ba67ee5bb732d72f1207e12d6b3057424247964`.
+SHA-256: `04c2882da112dcb1a6099690d96b73665216d503e155c0ade33acfaf2644d9c6` (15 November 2026; the build of the full corpus run under "Reference clips").
+Independent reader SHA-256: `8d03d43c4f659c0ca1207de179a7c8a46fc08a15b4208b61460ea1607029aff5`.
 
 ## Automated checks
 
@@ -538,13 +537,9 @@ Found by these runs, each confirmed against retail and fixed before the passing 
 - The bone-controller offset is the unpadded end of the per-bone slot table in all 114
   retail jiggle models; the compiler had padded it to 4.
 
-The rebuilt charms rest at the bind pose stored in the model (the probe at
-(0.357, -0.33, 0), as the pose-to-bone matrices give); the installed retail charm,
-which has no sequence asset and an empty `ref`, rests rotated from it in R5R, so the
-swing amplitudes are not compared. The vinson viewmodel's geometry is not in the
-screenshots (it is placed relative to the eye), so its rendering and its RUI panels
-(read by weapon scripts) are not shown in game; it loaded, spawned and was drawn
-alongside the charms without errors.
+The rebuilt charms then rested at the bind pose while the installed retail charm rested
+rotated, and the vinson viewmodel was not seen; both are resolved below (reference
+clips).
 
 ## RUI masks and winding (15 November 2026)
 
@@ -563,10 +558,50 @@ face needs an explicit mask.
 - The `ccw` meaning comes from the client's draw loop and TF2's flags, not from a
   live test: rebuilt viewmodel panels have still not been seen in game.
 
+## Reference clips, R5R crash and RUI in a weapon's view (15 November 2026)
+
+Every retail reference descriptor (`ref`, `ragdoll`) holds an inline clip that its blend
+count does not count (layout in the format notes); the reader, decompiler and compiler
+had treated them as clip-less. The compiler wrote the descriptor's offsets but no clip,
+so R5R read an animation descriptor from the bytes that followed. That was the
+r5apex.exe+0x1CA771 / +0x1CA80B crash, which depended on the model and memory layout:
+the earlier jiggle package passed once and crashed in four runs today, unchanged. The
+compiler now writes the clip inline as retail does (no tracks for the bind pose), the
+decompiler exports clips with tracks (1,453 of 1,962; they were being dropped), constant
+positions use retail's half-float form, and the round trip compares each clip (presence,
+name, frames, fps, tracks flag, every pose within the animation limits).
+
+Compiler `04c2882d...` (frozen copy in test-output/full54-v4), mdl54 `8d03d43c...`, decompile54
+`c1d3c3b2...`, validate54 `c6cc9b90...`. Full mode for all 1,789 models and render + PHY for the 1,128
+BVH models: identical to the run above (full S0-S3 358/418/426/578 pass; render + PHY
+227/270/271/351), the same retail anomalies and the refused hull. All 75 regressions pass.
+
+In game (R5R v2.6.52, isolated runtime):
+
+- The jiggle package rebuilt with this compiler passes (exit 0): the rebuilt charm now
+  rests where the retail charm does and swings as it does (probe peak 0.1714 against
+  retail's 0.1714, rest offset identical, settled to 0), the embedded-rig variant the
+  same, the control still. The difference noted above was retail's `@ref` pose.
+- The collision package rebuilt with this compiler passes (traces, drops, both ragdoll
+  switches), so the inline ragdoll clip serves BecomeRagdoll as the counted one did.
+- RUI: `tools/build_r5r_rui_test.py` packages the retail Flatline viewmodel
+  (ptpov_vinson, 20 panels) rebuilt, and the same without its `$uipanel` blocks.
+  `ingame54.py --weapon mp_weapon_vinson --viewmodel <path>` points the runtime copy of
+  the weapon script at a model and gives the player the weapon. With only its own rig
+  the rebuilt viewmodel is not drawn in the player's view (it has no weapon
+  animations); with the RePak map also naming the retail rig
+  `animrig/weapons/vinson/ptpov_vinson.rrig` (not packaged; RePak accepts the
+  reference) it is drawn and animated, and its ammo screen shows the counter ("00",
+  "FULL") as the retail viewmodel's does, while the panel-less control's screen is
+  blank. The panels' derived masks and ccw order therefore drive the game's RUI.
+- Found by that view: the decompiler flattens body groups, so every optional sight and
+  suppressor of a weapon is drawn at once (about 800 S0-S3 models have body-group
+  choices; the round trip does not compare body-part structure). Next to fix.
+
 ## Remaining limitations
 
 - Measuring client-side ragdoll motion in game (not reachable from R5R scripts),
-  non-jiggle procedural bones (none in S0-S3), RUI panels in a weapon's view, importing arbitrary
+  non-jiggle procedural bones (none in S0-S3), body groups (flattened on export), importing arbitrary
   existing rig dependencies, native asset-GUID layers, IK rules, transition
   nodes and followers. Export also rejects sequence keyvalues, transitions and
   procedural weight fixups, and unknown animation/sequence flags or event types.

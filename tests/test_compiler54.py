@@ -393,28 +393,48 @@ class Compiler54(unittest.TestCase):
         plain,_=self.run_compiler(qc,target='s3',name='refpose')
         model=Model(plain,'s3')
         ragdoll=next(s for s in model.sequences if s['name']=='ragdoll')
-        # the model keeps a descriptor without a clip, as retail's bird does
+        # retail's form: no counted blends, a 1x1 grid, and one sequence-relative entry
+        # pointing at its clip right after it ('@' + label, 30 fps, one frame)
         self.assertEqual(ragdoll['animations'],[])
+        self.assertEqual(model.get('2i',ragdoll['offset']+0x44),(1,1))
+        clip=ragdoll['reference_clip']; p=ragdoll['offset']
+        self.assertEqual(clip,p+model.get('i',p+0x3C)+4)
+        self.assertEqual((model.string(clip+model.get('i',clip+4)),model.get('f',clip+8),model.get('i',clip+16)),('@ragdoll',30.0,1))
+        # the bind pose has no tracks (flag 0x20000 clear), its data offset 16-aligned
+        self.assertEqual(model.get('i',clip+12)&0x20000,0)
+        self.assertEqual((clip+model.get('i',clip+32))%16,0)
+        self.assertEqual(model.reference_frames(ragdoll)[0][1][0],tuple(model.bones[1]['pos']))
         self.assertEqual(model.sequence_metadata(ragdoll)['activity'],'ACT_DIERAGDOLL')
-        # a descriptor without a clip keeps the flags it is given (retail has both forms)
+        # a descriptor keeps the flags it is given (retail has both forms)
         self.assertEqual(ragdoll['flags']&0x80000,0)
         single,_=self.run_compiler(qc.replace('  referencepose\n','  referencepose\n  seqflags 524288\n'),target='s3',name='refpose_single')
         self.assertEqual(next(x for x in Model(single,'s3').sequences if x['name']=='ragdoll')['flags']&0x80000,0x80000)
-        self.assertEqual(model.get('2i',ragdoll['offset']+0x44),(1,1))
-        # runtime builds: the descriptor embeds the bind-pose clip (R5R divides by its
-        # frame count otherwise); `ref` stays empty; the sequence asset carries the clip
+        # a posed clip: given as the sequence's file, it has tracks and keeps its pose
+        write_smd(self.work/'pose.smd',self.bones,[[((0,0,0),(0,0,0),(1,1,1)),((0,2,0),(0,0,1.5),(1,1,1))]]*2)
+        posed,_=self.run_compiler(self.qc+'$sequence "ragdoll" {\n  referencepose\n  "pose.smd"\n}\n',target='s3',name='refpose_posed')
+        m2=Model(posed,'s3'); seq=next(s for s in m2.sequences if s['name']=='ragdoll')
+        self.assertTrue(m2.get('i',seq['reference_clip']+12)&0x20000)
+        frames=m2.reference_frames(seq)
+        self.assertEqual(len(frames),2)
+        self.assertAlmostEqual(frames[1][1][1][2],1.5,places=3)
+        self.assertAlmostEqual(frames[0][1][0][1],2.0,places=3)
+        # runtime builds: the same inline clip; the inserted `ref` gets a bind-pose clip
+        # too; the sequence asset carries the clip as a counted blend
         out,_=self.run_compiler(qc,target='s3',name='refpose_ext',extra=['--external-assets'])
         model=Model(out,'s3'); rig=Model(out.with_suffix('.rrig'),'s3')
         names=[s['name'] for s in model.sequences]
         self.assertEqual(names[0],'ref'); self.assertEqual(model.sequences[0]['animations'],[])
+        ref=model.sequences[0]
+        self.assertEqual(model.string(ref['reference_clip']+model.get('i',ref['reference_clip']+4)),'@ref')
         index=names.index('ragdoll')
-        self.assertEqual(len(model.sequences[index]['animations']),1)
+        self.assertEqual(model.sequences[index]['animations'],[])
+        self.assertIsNotNone(model.sequences[index]['reference_clip'])
         asset=SequenceAsset(out.with_suffix('.seq%d.rseq'%index),rig)
         (seq,)=asset.sequences
-        self.assertEqual([len(asset.animation(d)) for d in seq['animations']],[1])
+        self.assertEqual([asset.get('i',d+16) for d in seq['animations']],[1])
         self.assertEqual(asset.sequence_metadata(seq)['activity'],'ACT_DIERAGDOLL')
-        with self.assertRaises(AssertionError):  # a referencepose sequence takes no clip
-            self.run_compiler(self.qc+'$sequence "bad" {\n  referencepose\n  "mesh.smd"\n}\n',name='refpose_bad',ok=True)
+        with self.assertRaises(AssertionError):  # one clip file at most
+            self.run_compiler(self.qc+'$sequence "bad" {\n  referencepose\n  "mesh.smd" "pose.smd"\n}\n',name='refpose_bad',ok=True)
 
     def test_hitboxes_and_keyvalues_round_trip(self):
         from decompile54 import decompile

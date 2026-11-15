@@ -5,11 +5,33 @@
 #include "core/log.h"
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 namespace r2c {
 namespace {
 constexpr float rotationStep = 0.00019175345f;
 constexpr float scaleStep = 0.0030518509f;
+
+// IEEE half precision, rounding to nearest even (finite inputs; overflow saturates to inf)
+uint16_t FloatToHalf(float value) {
+    uint32_t f;
+    std::memcpy(&f, &value, 4);
+    uint32_t sign = (f >> 16) & 0x8000, mag = f & 0x7FFFFFFF;
+    if (mag >= 0x477FF000) return uint16_t(sign | 0x7C00);  // beyond the largest half
+    if (mag < 0x38800000) {                                  // subnormal half
+        float a = std::fabs(value) * 16777216.f;            // units of 2^-24
+        return uint16_t(sign | static_cast<uint32_t>(std::nearbyint(a)));
+    }
+    uint32_t h = ((mag - 0x38000000) >> 13), rest = mag & 0x1FFF;
+    if (rest > 0x1000 || (rest == 0x1000 && (h & 1))) h++;
+    return uint16_t(sign | h);
+}
+
+float HalfToFloat(uint16_t h) {
+    int e = (h >> 10) & 31, m = h & 1023;
+    float v = e == 0 ? std::ldexp(static_cast<float>(m), -24) : std::ldexp(static_cast<float>(m | 1024), e - 25);
+    return (h & 0x8000) ? -v : v;
+}
 
 std::vector<uint8_t> Section(const BuildContext& ctx, const WAnim& a, int first, int last) {
     Buffer b;
@@ -27,9 +49,28 @@ std::vector<uint8_t> Section(const BuildContext& ctx, const WAnim& a, int first,
                 float v = a.sanim[f][j].pos[axis] - (delta ? 0.f : ctx.bones[j].pos[axis]);
                 positionStep = std::max(positionStep, std::fabs(v) / 32767.f);
             }
-        if (positionStep / 2 > .01f) Fatal("v54 animation position exceeds 0.01-inch quantization budget");
-        b.F32(positionStep);
-        size_t pos = b.Reserve(4), rot = b.Reserve(4), scale = b.Reserve(4);
+        // A constant position may instead be stored as three absolute half floats (mode bit
+        // 4 clear), as retail stores them: used when no less accurate than the track (exact
+        // for retail-derived values, e.g. empty_lights' ref clip at 179 inches).
+        bool constant = true;
+        float halfError = 0;
+        uint16_t halves[3] = {};
+        for (int axis = 0; axis < 3; ++axis) {
+            float v0 = a.sanim[first][j].pos[axis];
+            for (int f = first + 1; f <= last; ++f)
+                if (a.sanim[f][j].pos[axis] != v0) constant = false;
+            halves[axis] = FloatToHalf(v0);
+            halfError = std::max(halfError, std::fabs(HalfToFloat(halves[axis]) - v0));
+        }
+        size_t pos = SIZE_MAX;
+        if (constant && halfError <= positionStep / 2) {
+            for (uint16_t h : halves) b.U16(h);
+        } else {
+            if (positionStep / 2 > .01f) Fatal("v54 animation position exceeds 0.01-inch quantization budget");
+            b.F32(positionStep);
+            pos = b.Reserve(4);
+        }
+        size_t rot = b.Reserve(4), scale = b.Reserve(4);
         auto track = [&](size_t ptr, int kind, float step) {
             size_t data = b.Tell();
             if (data - ptr > 8191) Fatal("v54 track offset overflow");
@@ -56,12 +97,13 @@ std::vector<uint8_t> Section(const BuildContext& ctx, const WAnim& a, int first,
                 }
             }
         };
-        track(pos, 0, positionStep);
+        if (pos != SIZE_MAX) track(pos, 0, positionStep);
         track(rot, 1, rotationStep);
         track(scale, 2, scaleStep);
         size_t size = b.Tell() - record;
         if (size > 8191) Fatal("v54 animation bone record overflow");
-        b.PatchAt<uint16_t>(record, uint16_t((7 << 13) | size));
+        // modes: 4 position track (else constant halves), 2 rotation track, 1 scale track
+        b.PatchAt<uint16_t>(record, uint16_t(((pos != SIZE_MAX ? 7 : 3) << 13) | size));
     }
     b.Align(4);
     return b.Data();

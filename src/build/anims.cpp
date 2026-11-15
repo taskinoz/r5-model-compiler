@@ -1515,6 +1515,27 @@ void EncodeAnimations(BuildContext& ctx) {
             ca.sections.push_back(EncodeChain(ctx, a, posScales, a.numFrames - 1, a.numFrames - 1));
         }
         ca.assetOnly = a.qc && a.qc->assetOnly;
+        // A reference clip (asset-only) equal to the bind pose has no tracks: flag 0x20000
+        // clear and no data, as retail writes every such clip (all 509 S0-S3 clips without
+        // tracks hold the bind pose; every clip with tracks differs from it).
+        if (ca.assetOnly && !(a.flags & 4)) {
+            bool bind = true;
+            for (int f = 0; f < a.numFrames && bind; f++)
+                for (size_t j = 0; j < ctx.bones.size() && bind; j++) {
+                    const auto& xf = a.sanim[f][j];
+                    const auto& bn = ctx.bones[j];
+                    for (int k = 0; k < 3; k++) {
+                        float r = std::remainder(xf.rot[k] - bn.rot[k], 2 * kPi);
+                        if (std::fabs(xf.pos[k] - bn.pos[k]) > 1e-4f || std::fabs(r) > 1e-5f ||
+                            std::fabs(xf.scale[k] - bn.scale[k]) > 1e-4f) bind = false;
+                    }
+                }
+            if (bind) {
+                ca.nativeSections.clear();
+                ca.sectionFrames = 0;
+                ca.flags &= ~0x20000;
+            }
+        }
         ctx.out.animations.push_back(std::move(ca));
     }
 }

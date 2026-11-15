@@ -374,6 +374,7 @@ void BuildContext::BuildBounds() {
     }
     for (auto& a : anims)
         if (!(a.flags & STUDIO_DELTA) && a.numFrames > 0) {
+            if (a.IsReferenceClip()) break;  // stands for the bind pose
             for (size_t k = 0; k < bones.size(); k++) {
                 basePos[k] = a.sanim[0][k].pos;
                 baseRot[k] = a.sanim[0][k].rot;

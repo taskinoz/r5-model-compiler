@@ -106,7 +106,28 @@ class Model(Reader):
         for p in self.array(self.get('i',0xC0),self.get('i',0xC4),0xD0):
             indices=[p+self.get('i',q) for q in self.array(self.get('i',p+0x38),p+self.get('i',p+0x3C),4)]
             self.sequences.append(dict(name=self.string(p+self.get('i',p+4)),flags=self.get('i',p+12),
-                                       animations=indices,offset=p))
+                                       animations=indices,offset=p,reference_clip=self._reference_clip(p,indices)))
+
+    def _reference_clip(self, p, indices):
+        """A reference descriptor's clip: with no counted blends, a 1x1 sequence still holds
+        one sequence-relative entry at its animation index, pointing at the descriptor that
+        follows it (every S0-S3 ref/ragdoll descriptor; the client reads it through the
+        grid). None when absent."""
+        if indices or self.get('i',p) or self.get('2i',p+0x44)!=(1,1): return None
+        entry=p+self.get('i',p+0x3C)
+        if not 0<entry<=len(self.data)-4: return None
+        desc=p+self.get('i',entry)
+        if desc!=entry+4 or desc+0x34>len(self.data): return None
+        return desc
+
+    def reference_frames(self, seq):
+        """Decoded poses of a reference clip; a clip without usable tracks (flag 0x20000
+        clear) holds the bind pose."""
+        desc=seq['reference_clip']
+        if self.get('i',desc+12)&0x20000: return self.animation(desc)
+        frames=self.get('i',desc+16)
+        if not 0<frames<=1000000: raise ValueError('invalid frame count')
+        return [[(tuple(b['pos']),tuple(b['rot']),tuple(b['scale'])) for b in self.bones] for _ in range(frames)]
 
     def frame_movement(self, descriptor):
         """Decode early-profile int32 section tables and bound every scalar packet."""
@@ -558,7 +579,8 @@ class SequenceAsset(Model):
         self.sequence_metadata(self.sequences[0])
         for p in indices:
             self.frame_movement(p); self.movements(p)
-            self.animation(p)
+            # a clip without tracks (flag 0x20000 clear: a bind-pose reference clip) has no data
+            if self.get('i',p+12)&0x20000: self.animation(p)
 
     def pose_parameters(self): return self.rig.pose_parameters()
     def ik_chains(self): return self.rig.ik_chains()

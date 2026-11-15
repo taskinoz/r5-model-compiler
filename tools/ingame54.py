@@ -325,6 +325,7 @@ def write_probe(runtime,models,controls=()):
            'global function R5C_Run',
            'global function R5C_Cleanup',
            'global function R5C_Collision',
+           'global function R5C_Weapon',
            'struct { array<entity> props } file',
            'void function CodeCallback_RFiveCompiler_Test_ModInit()', '{',
            *[f'  PrecacheModel( ${literal(model["path"])} )' for model in list(models)+list(controls)], '}',
@@ -366,6 +367,15 @@ def write_probe(runtime,models,controls=()):
         lines += ['  }']
     lines += ['  print( "R5C_DONE\\n" )','}',
               'void function R5C_Cleanup() { foreach ( entity prop in file.props ) { if ( IsValid(prop) ) prop.Destroy() } file.props.clear() }']
+    # --weapon: the player's main weapons replaced by the named one, held in the main hand
+    lines += ['void function R5C_Weapon( string name )','{',
+              '  entity player = GetPlayerArray()[0]',
+              '  for ( int slot = WEAPON_INVENTORY_SLOT_PRIMARY_0; slot <= WEAPON_INVENTORY_SLOT_PRIMARY_1; slot++ )',
+              '    if ( IsValid( player.GetNormalWeapon( slot ) ) ) player.TakeNormalWeaponByIndexNow( slot )',
+              '  entity weapon = player.GiveWeapon( name, WEAPON_INVENTORY_SLOT_PRIMARY_0, [] )',
+              '  player.SetActiveWeaponBySlot( eActiveInventorySlot.mainHand, WEAPON_INVENTORY_SLOT_PRIMARY_0 )',
+              '  print( format( "R5C_WEAPON %s %d\\n", name, IsValid( weapon ) ? 1 : 0 ) )',
+              '}']
     # controls: installed game models given the same collision checks
     lines += collision_probe(list(models)+list(controls),literal)
     mod=Path(runtime)/'mods'/'r5c_compiler_test'
@@ -569,6 +579,16 @@ def summarize_visual(log,count,extra_selections=0):
                 scope='client script execution only; screenshots require visual review')
 
 
+def drain(connection,seconds=1.0):
+    """Netconsole text received within the next few seconds (e.g. late probe output)."""
+    text=''; end=time.monotonic()+seconds
+    while time.monotonic()<end:
+        try: text+=connection.receive().get(4,b'').decode('utf-8',errors='replace')
+        except socket.timeout: continue
+        except (ConnectionError,OSError): break
+    return text
+
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--game',required=True); p.add_argument('--runtime',required=True)
@@ -577,7 +597,12 @@ def main():
     p.add_argument('--keep-open',action='store_true',help='leave the isolated game open for manual inspection')
     p.add_argument('--jiggle',action='store_true',help='also step the jiggle_probe models declared in the package report sideways and sample their probe attachment on the client')
     p.add_argument('--collision',action='store_true',help='also run traces and physics drops declared in the package report')
+    p.add_argument('--weapon',help='finally give the player this weapon (a script name such as mp_weapon_vinson) and take screenshots of its view')
+    p.add_argument('--viewmodel',help='with --weapon: the viewmodel path its script uses in the isolated runtime (e.g. a packaged model)')
     a=p.parse_args()
+    import re
+    if a.weapon and not re.fullmatch(r'mp_weapon_[a-z0-9_]+',a.weapon): p.error('invalid weapon script name')
+    if a.viewmodel and (not a.weapon or not re.fullmatch(r'mdl/[A-Za-z0-9_/]+\.rmdl',a.viewmodel)): p.error('--viewmodel needs --weapon and an mdl/....rmdl path')
     pak=Path(a.pak).resolve()
     package=json.loads(pak.with_suffix('.report.json').read_text())
     if package.get('target')!='s3': p.error('R5R test requires an s3 package report')
@@ -612,6 +637,17 @@ def main():
     # local test connection settings at the end of that server startup file.
     server_config=runtime/'platform/cfg/tools/rcon_server_dev.cfg'
     server_original=server_config.read_text()
+    # --viewmodel: the runtime copy of the weapon script names the model (restored below)
+    weapon_script=runtime/'platform/scripts/weapons'/((a.weapon or 'none')+'.txt')
+    weapon_original=None
+    if a.weapon:
+        if not weapon_script.is_file(): p.error('weapon script not found: '+str(weapon_script))
+        weapon_original=weapon_script.read_bytes()
+        if a.viewmodel:
+            text=weapon_original.decode('utf-8')
+            patched,n=re.subn(r'(?m)^(\s*"viewmodel"\s+)"[^"]*"',lambda m: m.group(1)+'"'+a.viewmodel+'"',text)
+            if n!=1: p.error('weapon script has no single viewmodel line')
+            weapon_script.write_bytes(patched.encode('utf-8'))
     server_config.write_text(server_original+'\n'+config.read_text())
     args=[str(runtime/'r5apex.exe'),'-launcher','-offline','-dev','-devsdk','-fnf','-multiple',
         '-novid','-windowed','-w','1280','-h','720','-console','-playlistfile','playlists_r5_patch.txt',
@@ -668,10 +704,22 @@ def main():
                             connection.command('script_client R5C_VisualSelect(-1)')
                             connection.command('script_client R5C_Jiggle()'); time.sleep(3.5)
                             connection.command('screenshot'); time.sleep(4)
+                        if a.weapon:
+                            # out of the way of the view: client props hidden, server props removed
+                            connection.command('script_client R5C_VisualSelect(-1)')
+                            connection.command('script R5C_Weapon("'+a.weapon+'")'); time.sleep(4)
+                            connection.command('screenshot'); time.sleep(2)
+                            connection.command('screenshot'); time.sleep(1)
+                            log+=drain(connection)
                         break
                 except socket.timeout: continue
                 except ConnectionError: break
         report.update(summarize(log,package['models'])); report['state']='finished'
+        if a.weapon:
+            report['weapon']=dict(name=a.weapon,viewmodel=a.viewmodel or 'script default',
+                                  given='R5C_WEAPON '+a.weapon+' 1' in log,
+                                  scope='weapon given; its panels need visual review of the screenshots')
+            if not report['weapon']['given']: report['failures'].append('weapon was not given')
         if a.collision:
             report['collision']=summarize_collision(log,package['models']+package.get('collision_controls',[]))
             report['failures']+=report['collision']['failures']
@@ -684,12 +732,12 @@ def main():
                     for name in ('script.log','error.log'):
                         path=directory/name
                         if path.exists(): native_log+=path.read_text(errors='replace')+'\n'
-            if (not summarize_visual(native_log,len(package['models']),int(a.jiggle))['failures']
+            if (not summarize_visual(native_log,len(package['models']),int(a.jiggle)+int(bool(a.weapon)))['failures']
                     and (not a.jiggle or 'R5C_JIG_DONE' in native_log)) or process.poll() is not None:
                 break
             if attempt<12: time.sleep(0.5)
         (runtime/'r5c-script.log').write_text(native_log,encoding='utf-8')
-        report['visual']=summarize_visual(native_log,len(package['models']),int(a.jiggle))
+        report['visual']=summarize_visual(native_log,len(package['models']),int(a.jiggle)+int(bool(a.weapon)))
         if a.collision:
             import re
             samples={}
@@ -717,6 +765,7 @@ def main():
         config.unlink(missing_ok=True)
         if not a.keep_open: (runtime/'.r5c-session.json').unlink(missing_ok=True)
         server_config.write_text(server_original)
+        if weapon_original is not None: weapon_script.write_bytes(weapon_original)
         report['elapsed_seconds']=time.monotonic()-started
         report['exit_code']=process.poll() if process else None
         report['screenshots']=[str(p) for p in runtime.rglob('*.tga') if str(p) not in previous_screenshots]

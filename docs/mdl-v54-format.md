@@ -64,8 +64,8 @@ the reader represents that cycle as None for comparison and exports it as frame 
 Other nonfinite cycles and unknown event types are rejected by the export path.
 
 All 1,962 sequence descriptors in the 1,789 extracted common models have zero
-embedded blends and a 1x1 grid, including reference descriptors both with and
-without flag 0x80000. They are decoded as descriptors, not fabricated as clips.
+counted blends and a 1x1 grid, including reference descriptors both with and
+without flag 0x80000. Each still holds one inline clip (below).
 This survey provides no retail animated-event parity evidence. Native autolayers
 reference a uint64 sequence asset GUID, unlike TF2's local sequence index; the
 compiler rejects layers until the native asset dependency path is implemented.
@@ -319,12 +319,24 @@ confirmed in R5R where noted.
   flag 1 marks generated hitboxes.
 - Include-model count (0x158) -1, in 386 of 581 S3 models: not an include model but the
   external-rig linkage (the loader builds the virtual rig from asset references).
-- Reference-pose descriptors: a 1x1 sequence without a clip, holding the reference
-  pose (retail `ref`, and `ragdoll` with ACT_DIERAGDOLL in the bird); its flags have
-  the single-frame bit 0x80000 or not. In S3 the pose for runtime use comes from the
-  sequence asset. In R5R v2.6.52 a RePak-built model's own descriptor is evaluated by
-  BecomeRagdoll: an empty one divides by zero (r5apex.exe+0x1CAEFA); with a one-frame
-  bind-pose clip the ragdoll switch works as retail's does.
+- Reference-pose descriptors (retail `ref`, and `ragdoll` with ACT_DIERAGDOLL): a 1x1
+  sequence whose blend count (0x38) is 0 but whose animation index (0x3C) still holds
+  one sequence-relative entry, read through the grid (r5apex.exe 0x1401C8AD0). It points
+  at a clip descriptor right after the entry, named `@` + label, 30 fps, its data on a
+  16-byte boundary (all 1,962 S0-S3 descriptors). The clip is the reference pose: one
+  frame in most, up to 191 in viewmodels (`ref`); 1,453 have tracks and differ from the
+  bind pose (e.g. bangalore_rockets_projectile turned 90 degrees, charm_nessy); the
+  other 509 (all single-bone props) hold the bind pose with no tracks (flag 0x20000
+  clear, data offset at the boundary). Collision is not posed by it (the rocket's
+  physics matches the bind pose). Without the clip R5R reads a descriptor from the
+  following bytes (crashes at r5apex.exe+0x1CA771/0x1CA80B) and BecomeRagdoll divides by
+  its frame count (0x1CAEFA). The descriptor flags have the single-frame bit 0x80000 or
+  not.
+- Animation tracks: a bone record's mode bits (header >> 13) select tracks: 4 position,
+  2 rotation, 1 scale. A clear bit stores a constant: three absolute half floats for
+  position or scale, a 64-bit quaternion for rotation. Retail stores constant positions
+  that way (empty_lights' ref clip at 179 inches); the compiler does when the half value
+  is no less accurate than the track.
 
 ## RUI panels (studiohdr 0x12C count, 0x130 offset)
 
