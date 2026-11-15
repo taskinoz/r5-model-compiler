@@ -281,6 +281,8 @@ struct QcJiggleBone {
     std::string bone;
     int flags = 0;
     float v[29] = {};  // mstudiojigglebone_t fields after flags, in file order
+    float tipFriction = 0;  // v54: the float after tipMass
+    int storedBone = -1;    // v54 bone byte; -1 = the bone's own index
 };
 
 // $proceduralbones (studiomdl): axis interpolation (.txt "proceduralbones" blocks),
@@ -322,8 +324,10 @@ struct QcUIPanel {
     };
     std::vector<Vertex> vertices;
     std::vector<std::array<int, 3>> faces;
-    uint32_t ccw = 0;  // bit per face
+    uint32_t ccw = 0;  // bit per face (MDL v53 only; v54 has no winding field)
     std::vector<std::array<float, 8>> bounds;  // per face: x[4], y[4]
+    std::vector<uint16_t> faceMasks;  // v54: one 16-bit mask per face ("facemask")
+    int maskCount = -1;               // v54 header count ("maskcount"); -1 = derived
 };
 
 struct QcCollisionJoint {

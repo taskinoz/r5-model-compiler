@@ -180,6 +180,47 @@ class Model(Reader):
             chains.append(dict(name=self.string(p+self.get('i',p)),type=self.get('i',p+4),unknown=unknown,links=links))
         return chains
 
+    def _many(self,fmt,offset,count):
+        # get() returns a bare value for one item
+        if not count: return []
+        v=self.get(fmt,offset); return list(v) if isinstance(v,tuple) else [v]
+
+    JIGGLE_FIELDS = ['length', 'tipMass', 'tipFriction', 'yawStiffness', 'yawDamping', 'pitchStiffness', 'pitchDamping', 'alongStiffness', 'alongDamping', 'angleLimit', 'minYaw', 'maxYaw', 'yawFriction', 'yawBounce', 'minPitch', 'maxPitch', 'pitchFriction', 'pitchBounce', 'baseMass', 'baseStiffness', 'baseDamping', 'baseMinLeft', 'baseMaxLeft', 'baseLeftFriction', 'baseMinUp', 'baseMaxUp', 'baseUpFriction', 'baseMinForward', 'baseMaxForward', 'baseForwardFriction']
+
+    def jiggle_bones(self):
+        """v54 jiggle bones in procedural order (studiohdr 0x198 count, 0x19C byte table of
+        bone indices). Each 0x7C record (at bone+0x9C): u8 flags, u8 bone byte, i16 pad,
+        then v53's mstudiojigglebone_t floats with tipFriction after tipMass."""
+        out=[]
+        count,table=self.get('i',0x198),self.get('i',0x19C)
+        for s in range(count):
+            bone=self.data[table+s]
+            if bone>=len(self.bones): raise ValueError('procedural bone table outside skeleton')
+            p=self.get('i',0xA4)+0xB8*bone
+            if self.get('i',p+0x98)!=5: raise ValueError('procedural table lists a non-jiggle bone')
+            r=p+self.get('i',p+0x9C)
+            flags,byte,pad=self.get('2Bh',r)
+            out.append(dict(bone=bone,flags=flags,bone_byte=byte,pad=pad,
+                            **dict(zip(self.JIGGLE_FIELDS,self.get('30f',r+4))),raw=self.data[r:r+0x7C]))
+        return out
+
+    def ui_panels(self):
+        """RUI panel meshes (studiohdr 0x12C count, 0x130 offset). v54 mesh: uint16 parent,
+        vertex, face and mask counts; int32 parent, vertex, mask, face and bounds offsets
+        (relative to the mesh); the name at +28."""
+        out=[]
+        count,offset=self.get('i',0x12C),self.get('i',0x130)
+        for i in range(count):
+            ho=offset+8*i; hsh,rel=self.get('I',ho),self.get('i',ho+4); o=ho+rel
+            pc,vc,fc,mc=self.get('4H',o); po,vo,xo,io,bo=self.get('5i',o+8)
+            out.append(dict(hash=hsh,name=self.string(o+28),
+                            parents=self._many('%dh'%pc,o+po,pc),
+                            vertices=[self.get('i3f',o+vo+16*k) for k in range(vc)],
+                            faces=[self.get('3h',o+io+6*k) for k in range(fc)],
+                            masks=self._many('%dH'%fc,o+xo,fc),mask_count=mc,
+                            bounds=[self.get('8f',o+bo+32*k) for k in range(fc)]))
+        return out
+
     def pose_parameters(self):
         result=[]
         for p in self.array(self.get('i',0x134),self.get('i',0x138),20):

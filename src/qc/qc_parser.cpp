@@ -1632,8 +1632,10 @@ void Parser::CmdProceduralBones() {
     }
 }
 
-// $uipanel "name" [hash] { parent "bone" | vertex <parent> x y z | face a b c [ccw] |
-//                          bounds x0 x1 x2 x3 y0 y1 y2 y3 }
+// $uipanel "name" [hash] { parent "bone" | vertex <parent> x y z | face a b c |
+//                          bounds x0 x1 x2 x3 y0 y1 y2 y3 | facemask <16-bit> | maskcount <n> }
+// facemask and maskcount (r5 extensions) are v54 per-face data stored verbatim: one
+// facemask line per face, in face order (retail values look like 4x4 coverage masks).
 void Parser::CmdUIPanel() {
     QcUIPanel p;
     p.name = S("panel name");
@@ -1668,14 +1670,27 @@ void Parser::CmdUIPanel() {
             std::array<float, 8> b;
             for (auto& v : b) v = F("bound");
             p.bounds.push_back(b);
+        } else if (Is("facemask")) {
+            unsigned long m = std::strtoul(S("face mask").c_str(), nullptr, 0);
+            if (m > 0xFFFF) Fatal("$uipanel %s: facemask must fit 16 bits", p.name.c_str());
+            p.faceMasks.push_back(static_cast<uint16_t>(m));
+        } else if (Is("maskcount")) {
+            p.maskCount = I("mask count");
         } else {
             Fatal("%s: unknown $uipanel option \"%s\"", tk_.Where().c_str(), T().c_str());
         }
     }
+    // v54 counts are 16-bit and face indices signed 16-bit (retail maxima: 2 parents,
+    // 238 vertices, 85 faces, mask count 47, over 6,621 S0-S3 panels)
     if (p.parents.empty() || p.parents.size() > 2) Fatal("$uipanel %s: needs one or two parent bones", p.name.c_str());
-    if (p.vertices.size() > 256) Fatal("$uipanel %s: at most 256 vertices", p.name.c_str());
-    if (p.faces.size() > 64) Fatal("$uipanel %s: at most 64 faces", p.name.c_str());
+    if (p.vertices.size() > 32767) Fatal("$uipanel %s: at most 32767 vertices", p.name.c_str());
+    if (p.faces.size() > 65535) Fatal("$uipanel %s: at most 65535 faces", p.name.c_str());
     if (p.bounds.size() != p.faces.size()) Fatal("$uipanel %s: needs one bounds line per face", p.name.c_str());
+    if (p.ccw) Fatal("$uipanel %s: MDL v54 panels have no winding flag (ccw)", p.name.c_str());
+    if (!p.faceMasks.empty() && p.faceMasks.size() != p.faces.size())
+        Fatal("$uipanel %s: needs one facemask line per face", p.name.c_str());
+    if (p.maskCount < -1 || p.maskCount > static_cast<int>(p.faces.size()))
+        Fatal("$uipanel %s: maskcount must be between 0 and the face count", p.name.c_str());
     m_.uiPanels.push_back(p);
 }
 
@@ -1704,7 +1719,14 @@ void Parser::CmdJiggleBone() {
             fn(ToLower(T()));
         }
     };
-    auto deg = [&]() { return DegToRad(F("angle")); };
+    // degrees to radians in double precision, so decompiled angles return to the same float
+    auto deg = [&]() {
+        std::string t = tk_.Need("angle");
+        char* end = nullptr;
+        double v = std::strtod(t.c_str(), &end);
+        if (end == t.c_str()) Fatal("%s: expected an angle, got \"%s\"", tk_.Where().c_str(), t.c_str());
+        return static_cast<float>(v * (3.14159265358979323846 / 180.0));
+    };
     while (tk_.Get(true)) {
         if (T() == "}") break;
         if (Is("is_flexible") || Is("is_rigid")) {
@@ -1713,6 +1735,7 @@ void Parser::CmdJiggleBone() {
             readSection([&](const std::string& k) {
                 if (k == "length") j.v[J_LENGTH] = F("length");
                 else if (k == "tip_mass") j.v[J_TIPMASS] = F("tip_mass");
+                else if (k == "tip_friction") j.tipFriction = F("tip_friction");
                 else if (k == "yaw_stiffness") j.v[J_YAWSTIFF] = F("v");
                 else if (k == "yaw_damping") j.v[J_YAWDAMP] = F("v");
                 else if (k == "pitch_stiffness") j.v[J_PITCHSTIFF] = F("v");
@@ -1727,10 +1750,15 @@ void Parser::CmdJiggleBone() {
                 else if (k == "pitch_constraint") { j.flags |= 0x08; j.v[J_MINPITCH] = deg(); j.v[J_MAXPITCH] = deg(); }
                 else if (k == "pitch_friction") j.v[J_PITCHFRICTION] = F("v");
                 else if (k == "pitch_bounce") j.v[J_PITCHBOUNCE] = F("v");
+                // limits stored without enabling the constraint (retail keeps some)
+                else if (k == "stored_angle_limit") j.v[J_ANGLELIMIT] = deg();
+                else if (k == "stored_yaw_limits") { j.v[J_MINYAW] = deg(); j.v[J_MAXYAW] = deg(); }
+                else if (k == "stored_pitch_limits") { j.v[J_MINPITCH] = deg(); j.v[J_MAXPITCH] = deg(); }
                 else Warn("%s: unknown jigglebone option %s", tk_.Where().c_str(), k.c_str());
             });
-        } else if (Is("has_base_spring")) {
-            j.flags |= 0x40;
+        } else if (Is("has_base_spring") || Is("base_values")) {
+            // base_values: the base-spring fields stored without enabling the spring
+            if (Is("has_base_spring")) j.flags |= 0x40;
             readSection([&](const std::string& k) {
                 if (k == "stiffness") j.v[J_BASESTIFF] = F("v");
                 else if (k == "damping") j.v[J_BASEDAMP] = F("v");
@@ -1743,6 +1771,11 @@ void Parser::CmdJiggleBone() {
                 else if (k == "forward_friction") j.v[J_BASEFWDFRICTION] = F("v");
                 else Warn("%s: unknown jigglebone base option %s", tk_.Where().c_str(), k.c_str());
             });
+        } else if (Is("bone_byte")) {
+            // v54 records store a bone index byte; retail stores the bone's own index
+            // except in a few models (kept verbatim by the decompiler)
+            j.storedBone = I("bone byte");
+            if (j.storedBone < 0 || j.storedBone > 255) Fatal("%s: bone_byte must be 0-255", tk_.Where().c_str());
         } else if (Is("is_boing")) {
             Warn("%s: is_boing jigglebones are not supported in v53, ignored", tk_.Where().c_str());
             readSection([&](const std::string&) { while (Avail()) tk_.Get(false); });

@@ -653,6 +653,8 @@ void BuildContext::FinalizeBones() {
         CJiggle j;
         j.flags = jb.flags;
         std::copy(std::begin(jb.v), std::end(jb.v), j.v);
+        j.tipFriction = jb.tipFriction;
+        j.storedBone = jb.storedBone;
         out.bones[k].proctype = 5;  // STUDIO_PROC_JIGGLE
         out.bones[k].jiggle = static_cast<int>(out.jiggles.size());
         out.bones[k].flags |= BONE_ALWAYS_PROCEDURAL;
@@ -740,6 +742,10 @@ void BuildContext::FinalizeBones() {
         p.hash = qp.hasHash ? qp.hash : UIPanelHash(qp.name);
         p.ccw = qp.ccw;
         p.bounds = qp.bounds;
+        // v54 per-face masks: given, else full coverage (0xFFFF) with the count equal to
+        // the face count, retail's most common form for simple panels
+        p.faceMasks = qp.faceMasks.empty() ? std::vector<uint16_t>(qp.faces.size(), 0xFFFF) : qp.faceMasks;
+        p.maskCount = qp.maskCount >= 0 ? qp.maskCount : static_cast<int>(qp.faces.size());
         for (auto& name : qp.parents) p.parents.push_back(needBone(name, qp.name));
         for (auto& v : qp.vertices) {
             if (v.parent < 0 || v.parent >= static_cast<int>(p.parents.size()))

@@ -34,7 +34,8 @@ enum HdrOff : size_t {
     H_CONSTDIRLIGHTDOT = 0x168, H_ROOTLOD = 0x169, H_NUMALLOWEDROOTLODS = 0x16A, H_FADEDISTANCE = 0x16C,
     H_NUMFLEXCONTROLLERUI = 0x174, H_FLEXCONTROLLERUIINDEX = 0x178, H_VERTANIMSCALE = 0x17C, H_SURFACEPROPLOOKUP = 0x180,
     H_SOURCEFILENAMEOFFSET = 0x184, H_NUMSRCBONETRANSFORM = 0x188, H_SRCBONETRANSFORMINDEX = 0x18C,
-    H_ILLUMPOSATTACHMENTINDEX = 0x190, H_LINEARBONEINDEX = 0x194, H_BONEFLEXDRIVERCOUNT = 0x1A4,
+    H_ILLUMPOSATTACHMENTINDEX = 0x190, H_LINEARBONEINDEX = 0x194, H_NUMPROCBONES = 0x198,
+    H_PROCBONETABLEINDEX = 0x19C, H_LINEARPROCBONEINDEX = 0x1A0, H_BONEFLEXDRIVERCOUNT = 0x1A4,
     H_BONEFLEXDRIVERINDEX = 0x1A8, H_PERTRIINDEX = 0x1AC, H_PERTRINODECOUNT = 0x1B0, H_PERTRILEAFCOUNT = 0x1B4,
     H_PERTRIVERTCOUNT = 0x1B8, H_UNKSTRINGOFFSET = 0x1BC, H_VTXOFFSET = 0x1C0, H_VVDOFFSET = 0x1C4, H_VVCOFFSET = 0x1C8,
     H_PHYOFFSET = 0x1CC, H_VTXSIZE = 0x1D0, H_VVDSIZE = 0x1D4, H_VVCSIZE = 0x1D8, H_PHYSIZE = 0x1DC,
@@ -71,6 +72,7 @@ private:
     void WriteHeader();
     void WriteSourceFiles();
     void WriteBones();
+    void WriteProceduralBones(size_t boneBase);
     void WriteAttachments();
     void WriteHitboxes();
     void WriteBoneTable();
@@ -151,8 +153,44 @@ void MdlWriter::WriteBones() {
         b_.PatchI32(p + 0xA8, bn.contents);
         b_.PatchI32(p + 0xB4, -1);
     }
+    WriteProceduralBones(base);
     b_.Align(4);
     HdrHere(H_BONECONTROLLERINDEX);
+}
+
+// v54 jiggle bones, measured on all 748 retail records (114 S0-S3 models): one 0x7C
+// record per procedural bone straight after the bone array, in procedural ($jigglebone)
+// order; then a byte table of bone indices in that order (0x19C) and a per-bone byte
+// table holding each bone's procedural slot or 255 (0x1A0). Models without procedural
+// bones store zeros in all three header fields.
+void MdlWriter::WriteProceduralBones(size_t boneBase) {
+    std::vector<int> order(m_.jiggles.size(), -1);
+    for (size_t i = 0; i < m_.bones.size(); i++)
+        if (m_.bones[i].jiggle >= 0) order.at(m_.bones[i].jiggle) = static_cast<int>(i);
+    std::vector<int> slots;
+    for (int bone : order)
+        if (bone >= 0) slots.push_back(bone);  // a jiggle whose bone was dropped writes nothing
+    if (slots.empty()) return;
+    Hdr(H_NUMPROCBONES, static_cast<int>(slots.size()));
+    for (int bone : slots) {
+        const CJiggle& j = m_.jiggles[m_.bones[bone].jiggle];
+        size_t p = b_.Tell();
+        b_.PatchI32(boneBase + bone * kBoneSize + 0x98, 5);  // STUDIO_PROC_JIGGLE
+        b_.PatchI32(boneBase + bone * kBoneSize + 0x9C, static_cast<int32_t>(p - (boneBase + bone * kBoneSize)));
+        b_.U8(static_cast<uint8_t>(j.flags));
+        b_.U8(static_cast<uint8_t>(j.storedBone >= 0 ? j.storedBone : bone));
+        b_.I16(0);
+        b_.F32(j.v[0]);
+        b_.F32(j.v[1]);
+        b_.F32(j.tipFriction);
+        for (int k = 2; k < 29; k++) b_.F32(j.v[k]);
+    }
+    HdrHere(H_PROCBONETABLEINDEX);
+    for (int bone : slots) b_.U8(static_cast<uint8_t>(bone));
+    HdrHere(H_LINEARPROCBONEINDEX);
+    std::vector<uint8_t> slotOf(m_.bones.size(), 255);
+    for (size_t s = 0; s < slots.size(); s++) slotOf[slots[s]] = static_cast<uint8_t>(s);
+    for (uint8_t s : slotOf) b_.U8(s);
 }
 
 void MdlWriter::WriteAttachments() {
@@ -486,7 +524,11 @@ void MdlWriter::WritePoseParams() {
 
 void MdlWriter::WriteIncludeModels() {
     // RUI panel meshes come first: header array (hash, offset), then each mesh 16-byte
-    // aligned: 32-byte header, name, parents, faces, vertices (16-aligned), bounds.
+    // aligned. MDL v54 mesh (all 6,621 S0-S3 retail panels): uint16 parent, vertex,
+    // face and mask counts; int32 parent, vertex, mask, face and bounds offsets; the
+    // name at +28; then, packed back from the 16-aligned vertices: parents (int16),
+    // faces (3 x int16), one uint16 mask per face; vertices (int parent slot, vec3);
+    // bounds (8 floats per face).
     b_.Align(4);
     size_t panelStart = b_.Tell();
     HdrHere(H_UIPANELOFFSET);
@@ -500,16 +542,17 @@ void MdlWriter::WriteIncludeModels() {
         b_.PatchI32(headers + i * 8 + 4, static_cast<int32_t>(mesh - (headers + i * 8)));
         int pc = static_cast<int>(p.parents.size()), vc = static_cast<int>(p.vertices.size());
         int fc = static_cast<int>(p.faces.size());
-        int vo = static_cast<int>((32 + p.name.size() + 1 + 2 * pc + 6 * fc + 15) & ~size_t(15));
-        int io = vo - 6 * fc, po = io - 2 * pc, bo = vo + 16 * vc;
-        for (int v : {pc, vc, fc, po, vo, io, bo}) b_.I32(v);
-        b_.U32(p.ccw);
+        int vo = static_cast<int>((28 + p.name.size() + 1 + 2 * pc + 6 * fc + 2 * fc + 15) & ~size_t(15));
+        int xo = vo - 2 * fc, io = xo - 6 * fc, po = io - 2 * pc, bo = vo + 16 * vc;
+        for (int v : {pc, vc, fc, p.maskCount}) b_.U16(static_cast<uint16_t>(v));
+        for (int v : {po, vo, xo, io, bo}) b_.I32(v);
         for (char c : p.name) b_.U8(static_cast<uint8_t>(c));
         b_.U8(0);
         while (b_.Tell() < mesh + po) b_.U8(0);
         for (int bone : p.parents) b_.I16(static_cast<int16_t>(bone));
         for (auto& f : p.faces)
             for (int16_t v : f) b_.I16(v);
+        for (uint16_t m : p.faceMasks) b_.U16(m);
         while (b_.Tell() < mesh + vo) b_.U8(0);
         for (auto& v : p.vertices) {
             b_.I32(v.first);

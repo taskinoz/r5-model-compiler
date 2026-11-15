@@ -57,11 +57,15 @@ struct CUIPanel {
     std::vector<std::array<int16_t, 3>> faces;
     uint32_t ccw = 0;
     std::vector<std::array<float, 8>> bounds;
+    std::vector<uint16_t> faceMasks;  // one per face
+    int maskCount = 0;
 };
 
 struct CJiggle {
     int flags = 0;
     float v[29] = {};
+    float tipFriction = 0;  // v54: the float after tipMass
+    int storedBone = -1;    // v54 bone byte; -1 = the bone's own index
 };
 
 struct CVertex {

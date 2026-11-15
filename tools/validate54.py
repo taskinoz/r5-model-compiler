@@ -20,7 +20,11 @@ def canonical(render):
                 # Keep winding; select a deterministic cyclic start.
                 start=min(range(3),key=lambda i:(tuple(round(x,4) for x in tri[i]['pos']),tuple(tri[i]['uv'])))
                 triangles.append(tri[start:]+tri[:start])
-        lods.append(sorted(triangles,key=lambda tri:tuple(round(x,4) for v in tri for x in (*v['pos'],*v['uv']))))
+        # Position and UV order the triangles; normals and weights only break ties, so
+        # coincident duplicates (e.g. a glow shell bound to another bone) pair up stably.
+        lods.append(sorted(triangles,key=lambda tri:(tuple(round(x,4) for v in tri for x in (*v['pos'],*v['uv'])),
+                                                     tuple(round(x,3) for v in tri for x in v['normal']),
+                                                     tuple(tuple((k,round(w,4)) for k,w in sorted(v['weights'])) for v in tri))))
     return lods
 
 

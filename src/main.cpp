@@ -165,9 +165,10 @@ int main(int argc, char** argv) {
             phy = WritePHY54(model.physics, target == "s3", 0);
             model.physics.apexPhySize = static_cast<int>(phy.size());
         }
-        if (!model.uiPanels.empty()) Fatal("Apex RUI compilation is not implemented yet");
-        for(auto& bone:model.bones) if(bone.proctype || bone.jiggle>=0)
-            Fatal("Apex procedural-bone compilation is not implemented yet");
+        for(auto& bone:model.bones) if(bone.proctype && bone.proctype!=5)
+            Fatal("Apex procedural bones other than jiggle bones are not implemented (retail S0-S3 uses only jiggle bones)");
+        if(model.bones.size()>255 && !model.jiggles.empty())
+            Fatal("Apex jiggle bones need at most 255 bones (the procedural tables index bones with bytes)");
         for(auto& anim:model.animations) if(!anim.ikRules.empty())
             Fatal("Apex IK rules are not implemented yet");
         if(!model.boneFollowers.empty() || !model.includeModels.empty())

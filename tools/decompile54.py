@@ -156,6 +156,69 @@ def export_keyvalues(m):
     return lines+['}']
 
 
+def export_jiggle_bones(m):
+    """$jigglebone blocks in procedural order (the order sets the record slots). Every
+    stored value is written so that the record is rebuilt byte for byte: floats with 9
+    significant digits, angles in degrees with 17 (the compiler converts them in double
+    precision), the v54 tip_friction, an empty is_rigid section when retail sets both the
+    rigid and flexible bits, and the stored bone byte where it is not the bone's own index.
+    Limits stored without their flag use the stored_* options."""
+    g=lambda v: format(v,'.9g')
+    deg=lambda v: format(math.degrees(v),'.17g')
+    lines=[]
+    for j in m.jiggle_bones():
+        f=j['flags']
+        if j['pad']: raise ValueError('jiggle record padding is not zero')
+        if f&~0x7F: raise ValueError('unknown jiggle flags 0x%x'%f)
+        body=['$jigglebone '+qc_quote(m.bones[j['bone']]['name']),'{']
+        if f&0x03==0x03: body+=['\tis_rigid','\t{','\t}']
+        if f&0x03:
+            body+=['\t'+('is_flexible' if f&0x01 else 'is_rigid'),'\t{']
+            body+=['\t\t%s %s'%(k,g(j[n])) for k,n in (('length','length'),('tip_mass','tipMass'),('tip_friction','tipFriction'),
+                   ('yaw_stiffness','yawStiffness'),('yaw_damping','yawDamping'),('pitch_stiffness','pitchStiffness'),
+                   ('pitch_damping','pitchDamping'),('along_stiffness','alongStiffness'),('along_damping','alongDamping'))]
+            if f&0x20: body.append('\t\tallow_length_flex')
+            if f&0x10: body.append('\t\tangle_constraint '+deg(j['angleLimit']))
+            elif j['angleLimit']: body.append('\t\tstored_angle_limit '+deg(j['angleLimit']))
+            if f&0x04: body.append('\t\tyaw_constraint %s %s'%(deg(j['minYaw']),deg(j['maxYaw'])))
+            elif j['minYaw'] or j['maxYaw']: body.append('\t\tstored_yaw_limits %s %s'%(deg(j['minYaw']),deg(j['maxYaw'])))
+            body+=['\t\tyaw_friction '+g(j['yawFriction']),'\t\tyaw_bounce '+g(j['yawBounce'])]
+            if f&0x08: body.append('\t\tpitch_constraint %s %s'%(deg(j['minPitch']),deg(j['maxPitch'])))
+            elif j['minPitch'] or j['maxPitch']: body.append('\t\tstored_pitch_limits %s %s'%(deg(j['minPitch']),deg(j['maxPitch'])))
+            body+=['\t\tpitch_friction '+g(j['pitchFriction']),'\t\tpitch_bounce '+g(j['pitchBounce']),'\t}']
+        else:
+            raise ValueError('jiggle bone without a flexible or rigid section')
+        # base values are stored (and reproduced) even without a base spring section
+        body+=['\thas_base_spring' if f&0x40 else '\tbase_values','\t{']
+        body+=['\t\t%s %s'%(k,' '.join(g(j[n]) for n in ns)) for k,ns in (
+               ('stiffness',['baseStiffness']),('damping',['baseDamping']),('base_mass',['baseMass']),
+               ('left_constraint',['baseMinLeft','baseMaxLeft']),('left_friction',['baseLeftFriction']),
+               ('up_constraint',['baseMinUp','baseMaxUp']),('up_friction',['baseUpFriction']),
+               ('forward_constraint',['baseMinForward','baseMaxForward']),('forward_friction',['baseForwardFriction']))]
+        body.append('\t}')
+        if j['bone_byte']!=j['bone']: body.append('\tbone_byte %d'%j['bone_byte'])
+        lines+=body+['}']
+    return lines
+
+
+def export_ui_panels(m):
+    """RUI panel meshes as $uipanel blocks: parents, vertices, faces, per-face bounds and
+    the v54 per-face masks and mask count (stored verbatim; their rule is not known)."""
+    from decompile53 import ui_panel_hash
+    fmt=lambda v: format(v,'.9g')
+    lines=[]
+    for p in m.ui_panels():
+        hsh='' if p['hash']==ui_panel_hash(p['name']) else ' 0x%08x'%p['hash']
+        lines+=['$uipanel '+qc_quote(p['name'])+hsh,'{']
+        lines+=['\tparent '+qc_quote(m.bones[b]['name']) for b in p['parents']]
+        lines+=['\tvertex %d %s %s %s'%(v[0],fmt(v[1]),fmt(v[2]),fmt(v[3])) for v in p['vertices']]
+        lines+=['\tface %d %d %d'%tuple(f) for f in p['faces']]
+        lines+=['\tbounds '+' '.join(fmt(x) for x in b) for b in p['bounds']]
+        lines+=['\tfacemask 0x%04x'%x for x in p['masks']]
+        lines+=['\tmaskcount %d'%p['mask_count'],'}']
+    return lines
+
+
 def export_hitboxes(m):
     """Hitbox sets (studiohdr 0xB0/0xB4; 0x2C-byte boxes: bone, group, min, max, name,
     crit override, hit data group). Models whose hitboxes were generated (header flag 1)
@@ -185,14 +248,14 @@ def decompile(path, outdir, target, *, render_only=False, with_physics=False):
     unsupported=[]
     # The BVH is rebuilt by the compiler from the render mesh ($staticprop trace) and the
     # PHY solids, so it is not listed here; roundtrip54 compares it.
-    for label,offset in [('RUI',0x12C),
-                         ('procedural bones',0x198),('followers',0x1E8),('include models',0x158),
+    for label,offset in [
+                         ('followers',0x1E8),('include models',0x158),
                          ('IK autoplay locks',0x148),('transition nodes',0xFC)]:
         # include-model count -1 is not an include model: it is the external-rig linkage
         # (the loader builds the virtual rig from asset references), 386 of 581 S3 models
         if offset==0x158 and m.get('i',offset)==-1: continue
         if m.get('i',offset): unsupported.append(label)
-    if any(b['proctype'] for b in m.bones): unsupported.append('bone procedures')
+    if any(b['proctype'] not in (0,5) for b in m.bones): unsupported.append('non-jiggle bone procedures')
     if unsupported and not render_only:
         raise ValueError('unsupported for native export: '+', '.join(unsupported)+'; use --render-only for an explicit geometry export')
     skeleton=[(b['pos'],b['rot'],b['scale']) for b in m.bones]
@@ -258,7 +321,7 @@ def decompile(path, outdir, target, *, render_only=False, with_physics=False):
         lines+=['$lod '+format(distance,'.9g')+' {']
         lines+=['  replacemodel '+qc_quote(f'mesh{mi}_lod0.dmx')+' '+qc_quote(f'mesh{mi}_lod{li}.dmx') for mi in range(len(m.meshes))]
         lines+=['}']
-    lines+=export_keyvalues(m)+export_hitboxes(m)
+    lines+=export_keyvalues(m)+export_hitboxes(m)+export_ui_panels(m)+export_jiggle_bones(m)
     for a in m.attachments:
         lines+=['$attachment '+qc_quote(a['name'])+' '+qc_quote(m.bones[a['bone']]['name'])+' 0 0 0 matrix '+' '.join(format(x,'.9g') for x in a['matrix'])]
     if not render_only:

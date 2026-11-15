@@ -7,7 +7,7 @@ assets. This is the experimental R5 sibling of
 
 **This is an initial development compiler, not a validated replacement for
 Respawn's asset bakery.** Native render data and basic animation are implemented.
-Native PHY physics and BVH collision are implemented; procedural bones are unfinished. External rig/sequence
+Native PHY physics, BVH collision, RUI panels and jiggle bones are implemented. External rig/sequence
 output and an S3 RePak wrapper are available; limited R5R playback/render tests are
 documented in [VALIDATION.md](VALIDATION.md).
 No game assets, game binaries or extraction tools are distributed.
@@ -49,7 +49,9 @@ Basic IK chain descriptors can be compiled, exported and compared. R5R has loade
 and played the authored chain-bearing model; solver equivalence is not established.
 
 `$collisionmodel` and `$collisionjoints` write the native `.phy` beside the model (see
-"Physics" below). The compiler rejects procedures, RUI, IK rules,
+"Physics" below). `$uipanel` and `$jigglebone` write the native v54 RUI and jiggle-bone
+data (see "RUI panels and jiggle bones" below). The compiler rejects non-jiggle
+procedural bones (axis/quaternion interpolation, aim constraints), IK rules,
 animation layers, transition nodes, followers, QC include-model rig imports and more than sixteen influences. Some
 inherited QC commands remain unimplemented. No TF2 collision or animation structures
 are presented as native Apex output.
@@ -165,6 +167,27 @@ early-Apex default is cos(30 degrees), verified over 326 native chains. Use
 are still unsupported. IK locks, asset dependencies and runtime solving are not
 established by chain-field comparisons.
 
+## RUI panels and jiggle bones
+
+`$uipanel "name" [hash] { ... }` takes TF2's syntax (`parent`, `vertex`, `face`,
+`bounds`) with one to two parents and no `ccw` (v54 panels have no winding flag; it is
+refused). Two v54 options are stored verbatim: `facemask 0xNNNN` (one per face, default
+0xffff) and `maskcount N` (default the face count, at most the face count).
+
+`$jigglebone` takes studiomdl's syntax. The records are written in `$jigglebone` order,
+which is the order the tables use. v54 additions:
+
+- `tip_friction X` in the `is_flexible`/`is_rigid` section (the float after tip mass);
+- an empty `is_rigid { }` before `is_flexible { ... }` sets both bits, as retail does;
+- `stored_angle_limit A`, `stored_yaw_limits MIN MAX`, `stored_pitch_limits MIN MAX`
+  store limit values without enabling the constraint;
+- `base_values { ... }` sets the base-spring fields without enabling the spring;
+- `bone_byte N` overrides the record's bone byte (default: the bone's own index).
+
+Jiggle angles are converted in double precision, so exported angles (written with 17
+significant digits) rebuild to the same floats. A model with jiggle bones may have at
+most 255 bones.
+
 ## Materials and loading
 
 Default output contains model components. `--external-assets` additionally writes a
@@ -274,7 +297,8 @@ clip (retail `ref` and `ragdoll`) export as `referencepose` sequences. Model key
 and hitbox sets (unless generated) are exported in every mode, and an include-model
 count of -1 (the external-rig linkage most retail models use) is accepted.
 Default mode rejects known unsupported metadata, including sequence layers, IK rules/locks,
-weight fixups, RUI and procedural bones. `--render-only`
+weight fixups and non-jiggle procedural bones. RUI panels and jiggle bones are
+exported. `--render-only`
 explicitly discards physics, rigs and sequence metadata; add `--with-physics` to
 keep the PHY. The BVH is not exported: the compiler rebuilds it from the render mesh
 (`$staticprop` trace mesh) and the PHY solids, and `roundtrip54.py` compares it with

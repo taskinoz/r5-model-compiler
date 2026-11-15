@@ -326,6 +326,47 @@ confirmed in R5R where noted.
   BecomeRagdoll: an empty one divides by zero (r5apex.exe+0x1CAEFA); with a one-frame
   bind-pose clip the ragdoll switch works as retail's does.
 
+## RUI panels (studiohdr 0x12C count, 0x130 offset)
+
+Measured on all 6,621 panels in 379 S0-S3 models. The table holds 8-byte entries
+(uint32 name hash, int32 mesh offset relative to the entry); the hash is MurmurHash3
+of the name with every byte ANDed with 0xDF, as in TF2. The include-model index
+(0x15C) equals the panel-table offset in every retail model.
+
+v54 changes the mesh header from TF2's: uint16 parent, vertex, face and mask counts,
+then int32 offsets (relative to the mesh) of the parents, vertices, masks, faces and
+bounds, and the zero-padded name at +28. There is no winding (ccw) field. The arrays
+are packed backwards from the 16-aligned vertex array:
+
+- `vertices = align16(28 + len(name) + 1 + 2*parents + 6*faces + 2*faces)`;
+- `masks = vertices - 2*faces` (one uint16 per face), `faces = masks - 6*faces`
+  (three int16 vertex indices), `parents = faces - 2*parents` (int16 bones);
+- `bounds = vertices + 16*vertexcount` (eight floats per face).
+
+Vertices are 16 bytes (int32 parent slot, vec3). The per-face masks look like 4x4
+coverage bits; the mask count is at most the face count, by a rule not yet known, so
+both are stored verbatim (`facemask`, `maskcount`). Retail maxima: 2 parents, 238
+vertices, 85 faces, mask count 47.
+
+## Jiggle bones (studiohdr 0x198..0x1A0)
+
+Measured on all 748 procedural bones in 114 S0-S3 models; every one is a jiggle bone
+(type 5). Models without procedural bones store zeros in all three header fields.
+
+- Records: 0x7C bytes, straight after the bone array, one per procedural bone in
+  procedural (`$jigglebone`) order, which differs from bone order in 26 models. Each
+  bone's procindex (+0x9C) points at its record, relative to the bone.
+- Record: uint8 flags, uint8 bone index, int16 0, then 30 floats: TF2's
+  mstudiojigglebone_t floats with one more after tipMass (values 0, 0.1 and 0.3; taken
+  to be tip friction). The bone byte is the bone's own index in 743 records; Wraith's
+  bones 64-70 store 63.
+- Flags as in TF2 (0x01 flexible, 0x02 rigid, 0x04 yaw limits, 0x08 pitch limits, 0x10
+  angle limit, 0x20 length flex, 0x40 base spring); retail sets both 0x01 and 0x02
+  (0x2f, 0x3f, 0x33, 0x37) and keeps limit values whose flag is clear.
+- 0x198 count; 0x19C a byte table of bone indices in procedural order, straight after
+  the records; 0x1A0 a per-bone byte table (each bone's procedural slot, or 255)
+  straight after it; zero padding to 4, where the bone-controller offset (0xAC) points.
+
 ## Standalone rigs and sequences
 
 `--external-assets` writes a render model retaining embedded clips with an empty

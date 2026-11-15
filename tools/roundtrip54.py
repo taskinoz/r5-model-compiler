@@ -17,9 +17,11 @@ from compare_bvh54 import compare as compare_bvh
 
 
 def compare_extras(original,rebuilt,target):
-    """Model keyvalues byte for byte (size included), and hitbox sets: names, bones by
-    name, groups, crit overrides, hit data groups and boxes within 0.0001 in. Retail
-    hitboxes flagged as generated (header flag 1) must come back generated."""
+    """Model keyvalues byte for byte (size included); jiggle bones in procedural order,
+    by bone name, with each record byte for byte; RUI panels exactly (hash, name,
+    parent bones by name, vertices, faces, bounds, per-face masks and mask count); and
+    hitbox sets: names, bones by name, groups, crit overrides, hit data groups and boxes
+    within 0.0001 in. Retail hitboxes flagged as generated must come back generated."""
     a,b=Model(original,target),Model(rebuilt,target); issues=[]
     def kv(m):
         i,n=m.get('i',0x140),m.get('i',0x144); return m.data[i:i+n]
@@ -36,6 +38,12 @@ def compare_extras(original,rebuilt,target):
                               m.get('3f',q+8)+m.get('3f',q+0x14)))
             out.append((m.string(p+m.get('i',p)),boxes))
         return out
+    def panels(m):
+        return [dict(p,parents=[m.bones[k]['name'] for k in p['parents']]) for p in m.ui_panels()]
+    if panels(a)!=panels(b): issues.append('RUI panels differ')
+    def jiggles(m):
+        return [(m.bones[j['bone']]['name'],j['raw']) for j in m.jiggle_bones()]
+    if jiggles(a)!=jiggles(b): issues.append('jiggle bones differ')
     if not a.get('i',0x9C)&1:
         sa,sb=sets(a),sets(b)
         if [(n,[x[:5] for x in bx]) for n,bx in sa]!=[(n,[x[:5] for x in bx]) for n,bx in sb]:

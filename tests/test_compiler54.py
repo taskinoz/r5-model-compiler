@@ -435,6 +435,67 @@ class Compiler54(unittest.TestCase):
         changed=build(text.replace('Glass.Window','Glass.Pane').replace('-1 -2 -3 4 5 6','-1 -2 -3 4 5 7'),'hb_changed')
         self.assertEqual(len(compare_extras(out,changed,'s3')['issues']),2)
 
+    def test_rui_panels(self):
+        from decompile53 import ui_panel_hash
+        from decompile54 import decompile
+        from roundtrip54 import compare_extras
+        panel=('$uipanel "models/test/screen_rui"\n{\n\tparent "arm"\n'
+               '\tvertex 0 0 0 0\n\tvertex 0 2 0 0\n\tvertex 0 2 1 0\n\tvertex 0 0 1 0\n'
+               '\tface 0 1 2\n\tface 0 2 3\n'
+               '\tbounds 0 2 2 0 0 0 1 1\n\tbounds 0 2 0 0 0 1 1 1\n%s}\n')
+        # default masks: full coverage, count = faces (retail's common simple form)
+        out,_=self.run_compiler(self.qc+panel%'',target='s3',name='rui')
+        (p,)=Model(out,'s3').ui_panels()
+        self.assertEqual(p['hash'],ui_panel_hash('models/test/screen_rui'))
+        self.assertEqual([Model(out,'s3').bones[k]['name'] for k in p['parents']],['arm'])
+        self.assertEqual((len(p['vertices']),p['faces'],p['masks'],p['mask_count']),(4,[(0,1,2),(0,2,3)],[0xFFFF,0xFFFF],2))
+        self.assertEqual(p['bounds'][1],(0,2,0,0,0,1,1,1))
+        # the include-model index points at the panel table, as in every retail model
+        data=out.read_bytes(); self.assertEqual(struct.unpack_from('<i',data,0x15C)[0],struct.unpack_from('<i',data,0x130)[0])
+        # explicit masks and count, stored verbatim; exact decompile/rebuild
+        out,_=self.run_compiler(self.qc+panel%'\tfacemask 0x00ff\n\tfacemask 0xff00\n\tmaskcount 1\n',target='s3',name='rui_masks')
+        (p,)=Model(out,'s3').ui_panels()
+        self.assertEqual((p['masks'],p['mask_count']),([0x00ff,0xff00],1))
+        source=decompile(out,self.work/'rui_src','s3')
+        q=source.with_name('rebuilt.qc'); q.write_text(source.read_text()); rebuilt=source.with_name('rebuilt.rmdl')
+        run=subprocess.run([str(self.compiler),'--target','s3','-quiet','-o',str(rebuilt),str(q)],capture_output=True,text=True,timeout=40)
+        self.assertEqual(run.returncode,0,run.stdout+run.stderr)
+        self.assertEqual(compare_extras(out,rebuilt,'s3')['issues'],[])
+        # v54 has no winding flag: ccw is refused, not dropped
+        self.run_compiler(self.qc+panel.replace('face 0 1 2','face 0 1 2 ccw')%'',target='s3',name='rui_ccw',ok=False)
+        self.run_compiler(self.qc+panel%'\tfacemask 0xffff\n',target='s3',name='rui_onemask',ok=False)
+
+    def test_jiggle_bones(self):
+        from decompile54 import decompile
+        from roundtrip54 import compare_extras
+        # procedural order (arm, root) differs from bone order; both rigid and flexible
+        # bits, the v54 tip friction, a limit stored without its flag and a bone byte
+        jiggle=('$jigglebone "arm"\n{\n\tis_rigid\n\t{\n\t}\n\tis_flexible\n\t{\n\t\tlength 12\n\t\ttip_mass 2\n'
+                '\t\ttip_friction 0.3\n\t\tyaw_constraint -30 30\n\t\tstored_angle_limit 71.6197243913529\n\t}\n}\n'
+                '$jigglebone "root"\n{\n\tis_rigid\n\t{\n\t\tlength 5\n\t}\n\thas_base_spring\n\t{\n\t\tstiffness 50\n'
+                '\t\tleft_constraint -2 3\n\t}\n\tbone_byte 7\n}\n')
+        for target in ('s0','s3'):
+            out,_=self.run_compiler(self.qc+jiggle,target=target,name='jiggle_'+target)
+            m=Model(out,target); data=out.read_bytes()
+            nb,bi=struct.unpack_from('<2i',data,0xA0); end=bi+0xB8*nb
+            self.assertEqual(struct.unpack_from('<3i',data,0x198),(2,end+2*0x7C,end+2*0x7C+2))
+            self.assertEqual(data[end+2*0x7C:end+2*0x7C+4],bytes([1,0,1,0]))  # bone order, then slot per bone
+            self.assertEqual(struct.unpack_from('<i',data,0xAC)[0],end+2*0x7C+4)  # bone controllers after, aligned
+            for bone,slot in ((1,0),(0,1)):
+                self.assertEqual(struct.unpack_from('<2i',data,bi+0xB8*bone+0x98),(5,end+0x7C*slot-(bi+0xB8*bone)))
+            arm,root=m.jiggle_bones()
+            self.assertEqual((arm['bone'],arm['flags'],arm['bone_byte']),(1,0x07,1))
+            self.assertAlmostEqual(arm['tipFriction'],.3,places=6); self.assertEqual(arm['length'],12)
+            self.assertAlmostEqual(arm['angleLimit'],1.25,places=6); self.assertAlmostEqual(arm['maxYaw'],math.radians(30),places=6)
+            self.assertEqual((root['bone'],root['flags'],root['bone_byte'],root['baseStiffness'],root['baseMaxLeft']),(0,0x42,7,50,3))
+            source=decompile(out,self.work/('jiggle_src_'+target),target)
+            rebuilt,_=self.run_compiler(source.read_text(),target=target,name='jiggle_rebuilt_'+target,extra=['-path',str(source.parent)])
+            self.assertEqual(compare_extras(out,rebuilt,target)['issues'],[])
+        # models without procedural bones keep zeros; byte-sized fields are checked
+        out,_=self.run_compiler(name='no_jiggle')
+        self.assertEqual(struct.unpack_from('<3i',out.read_bytes(),0x198),(0,0,0))
+        self.run_compiler(self.qc+jiggle.replace('bone_byte 7','bone_byte 300'),name='jiggle_byte',ok=False)
+
     def test_phy_face_limit_fails_explicitly(self):
         # a 40-sided prism: its caps exceed the 32 vertices a native face can hold
         ring=[(math.cos(2*math.pi*k/40)*4,math.sin(2*math.pi*k/40)*4) for k in range(40)]
