@@ -480,7 +480,7 @@ class Compiler54(unittest.TestCase):
             nb,bi=struct.unpack_from('<2i',data,0xA0); end=bi+0xB8*nb
             self.assertEqual(struct.unpack_from('<3i',data,0x198),(2,end+2*0x7C,end+2*0x7C+2))
             self.assertEqual(data[end+2*0x7C:end+2*0x7C+4],bytes([1,0,1,0]))  # bone order, then slot per bone
-            self.assertEqual(struct.unpack_from('<i',data,0xAC)[0],end+2*0x7C+4)  # bone controllers after, aligned
+            self.assertEqual(struct.unpack_from('<i',data,0xAC)[0],end+2*0x7C+2+nb)  # bone controllers: unpadded table end
             for bone,slot in ((1,0),(0,1)):
                 self.assertEqual(struct.unpack_from('<2i',data,bi+0xB8*bone+0x98),(5,end+0x7C*slot-(bi+0xB8*bone)))
             arm,root=m.jiggle_bones()
@@ -491,6 +491,18 @@ class Compiler54(unittest.TestCase):
             source=decompile(out,self.work/('jiggle_src_'+target),target)
             rebuilt,_=self.run_compiler(source.read_text(),target=target,name='jiggle_rebuilt_'+target,extra=['-path',str(source.parent)])
             self.assertEqual(compare_extras(out,rebuilt,target)['issues'],[])
+            # the linear bone table copies the bone records (a missing one crashed R5R)
+            lb=struct.unpack_from('<i',data,0x194)[0]; h=struct.unpack_from('<7i',data,lb)
+            self.assertEqual((h[0],h[1]),(nb,0x1C))
+            self.assertEqual(struct.unpack_from('<2i',data,lb+h[1]),tuple(struct.unpack_from('<i',data,bi+0xB8*k+0x94)[0] for k in range(nb)))
+        # an external rig keeps no procedures and no linear table, as retail rigs: the
+        # jiggle bones' rig flags keep only 0x20 (a rig-side jiggle left R5R unposed)
+        out,_=self.run_compiler(self.qc+jiggle,target='s3',name='jiggle_rig',extra=['--external-assets','--material-guid','test/material=123456789abcdef0'])
+        rig=Model(out.with_suffix('.rrig'),'s3')
+        self.assertEqual((rig.get('3i',0x198),rig.get('i',0x194)),((0,0,0),0))
+        self.assertEqual([b['proctype'] for b in rig.bones],[0,0])
+        self.assertTrue(all(b['flags']&~0x20==0 for b in rig.bones))
+        self.assertEqual(len(Model(out,'s3').jiggle_bones()),2)
         # models without procedural bones keep zeros; byte-sized fields are checked
         out,_=self.run_compiler(name='no_jiggle')
         self.assertEqual(struct.unpack_from('<3i',out.read_bytes(),0x198),(0,0,0))

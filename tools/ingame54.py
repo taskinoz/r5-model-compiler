@@ -377,6 +377,7 @@ def write_probe(runtime,models,controls=()):
             'global function R5C_Visual',
             'global function R5C_VisualSelect',
             'global function R5C_ClientRagdolls',
+            'global function R5C_Jiggle',
             'struct { array<entity> props } file',
             'void function CodeCallback_RFiveCompiler_Test_ModInit() {}',
             'void function R5C_Visual()', '{',
@@ -435,9 +436,74 @@ def write_probe(runtime,models,controls=()):
              '    wait 0.5',
              '  }',
              '  print( "R5C_CRAG_DONE\\n" )','}']
+    # jiggle probe: client props of the flagged models (and installed controls) stand
+    # still for 0.5 s, step 30 units to the side, and their probe attachment (default
+    # `probe`) is sampled every frame for 4 s,
+    # relative to the prop origin. Jiggle bones are simulated on the client only.
+    jig=[(i,m) for i,m in enumerate(list(models)+list(controls)) if m.get('jiggle_probe')]
+    visual+=['void function R5C_Jiggle() { thread R5C_JiggleSamples() }',
+             'void function R5C_JiggleSamples()','{',
+             '  entity player = GetLocalViewPlayer()',
+             '  vector angles = <0, player.CameraAngles().y, 0>',
+             '  vector center = player.CameraPosition() + AnglesToForward( angles ) * 120 - <0,0,12>',
+             '  vector right = AnglesToRight( angles )',
+             '  array<entity> props',
+             '  array<vector> bases',
+             '  array<string> names',
+             ('  array<int> indices = [ '+', '.join(str(i) for i,_ in jig)+' ]') if jig else '  array<int> indices']
+    for k,(i,m) in enumerate(jig):
+        visual+=[f'  bases.append( center + right * {(k-(len(jig)-1)/2)*40:.3f} )',
+                 f'  props.append( CreateClientSidePropDynamic( bases[{k}], <0,0,0>, ${literal(m["path"])} ) )',
+                 f'  names.append( {literal(m["jiggle_probe"].get("attachment","probe"))} )']
+    visual+=['  wait 1.0',
+             '  float started = Time()',
+             '  while ( Time() - started < 4.5 )','  {',
+             '    float t = Time() - started',
+             '    for ( int k = 0; k < props.len(); k++ )','    {',
+             '      props[k].SetOrigin( bases[k] + right * (t < 0.5 ? 0.0 : 30.0) )',
+             '      int a = props[k].LookupAttachment( names[k] )',
+             '      vector p = a > 0 ? props[k].GetAttachmentOrigin( a ) - props[k].GetOrigin() : <0,0,0>',
+             '      print( format( "R5C_JIG %d %.4f %d %.5f %.5f %.5f\\n", indices[k], t, a, p.x, p.y, p.z ) )',
+             '    }',
+             '    WaitFrame()','  }',
+             '  foreach ( entity prop in props ) prop.Destroy()',
+             '  print( "R5C_JIG_DONE\\n" )','}']
     (scripts/'r5c_visual.nut').write_text('\n'.join(visual)+'\n')
     (scripts/'scripts.rson').write_text('When: "SERVER"\nScripts:\n[\n r5c_probe.nut\n]\nWhen: "CLIENT"\nScripts:\n[\n r5c_visual.nut\n]\n')
 
+
+
+def summarize_jiggle(log,models):
+    """Probe-attachment offsets (relative to the prop) of the jiggle-probe models: the
+    rest offset before the step, the largest departure from it after the step and the
+    departure over the last half second. A model with `expect_motion` must depart by
+    more than 0.05 units and settle back within 0.05; one without must stay within 0.001."""
+    import re,math
+    samples={}
+    for i,t,att,x,y,z in re.findall(r'R5C_JIG (\d+) (\S+) (-?\d+) (\S+) (\S+) (\S+)',log):
+        v=[float(c) if 'nan' not in c.lower() else float('nan') for c in (x,y,z)]
+        samples.setdefault(int(i),[]).append((float(t),int(att),tuple(v)))
+    out={'models':{},'failures':[]}
+    if 'R5C_JIG_DONE' not in log: out['failures'].append('jiggle probe did not finish')
+    for i,m in enumerate(models):
+        spec=m.get('jiggle_probe')
+        if not spec: continue
+        s=samples.get(i,[])
+        rest=[p for t,_,p in s if t<0.45]; after=[(t,p) for t,_,p in s if t>=0.5]
+        if any(not all(math.isfinite(c) for c in p) for _,_,p in s):
+            out['failures'].append(m['path']+': non-finite probe samples'); out['models'][m['path']]=dict(non_finite=True,frames=len(s)); continue
+        if not rest or not after or any(att<=0 for _,att,_ in s):
+            out['failures'].append(m['path']+': no probe attachment samples'); continue
+        r=[sum(c)/len(rest) for c in zip(*rest)]
+        dist=lambda p: math.dist(p,r)
+        peak=max(dist(p) for _,p in after); end=max((dist(p) for t,p in after if t>=s[-1][0]-0.5),default=0)
+        out['models'][m['path']]=dict(rest=r,peak=peak,last_half_second=end,frames=len(s),
+                                      trace=[[round(t,3),*[round(c,4) for c in p]] for t,_,p in s[::4]])
+        if spec.get('expect_motion'):
+            if peak<=0.05: out['failures'].append(m['path']+': probe did not move after the step (%.4f)'%peak)
+            if end>0.05: out['failures'].append(m['path']+': probe did not settle (%.4f)'%end)
+        elif peak>0.001: out['failures'].append(m['path']+': control probe moved (%.4f)'%peak)
+    return out
 
 
 def summarize(log,models):
@@ -490,13 +556,13 @@ def summarize(log,models):
                 passed=not failures,scope='spawn, sequence lookup/playback and movement samples; inspect screenshots and samples for geometry/motion equivalence')
 
 
-def summarize_visual(log,count):
+def summarize_visual(log,count,extra_selections=0):
     import re
     spawned={int(i) for i in re.findall(r'R5C_VIS_SPAWN (\d+)',log)}
     failures=[]
     if spawned!=set(range(count)) or 'R5C_VIS_DONE' not in log:
         failures.append('client visual probe did not create every model')
-    if log.count('R5C_VIS_SELECTED')!=count:
+    if log.count('R5C_VIS_SELECTED')!=count+extra_selections:
         failures.append('client visual selection did not finish')
     if 'SCRIPT ERROR' in log.upper(): failures.append('client/server script error')
     return dict(spawned=len(spawned),failures=failures,
@@ -509,6 +575,7 @@ def main():
     p.add_argument('--pak',required=True); p.add_argument('--port',type=int,default=37025)
     p.add_argument('--timeout',type=int,default=180); p.add_argument('--map',default='mp_rr_canyonlands_staging')
     p.add_argument('--keep-open',action='store_true',help='leave the isolated game open for manual inspection')
+    p.add_argument('--jiggle',action='store_true',help='also step the jiggle_probe models declared in the package report sideways and sample their probe attachment on the client')
     p.add_argument('--collision',action='store_true',help='also run traces and physics drops declared in the package report')
     a=p.parse_args()
     pak=Path(a.pak).resolve()
@@ -597,6 +664,10 @@ def main():
                         for model_index in range(len(package['models'])):
                             connection.command('script_client R5C_VisualSelect('+str(model_index)+')')
                             time.sleep(1); connection.command('screenshot'); time.sleep(1)
+                        if a.jiggle:
+                            connection.command('script_client R5C_VisualSelect(-1)')
+                            connection.command('script_client R5C_Jiggle()'); time.sleep(3.5)
+                            connection.command('screenshot'); time.sleep(4)
                         break
                 except socket.timeout: continue
                 except ConnectionError: break
@@ -613,11 +684,12 @@ def main():
                     for name in ('script.log','error.log'):
                         path=directory/name
                         if path.exists(): native_log+=path.read_text(errors='replace')+'\n'
-            if not summarize_visual(native_log,len(package['models']))['failures'] or process.poll() is not None:
+            if (not summarize_visual(native_log,len(package['models']),int(a.jiggle))['failures']
+                    and (not a.jiggle or 'R5C_JIG_DONE' in native_log)) or process.poll() is not None:
                 break
             if attempt<12: time.sleep(0.5)
         (runtime/'r5c-script.log').write_text(native_log,encoding='utf-8')
-        report['visual']=summarize_visual(native_log,len(package['models']))
+        report['visual']=summarize_visual(native_log,len(package['models']),int(a.jiggle))
         if a.collision:
             import re
             samples={}
@@ -625,6 +697,9 @@ def main():
                 samples.setdefault(i,[]).append(dict(time=float(t),origin=[float(x),float(y),float(z)],attachment=int(att),client_class=int(cls)))
             report['collision']['client_ragdolls']=samples
         report['failures']+=report['visual']['failures']
+        if a.jiggle:
+            report['jiggle']=summarize_jiggle(native_log,package['models']+package.get('collision_controls',[]))
+            report['failures']+=report['jiggle']['failures']
         if process.poll() not in (None,0):
             report['failures'].append('R5R exited with code '+str(process.poll()))
         report['passed']=not report['failures']

@@ -154,8 +154,10 @@ void MdlWriter::WriteBones() {
         b_.PatchI32(p + 0xB4, -1);
     }
     WriteProceduralBones(base);
-    b_.Align(4);
+    // the bone-controller offset is the unpadded end of the procedural tables (all 114
+    // retail jiggle models; padding here crashed R5R); attachments follow 4-aligned
     HdrHere(H_BONECONTROLLERINDEX);
+    b_.Align(4);
 }
 
 // v54 jiggle bones, measured on all 748 retail records (114 S0-S3 models): one 0x7C
@@ -629,16 +631,21 @@ void MdlWriter::WriteKeyValues() {
     }
 }
 
+// Linear bones (0x194): in every multi-bone retail model (677 S0/S3 models), never in a
+// rig. v54 layout: count and six offsets (relative to the table) to the bone flags,
+// parents, positions, quaternions, Euler rotations and pose-to-bone matrices, each a
+// copy of the bone records; no TF2 scale or alignment arrays. It sits right before the
+// string table.
 void MdlWriter::WriteLinearBones() {
     size_t nb = m_.bones.size();
-    if (nb <= 1) return;
+    if (nb <= 1 || m_.rigAsset) return;
     b_.Align(4);
     size_t p = b_.Tell();
     HdrHere(H_LINEARBONEINDEX);
-    b_.Reserve(0x40);
+    b_.Reserve(0x1C);
     b_.PatchI32(p, static_cast<int>(nb));
     b_.PatchI32(p + 0x04, Rel(p));
-    for (auto& bn : m_.bones) b_.I32(bn.flags);
+    for (auto& bn : m_.bones) b_.I32(bn.flags & ~BONE_USED_BY_BONE_MERGE);
     b_.PatchI32(p + 0x08, Rel(p));
     for (auto& bn : m_.bones) b_.I32(bn.parent);
     b_.PatchI32(p + 0x0C, Rel(p));
@@ -649,10 +656,6 @@ void MdlWriter::WriteLinearBones() {
     for (auto& bn : m_.bones) b_.RE(bn.rot);
     b_.PatchI32(p + 0x18, Rel(p));
     for (auto& bn : m_.bones) b_.M34(bn.poseToBone);
-    b_.PatchI32(p + 0x20, Rel(p));
-    for (auto& bn : m_.bones) b_.V3(bn.rotscale);
-    b_.PatchI32(p + 0x24, Rel(p));
-    for (size_t i = 0; i < m_.bones.size(); i++) b_.Q(Quat(0, 0, 0, 0));  // retail: zero qAlignment
 }
 
 void MdlWriter::WritePerTri() {
@@ -697,8 +700,7 @@ std::vector<uint8_t> MdlWriter::Run() {
     WriteIncludeModels();
     WriteTextures();
     WriteKeyValues();
-    // The per-bone records are sufficient; no TF2 linear-bone scale arrays.
-
+    WriteLinearBones();
     st_.Write(b_);
     b_.Align(4);
 
@@ -790,8 +792,16 @@ std::vector<uint8_t> WriteSequence54(const CompiledModel& model, size_t index) {
 std::vector<uint8_t> WriteRig54(const CompiledModel& model) {
     CompiledModel rig;
     rig.name = std::filesystem::path(model.name).replace_extension().u8string() + ".rrig";
+    rig.rigAsset = true;
     rig.bones = model.bones;
-    rig.jiggles = model.jiggles;
+    // Retail rigs carry no procedural bones: the jiggle records stay in the model, and
+    // the rig's copies of those bones have no procedure or always-procedural flag (all
+    // 10 S3 rigs paired with jiggle models). R5R leaves a rig-side jiggle bone unposed.
+    for (auto& bone : rig.bones) {
+        if (bone.jiggle >= 0 || bone.proctype) bone.flags &= 0x20;
+        bone.proctype = 0;
+        bone.jiggle = -1;
+    }
     rig.attachments = model.attachments;
     rig.hitboxSets = model.hitboxSets;
     rig.ikChains = model.ikChains;

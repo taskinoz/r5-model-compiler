@@ -334,6 +334,7 @@ struct CompiledModel {
     std::vector<std::string> textures;  // material names (rename applied)
     bool packedPositions = false;
     bool externalAssetRig = false;
+    bool rigAsset = false;  // written as a standalone .rrig
     std::vector<uint8_t> materialTypes; // optional native per-slot shader family
     std::vector<std::string> cdTextures;
     std::vector<std::vector<int16_t>> skins;  // [family][skinref]

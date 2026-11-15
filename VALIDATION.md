@@ -10,12 +10,12 @@ This is not a stable release or proof of full Apex model equivalence.
 Retail and later self-hostable seasons remain future targets.
 
 Windows x64 MSVC Release: build/r5studiomdl.exe
-SHA-256: `88af04f3b72199628af9548fd862cb6e677dd2a09900ed9a36280d29b5e24d71`.
-Independent reader SHA-256: `294ecb9eff3f705a0e35c24fa8d83b77575abebcec3353c3f2506571bd188f69`.
+SHA-256: `00f58e02143edc2e5bdd8a4d823bb52550c9b81a1ad8dda2114cafa20a9eb9b2` (15 November 2026).
+Independent reader SHA-256: `59b293911d28bf9cd674981fcfaffccf73fbab854d2efbc8c88639439c22d4a4`.
 
 ## Automated checks
 
-- All 73 native compiler/packaging/runtime-harness regressions pass on ordinary Python 3.10 and locked uv/Python 3.14.
+- All 75 native compiler/packaging/runtime-harness regressions pass on ordinary Python 3.10 and locked uv/Python 3.14.
 - Both CTest groups pass: convex-hull math and native compiler regressions. The
   inherited hull tests are not Apex physics emission evidence.
 - Complex-skinning tests exercise mixed 1/2/3/4/8/16-influence vertices across all
@@ -475,11 +475,81 @@ bvh54 `819009db...`, compare_phy54 `3cfbb654...`, phy54 `90dd10e5...`, validate5
   (none embeds a first animation in a rigid physics model); the package check
   round-trips the physics example in render + PHY mode.
 
+## RUI panels, jiggle bones and linear bones (15 November 2026)
+
+The compiler and decompiler now handle RUI panels and jiggle bones (layouts in the
+format notes), and every multi-bone model gets retail's linear bone table. The
+round trip compares RUI panels exactly, jiggle records byte for byte with the per-bone
+slot table up to the bone-controller offset, and the linear table (present when
+retail's is, and a copy of the bone records).
+
+Corpus: every installed model in full mode and every BVH model in render + PHY mode, as
+above, with compiler `00f58e02...`; tools roundtrip54 `e33b0aaa...`, decompile54
+`01f63495...`, validate54 `84f06491...`, mdl54 `59b29391...`, PHY/BVH tools unchanged.
+Limits unchanged.
+
+| Season | Full mode: pass / refused / differ | Render + physics: pass / 1,128 |
+| --- | --- | --- |
+| S0 | 358 / 0 / 2 | 227 / 229 |
+| S1 | 418 / 0 / 2 | 270 / 272 |
+| S2 | 426 / 0 / 2 | 271 / 273 |
+| S3 | 578 / 1 / 2 | 351 / 354 |
+
+- All 379 RUI models and all 114 jiggle-bone models (33 have both) pass; nothing is
+  refused for RUI or procedural bones any more.
+- The remaining differences are the retail PHY/BVH anomalies explained above
+  (tablet_mini, wood_gib01c, wood_gib01d) and the refused w_bloodhound_axe hull. No
+  model newly differs.
+- The normal difference of `pov_pilot_medium_bloodhound_legendary_02` (and the
+  `ptpov_lstar` and `ptpov_at_rifle_legendary_01` differences seen once their RUI and
+  jiggle bones could be exported) was the validator's: it ordered triangles by position
+  and UV only, so coincident duplicates bound to different bones (lstar's glow shell)
+  could pair crosswise. Normals and weights now break those ties; the limits are
+  unchanged and each model matches within them.
+
+In game (R5R v2.6.52): `tools/build_r5r_jiggle_test.py` packages the retail charm_nessy
+(three jiggle bones) decompiled and rebuilt, the same rebuild without its jiggle bones,
+the rebuild with its include count patched to an embedded rig (retail's form for the
+charm), and the retail ptpov_vinson (20 RUI panels, one jiggle bone) rebuilt (RPak
+SHA-256 `640f18b9...`). `ingame54.py --jiggle` (`709d0512...`) spawns them on the server
+and client, then steps the charms 30 units sideways and samples MENU_CAMERA_FOCUS (on
+the last jiggle bone) relative to the prop every frame for 4 s, beside the installed
+retail charm. The run passed (exit 0): all spawns and client props were created, and
+
+| Charm | Probe peak after the step | Last 0.5 s |
+| --- | --- | --- |
+| rebuilt (external rig) | 0.4147 | 0.0004 |
+| rebuilt, embedded rig | 0.4147 | 0.0004 |
+| rebuilt without jiggle bones | 0.0000 | 0.0000 |
+| retail (installed) | 0.1714 | 0.0000 |
+
+Found by these runs, each confirmed against retail and fixed before the passing run:
+
+- R5R crashed (r5apex.exe+0x1CA771, an animation descriptor read through a wrong base)
+  whenever the rebuilt vinson and another rebuilt model were drawn together. Bisected
+  to models without retail's linear bone table (present in all 677 multi-bone retail
+  models); with the table written the crash is gone.
+- With the jiggle records also written into the external rig, the rebuilt charm's
+  jiggle bones were never posed (probe at the prop origin); with them removed but the
+  bones' usage flags kept, its pose was NaN. Retail rigs keep no procedural bones and
+  only flag 0x20 on those bones (10 S3 rigs exported with RSX); in that form the
+  external-rig charm swings exactly as the embedded one does.
+- The bone-controller offset is the unpadded end of the per-bone slot table in all 114
+  retail jiggle models; the compiler had padded it to 4.
+
+The rebuilt charms rest at the bind pose stored in the model (the probe at
+(0.357, -0.33, 0), as the pose-to-bone matrices give); the installed retail charm,
+which has no sequence asset and an empty `ref`, rests rotated from it in R5R, so the
+swing amplitudes are not compared. The vinson viewmodel's geometry is not in the
+screenshots (it is placed relative to the eye), so its rendering and its RUI panels
+(read by weapon scripts) are not shown in game; it loaded, spawned and was drawn
+alongside the charms without errors.
+
 ## Remaining limitations
 
 - Measuring client-side ragdoll motion in game (not reachable from R5R scripts),
-  the normal difference of pov_pilot_medium_bloodhound_legendary_02, procedural
-  bones, RUI, importing arbitrary
+  non-jiggle procedural bones (none in S0-S3), RUI panels in a weapon's view and the
+  rule for the v54 RUI mask count, importing arbitrary
   existing rig dependencies, native asset-GUID layers, IK rules, transition
   nodes and followers. Export also rejects sequence keyvalues, transitions and
   procedural weight fixups, and unknown animation/sequence flags or event types.

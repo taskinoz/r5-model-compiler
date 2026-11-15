@@ -353,6 +353,12 @@ vertices, 85 faces, mask count 47.
 Measured on all 748 procedural bones in 114 S0-S3 models; every one is a jiggle bone
 (type 5). Models without procedural bones store zeros in all three header fields.
 
+- External rigs: retail rigs carry no procedural bones (zeros at 0x198, proctype 0) even
+  when the model has jiggle bones (all 10 S3 rigs paired with jiggle models); the rig's
+  copies of those bones have flags 0 or 0x20 (97 and 2 bones). The bone byte is the
+  model's bone index, not the rig's. In R5R a rebuilt external-rig charm whose rig
+  carried the jiggle records left the jiggle bones unposed; with the jiggle bones'
+  usage flags still in the rig it produced NaN poses; with retail's rig form it swings.
 - Records: 0x7C bytes, straight after the bone array, one per procedural bone in
   procedural (`$jigglebone`) order, which differs from bone order in 26 models. Each
   bone's procindex (+0x9C) points at its record, relative to the bone.
@@ -365,7 +371,20 @@ Measured on all 748 procedural bones in 114 S0-S3 models; every one is a jiggle 
   (0x2f, 0x3f, 0x33, 0x37) and keeps limit values whose flag is clear.
 - 0x198 count; 0x19C a byte table of bone indices in procedural order, straight after
   the records; 0x1A0 a per-bone byte table (each bone's procedural slot, or 255)
-  straight after it; zero padding to 4, where the bone-controller offset (0xAC) points.
+  straight after it. The bone-controller offset (0xAC) is the unpadded end of that table
+  (in all 114 models; R5R crashed when it pointed past zero padding); the attachments
+  follow 4-aligned.
+
+## Linear bones (studiohdr 0x194)
+
+Every multi-bone retail model has a linear bone table (677 of 677 surveyed S0/S3
+models; none in single-bone models, none in the 138 S3 rigs). v54 layout: int32 bone
+count, then six int32 offsets relative to the table: bone flags, parents, positions
+(vec3), quaternions, Euler rotations (vec3) and pose-to-bone matrices (3x4), each a
+copy of the bone records (all 677 match), with no TF2 scale or alignment arrays. It
+sits right before the string table (0x1BC, the first string, follows its end). R5R
+v2.6.52 crashed (r5apex.exe+0x1CA771, an animation descriptor read through a wrong
+base) with two such rebuilt models in view while the table was missing.
 
 ## Standalone rigs and sequences
 

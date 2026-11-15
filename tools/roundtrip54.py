@@ -42,8 +42,22 @@ def compare_extras(original,rebuilt,target):
         return [dict(p,parents=[m.bones[k]['name'] for k in p['parents']]) for p in m.ui_panels()]
     if panels(a)!=panels(b): issues.append('RUI panels differ')
     def jiggles(m):
-        return [(m.bones[j['bone']]['name'],j['raw']) for j in m.jiggle_bones()]
+        # records by bone name, and the per-bone slot table up to the bone-controller
+        # offset (retail: the unpadded table end), by bone name
+        n,o2,bc=m.get('i',0x198),m.get('i',0x1A0),m.get('i',0xAC)
+        slots=[] if not n else [(m.bones[k]['name'] if k<len(m.bones) else None,m.data[o2+k]) for k in range(bc-o2)]
+        return [(m.bones[j['bone']]['name'],j['raw']) for j in m.jiggle_bones()],slots
     if jiggles(a)!=jiggles(b): issues.append('jiggle bones differ')
+    def linear(m):
+        # the linear bone table (0x194): present or not, and a copy of the bone records
+        lb=m.get('i',0x194)
+        if not lb: return None
+        nb,bi=m.get('i',0xA0),m.get('i',0xA4); h=m.get('7i',lb)
+        if h[0]!=nb: return 'count'
+        fields=((1,4,0x94),(2,4,0x04),(3,12,0x20),(4,16,0x2C),(5,12,0x3C),(6,48,0x54))
+        return all(m.data[lb+h[i]+size*k:lb+h[i]+size*(k+1)]==m.data[bi+0xB8*k+at:bi+0xB8*k+at+size]
+                   for i,size,at in fields for k in range(nb))
+    if linear(a)!=linear(b): issues.append('linear bone table differs: %r vs %r'%(linear(a),linear(b)))
     if not a.get('i',0x9C)&1:
         sa,sb=sets(a),sets(b)
         if [(n,[x[:5] for x in bx]) for n,bx in sa]!=[(n,[x[:5] for x in bx]) for n,bx in sb]:

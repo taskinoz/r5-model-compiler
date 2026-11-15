@@ -57,7 +57,12 @@ def package(models, output, name, repak, target):
         if native.casefold() in names: raise ValueError('duplicate model asset path')
         names.add(native.casefold()); base=native[4:-5]; rigpath=f'animrig/{base}.rrig'
         rigfile=path.with_suffix('.rrig'); rig=Model(rigfile,target)
-        if rig.bones!=m.bones: raise ValueError('model/rig bone layout mismatch')
+        # the rig repeats the model's bones, except that procedures (jiggle bones) stay
+        # in the model: rig copies have no procedure and no always-procedural flag (4)
+        if any(b['proctype'] for b in rig.bones) or rig.get('i',0x198):
+            raise ValueError('rig carries procedural bones; recompile with this compiler')
+        strip=lambda b: dict(b,proctype=0,flags=b['flags']&0x20 if b['proctype'] else b['flags'])
+        if rig.bones!=[strip(b) for b in m.bones]: raise ValueError('model/rig bone layout mismatch')
         if rig.ik_chains()!=m.ik_chains(): raise ValueError('model/rig IK chain layout mismatch')
         copy(path,native); copy(path.with_suffix('.vg'),native[:-5]+'.vg'); copy(rigfile,rigpath)
         if m.get('i',0x1DC):

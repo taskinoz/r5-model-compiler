@@ -186,7 +186,9 @@ which is the order the tables use. v54 additions:
 
 Jiggle angles are converted in double precision, so exported angles (written with 17
 significant digits) rebuild to the same floats. A model with jiggle bones may have at
-most 255 bones.
+most 255 bones. With `--external-assets` the jiggle bones stay in the model and the
+`.rrig` keeps none, as retail rigs do; R5R simulates them on the client (see
+VALIDATION.md, `ingame54.py --jiggle`).
 
 ## Materials and loading
 

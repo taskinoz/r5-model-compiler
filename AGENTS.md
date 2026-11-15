@@ -42,6 +42,14 @@ Read README.md, VALIDATION.md and docs/mdl-v54-format.md before changing writers
   empty. R5R has no server prop_ragdoll, and client ragdolls are not found by
   GetClientEntArrayBySignifier, so ragdoll motion is not script-measurable there.
   Retail keyvalues are always compact `mdlkeyvalue{prop_data{base "X"}}`.
+- Jiggle bones in game: tools/build_r5r_jiggle_test.py, then `ingame54.py --jiggle`.
+  Jiggle bones are simulated on the client only; the harness steps client props sideways
+  and samples an attachment on a jiggle bone (the charm's MENU_CAMERA_FOCUS) relative to
+  the prop. Retail rigs (.rrig, exported with the patched RSX in test-output/bin/rsx from
+  the S3 install at F:\Games\Apex Detours\Apex s3) were the reference for the rig rules.
+  A game crash leaves its netconsole port bound by a dead process: pass a new --port.
+  The corpus round trip passed models that R5R still mishandled (missing linear bones,
+  rig-side jiggle data), so check new runtime-facing structures in game.
 - GPL/AGPL references may be consulted, not copied into this MIT implementation.
 - Run Python on extracted data with -I, with scripts outside the extraction folder.
 - Packaging follows R1: package.ps1, check_package.ps1, tag-driven release.yml.
