@@ -294,23 +294,36 @@ def decompile(path, outdir, target, *, render_only=False, with_physics=False):
                     ' angle_unknown '+format(chain['unknown'],'.9g')]
     lods=m.render() if m.meshes else [[]]
     vertex_ids={}
-    for mi,mesh in enumerate(m.meshes):
-        mat=m.materials[mesh['material']]['name']
-        for li,lod in enumerate(lods):
-            faces=[]
-            for tri in lod[mi]['triangles']:
-                corners=[]
-                for i in (0,2,1):
-                    v=tri[i]
-                    key=(mi,tuple(v['pos']),tuple(v['normal']),tuple(v['uv']),tuple(v['weights']))
-                    ident=vertex_ids.setdefault(key,len(vertex_ids))
-                    extra=dict(uv=v['uv'],id=ident)
-                    if 'uv2' in v: extra['uv2']=v['uv2']
-                    if 'color' in v: extra['color']=[x/255 for x in v['color']]
-                    corners.append((v['pos'],v['normal'],v['weights'],extra))
-                faces.append((mat,mi,corners))
-            write_dmx(out/f'mesh{mi}_lod{li}.dmx',m.bones,skeleton,faces,model_space=True)
-        lines+=['$body '+qc_quote(f'body{mi}')+' '+qc_quote(f'mesh{mi}_lod0.dmx')]
+    mesh_index={id(mesh):mi for mi,mesh in enumerate(m.meshes)}
+    # Body parts keep their names and choices: one DMX per studio model and LOD (all of
+    # its meshes), empty models as `blank`. A part with one studio model is a $body.
+    model_files=[]
+    for bi,bp in enumerate(m.bodyparts):
+        options=[]
+        for mdi,md in enumerate(bp['models']):
+            if not md['meshes']: options.append('blank'); continue
+            base=f'part{bi}_model{mdi}'
+            for li,lod in enumerate(lods):
+                faces=[]
+                for mesh in md['meshes']:
+                    mi=mesh_index[id(mesh)]; mat=m.materials[mesh['material']]['name']
+                    for tri in lod[mi]['triangles']:
+                        corners=[]
+                        for i in (0,2,1):
+                            v=tri[i]
+                            key=(mi,tuple(v['pos']),tuple(v['normal']),tuple(v['uv']),tuple(v['weights']))
+                            ident=vertex_ids.setdefault(key,len(vertex_ids))
+                            extra=dict(uv=v['uv'],id=ident)
+                            if 'uv2' in v: extra['uv2']=v['uv2']
+                            if 'color' in v: extra['color']=[x/255 for x in v['color']]
+                            corners.append((v['pos'],v['normal'],v['weights'],extra))
+                        faces.append((mat,mi,corners))
+                write_dmx(out/f'{base}_lod{li}.dmx',m.bones,skeleton,faces,model_space=True)
+            options.append('studio '+qc_quote(f'{base}_lod0.dmx')); model_files.append(base)
+        if len(options)==1 and options[0]!='blank':
+            lines+=['$body '+qc_quote(bp['name'])+' '+options[0][7:]]
+        else:
+            lines+=['$bodygroup '+qc_quote(bp['name']),'{']+['  '+o for o in options]+['}']
     for li in range(1,len(lods)):
         # Switch points are read from the native vertex header.
         if PROFILES[target][1]=='vg1':
@@ -322,7 +335,7 @@ def decompile(path, outdir, target, *, render_only=False, with_physics=False):
             vtx=common.parse_vtx(m.path.with_suffix('.dx11.vtx').read_bytes(),0)
             distance=vtx['bodyparts'][0]['models'][0]['lods'][li]['switchPoint']
         lines+=['$lod '+format(distance,'.9g')+' {']
-        lines+=['  replacemodel '+qc_quote(f'mesh{mi}_lod0.dmx')+' '+qc_quote(f'mesh{mi}_lod{li}.dmx') for mi in range(len(m.meshes))]
+        lines+=['  replacemodel '+qc_quote(f'{b}_lod0.dmx')+' '+qc_quote(f'{b}_lod{li}.dmx') for b in model_files]
         lines+=['}']
     lines+=export_keyvalues(m)+export_hitboxes(m)+export_ui_panels(m)+export_jiggle_bones(m)
     for a in m.attachments:

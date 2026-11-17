@@ -254,6 +254,11 @@ A model with physics needs its `.phy` beside it; the wrapper checks its size and
 checksum against the model and stages it for RePak.
 It produces an RPak v8 with model v10, rig v4 and sequence v7 assets plus the
 mandatory streaming file. RePak and game data are not included in this repository.
+For a weapon viewmodel that needs animations already installed in R5R, add
+`--installed-animrig animrig/weapons/vinson/ptpov_vinson.rrig` to `pack54.py`.
+This appends an installed rig reference to every packaged model; it does not copy
+the rig. The model must use compatible bones and the dependency must exist in the
+target game. The Flatline RUI fixture uses this reference for weapon playback.
 A successful bake alone does not establish runtime compatibility. S0/S1/S2 RPak
 packaging is not implemented by this wrapper.
 Embedded IK chains require the native external-rig sentinel written by
@@ -294,7 +299,11 @@ python -I tools\survey54.py --target s0 extracted\models --geometry --out test-o
 ```
 
 `decompile54.py` exports QC, keyvalues2 DMX meshes with preserved corner identities,
-and SMD animations. Supported animation export includes rectangular blend grids,
+and SMD animations. Body-part names, ordered choices and blank choices are retained
+as `$body`/`$bodygroup`, with all meshes of each choice in one DMX and matching LOD
+replacements. The round-trip metadata check compares these choices. Material names
+ending in `.vmt` currently lose their suffix on import and remain reported differences.
+Supported animation export includes rectangular blend grids,
 pose parameters/keys, per-blend FPS and flags, numeric/named events, fades, activity
 names/modifiers, bounds and sequence bone weights. Named `$animation` definitions
 keep animation settings separate from sequence playback flags. Exported `seqflags`
@@ -339,12 +348,13 @@ uv run --locked python -m unittest discover -s tests -p "test_*.py"
 ```
 
 CI follows R1: build, CTest, locked uv tests, packaging and clean-extraction checks.
-The ZIP includes the compiler, native tools, docs and six authored examples. The
-package check compiles and round-trips all six for all four targets, including
+The ZIP includes the compiler, native tools, docs and seven authored examples. The
+package check compiles and round-trips all seven for all four targets, including
 supported animation metadata and full-frame blend comparisons. Tags vX.Y.Z
 require release-notes/vX.Y.Z.md and a matching pyproject.toml version; the release
 workflow publishes the ZIP and SHA256SUMS. No R5 release has been tagged.
 
 Derived from the MIT R2 compiler. GPL/AGPL references were consulted for format facts,
-not copied into the compiler. See [format notes](docs/mdl-v54-format.md).
+not copied into the compiler. See [format notes](docs/mdl-v54-format.md) and the
+[Apex tool reference review](docs/apex-tool-references.md).
 Not affiliated with Respawn Entertainment, Electronic Arts or Valve.

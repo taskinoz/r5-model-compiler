@@ -598,10 +598,65 @@ In game (R5R v2.6.52, isolated runtime):
   suppressor of a weapon is drawn at once (about 800 S0-S3 models have body-group
   choices; the round trip does not compare body-part structure). Next to fix.
 
+## Body groups, reference review and installed weapon rigs (17 November 2026)
+
+The decompiler now keeps each body part's ordered studio-model choices (including
+blanks) and writes one DMX per choice/LOD containing all of its meshes. Optional
+sights and suppressors no longer become separate always-visible parts. The round
+trip now compares body-part names, choices, material names and triangle counts per
+LOD. It still does not establish skin-family or material-GUID equivalence.
+
+Frozen run `test-output/full54-v5` completed with the same compiler as v4:
+`04c2882da112dcb1a6099690d96b73665216d503e155c0ade33acfaf2644d9c6`.
+The measured tool hashes are:
+
+- decompile54: `3b85b0c0c9d9240812a9a258f08dcec217e269599306634ce4d6e97c541dc6f1`
+- roundtrip54: `6c9146348d280f791b9fca32f8ae5c7d53e028115e7c07220a5a74e0fde4b559`
+
+Full mode (pass / differ / error): S0 346 / 14 / 0; S1 401 / 19 / 0;
+S2 413 / 15 / 0; S3 564 / 16 / 1. Total: 1,724 / 64 / 1 across 1,789 models.
+Render + PHY mode: S0 216 / 13 / 0; S1 258 / 14 / 0; S2 258 / 15 / 0;
+S3 337 / 16 / 1. Total: 1,069 / 58 / 1 across 1,128 models.
+
+Compared by target/source against v4, all 56 newly differing full-mode models fail
+only the new body-part check. Every one was rebuilt again in the targeted audit
+`test-output/bodygroup-v5-audit/results.json`: each has identical body-part choices,
+material associations and per-choice LOD triangle counts after accounting for the
+`.vmt` suffix that the inherited material importer strips. These are real unresolved
+material-name differences, not passes; no normalization or tolerance relaxation was
+added to the validator. The render + PHY run exposes 50 of the same models. The
+previous eight differences and one error remain: tablet_mini's retail interior
+point (S0-S2), wood_gib01c's BVH hull volume (all seasons), wood_gib01d's PHY radius
+(S3), and the refused w_bloodhound_axe PHY hull (S3, Euler characteristic 5).
+No previous failure became a pass and no additional non-body-part failure appeared.
+
+Live evidence predating this documentation update:
+`test-output/r5r-rui/run-rebuilt-bodygroups.json` finishes with exit 0, passed true
+and no failures; `rebuilt_bodygroups_weapon.png` shows the rebuilt Flatline with
+its normal sights, ammo screen and harness. Materials deliberately all use one
+installed skin, so this is no texture-equivalence claim. The tested package names
+the installed `animrig/weapons/vinson/ptpov_vinson.rrig` alongside its authored rig.
+
+`pack54.py --installed-animrig` now reproduces that dependency link and records it
+in the package report. The Flatline fixture supplies it automatically. The updated
+fixture was rebuilt successfully with the installed RePak; it has not received a
+new live run in this update. General rig compatibility remains unverified and the
+option does not import or validate the installed rig's bones/animations.
+
+All 77 Python regressions pass through locked uv, and both CTest groups pass.
+The additional packager regression checks the ordered rig references, deduplication,
+unchanged authored sequences, absence of a copied retail rig and unsafe-path
+rejection. The compiler binary is unchanged. A freshly extracted ZIP passed all 28
+example round trips (seven examples across four targets), including PHY/BVH reads
+and render + PHY comparisons for the physics example. See
+[the reference review](docs/apex-tool-references.md) for pinned source revisions,
+licenses and the limits of conclusions drawn from the newly supplied Apex tools.
+No third-party implementation was copied or added as a runtime dependency.
+
 ## Remaining limitations
 
 - Measuring client-side ragdoll motion in game (not reachable from R5R scripts),
-  non-jiggle procedural bones (none in S0-S3), body groups (flattened on export), importing arbitrary
+  non-jiggle procedural bones (none in S0-S3), exact material names with `.vmt` suffixes, importing arbitrary
   existing rig dependencies, native asset-GUID layers, IK rules, transition
   nodes and followers. Export also rejects sequence keyvalues, transitions and
   procedural weight fixups, and unknown animation/sequence flags or event types.

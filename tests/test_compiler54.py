@@ -135,6 +135,27 @@ class Compiler54(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'target/magic'):
             package([out],self.work/'bad','r5c_test',self.compiler,'s3')
 
+    def test_package_installed_weapon_rig_dependency(self):
+        from pack54 import package, installed_animrig_path
+        out,_=self.run_compiler(target='s3',extra=['--external-assets','--material-guid','test/material=123456789abcdef0'])
+        dependency='animrig/weapons/vinson/ptpov_vinson.rrig'
+        def repak(command,**kwargs):
+            build=json.loads(Path(command[1]).read_text())
+            rig,model=build['files']
+            self.assertEqual(model['$animrigs'],[rig['_path'],dependency])
+            self.assertFalse((Path(build['assetsDir'])/dependency).exists())
+            self.assertEqual(rig['$sequences'],model['$sequences'])
+            for suffix in ('.rpak','.starpak'):
+                (Path(build['outputDir'])/(build['name']+suffix)).write_bytes(b'new artifact')
+            return subprocess.CompletedProcess(command,0,'packed','')
+        with patch('pack54.subprocess.run',side_effect=repak):
+            report=package([out],self.work/'weapon-pak','r5c_test',self.compiler,'s3',
+                           installed_animrigs=[dependency,dependency])
+        self.assertEqual(report['models'][0]['installed_animrigs'],[dependency])
+        for path in ('animrig/../escape.rrig','animrig//test.rrig','/animrig/test.rrig',
+                     'mdl/test.rmdl','animrig/test.rmdl','animrig/C:/test.rrig'):
+            with self.subTest(path=path),self.assertRaises(ValueError): installed_animrig_path(path)
+
     def test_package_rejects_unbound_materials_and_unsafe_paths(self):
         from pack54 import package, asset_path
         help_run=subprocess.run([sys.executable,'-I',str(ROOT/'tools/pack54.py'),'--help'],capture_output=True,text=True)
@@ -435,6 +456,29 @@ class Compiler54(unittest.TestCase):
         self.assertEqual(asset.sequence_metadata(seq)['activity'],'ACT_DIERAGDOLL')
         with self.assertRaises(AssertionError):  # one clip file at most
             self.run_compiler(self.qc+'$sequence "bad" {\n  referencepose\n  "mesh.smd" "pose.smd"\n}\n',name='refpose_bad',ok=True)
+
+    def test_bodygroups_round_trip(self):
+        from decompile54 import decompile
+        from roundtrip54 import compare_extras
+        tris=[('test/sight',[(p,(0,0,1),uv,[(1,1.0)]) for p,uv in [((0,0,4),(0,0)),((1,0,4),(1,0)),((0,1,4),(0,1))]])]
+        write_smd(self.work/'sight.smd',self.bones,self.frames,tris)
+        qc=self.qc.replace('$sequence idle','$bodygroup "sight"\n{\n  blank\n  studio "sight.smd"\n}\n$sequence idle')
+        out,_=self.run_compiler(qc,target='s3',name='bg')
+        m=Model(out,'s3')
+        self.assertEqual([(bp['name'],[len(md['meshes']) for md in bp['models']]) for bp in m.bodyparts],[('body',[1]),('sight',[0,1])])
+        source=decompile(out,self.work/'bg_src','s3'); text=source.read_text()
+        self.assertIn('$bodygroup "sight"\n{\n  blank\n  studio "part1_model1_lod0.dmx"\n}',text)
+        self.assertIn('$body "body" "part0_model0_lod0.dmx"',text)
+        q=source.with_name('rebuilt.qc'); q.write_text(text); rebuilt=source.with_name('rebuilt.rmdl')
+        run=subprocess.run([str(self.compiler),'--target','s3','-quiet','-o',str(rebuilt),str(q)],capture_output=True,text=True,timeout=40)
+        self.assertEqual(run.returncode,0,run.stdout+run.stderr)
+        self.assertEqual(compare_extras(out,rebuilt,'s3')['issues'],[])
+        # a flattened rebuild (every model its own always-on part) is caught
+        flat=text.replace('$bodygroup "sight"\n{\n  blank\n  studio "part1_model1_lod0.dmx"\n}','$body "sight" "part1_model1_lod0.dmx"')
+        q.write_text(flat)
+        run=subprocess.run([str(self.compiler),'--target','s3','-quiet','-o',str(rebuilt),str(q)],capture_output=True,text=True,timeout=40)
+        self.assertEqual(run.returncode,0,run.stdout+run.stderr)
+        self.assertEqual(compare_extras(out,rebuilt,'s3')['issues'],['body parts differ'])
 
     def test_hitboxes_and_keyvalues_round_trip(self):
         from decompile54 import decompile

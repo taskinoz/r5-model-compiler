@@ -58,6 +58,15 @@ def compare_extras(original,rebuilt,target):
         return all(m.data[lb+h[i]+size*k:lb+h[i]+size*(k+1)]==m.data[bi+0xB8*k+at:bi+0xB8*k+at+size]
                    for i,size,at in fields for k in range(nb))
     if linear(a)!=linear(b): issues.append('linear bone table differs: %r vs %r'%(linear(a),linear(b)))
+    def bodyparts(m):
+        # body parts by name, each model's meshes (materials, in any order) and its
+        # triangle count per LOD: the choices a body group offers
+        render=m.render() if m.meshes else []
+        index={id(x):k for k,x in enumerate(m.meshes)}
+        return [(bp['name'],[(sorted(m.materials[x['material']]['name'] for x in md['meshes']),
+                              [sum(len(lod[index[id(x)]]['triangles']) for x in md['meshes']) for lod in render])
+                             for md in bp['models']]) for bp in m.bodyparts]
+    if bodyparts(a)!=bodyparts(b): issues.append('body parts differ')
     if not a.get('i',0x9C)&1:
         sa,sb=sets(a),sets(b)
         if [(n,[x[:5] for x in bx]) for n,bx in sa]!=[(n,[x[:5] for x in bx]) for n,bx in sb]:

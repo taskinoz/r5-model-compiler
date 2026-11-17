@@ -30,9 +30,20 @@ def asset_path(name):
     return name
 
 
-def package(models, output, name, repak, target):
+def installed_animrig_path(name):
+    """A dependency already present in the target install, not an asset to package."""
+    name=name.replace('\\','/')
+    if not name.startswith('animrig/') or not name.endswith('.rrig'):
+        raise ValueError('installed rig must be an animrig/*.rrig asset path')
+    # Reuse the path-component checks without the model prefix/extension rules.
+    asset_path(name[:-5]+'.rmdl')
+    return name
+
+
+def package(models, output, name, repak, target, *, installed_animrigs=()):
     if target!='s3': raise ValueError('RPak packaging currently requires the surveyed s3 / R5R profile')
     if not re.fullmatch(r'[a-z][a-z0-9_]{0,63}',name): raise ValueError('invalid pak name')
+    installed_animrigs=list(dict.fromkeys(installed_animrig_path(p) for p in installed_animrigs))
     models=list(models)
     if not models: raise ValueError('at least one model is required')
     output=Path(output).resolve(); sources=output/'sources'; sources.mkdir(parents=True,exist_ok=True)
@@ -84,11 +95,11 @@ def package(models, output, name, repak, target):
             data.extend(dest.encode('utf-8')+b'\0'); staged.write_bytes(data)
 
         files.append(dict(_type='arig',_path=rigpath,**{'$sequences':sequences}))
-        files.append(dict(_type='mdl_',_path=native,**{'$animrigs':[rigpath],'$sequences':sequences}))
+        files.append(dict(_type='mdl_',_path=native,**{'$animrigs':list(dict.fromkeys([rigpath]+installed_animrigs)),'$sequences':sequences}))
         inputs[str(marker)]=sha(marker)
         animated=[i for i,s in enumerate(m.sequences) if s['animations'] and
                   all(m.get('i',a+16)>1 for a in s['animations'])]
-        outputs.append(dict(path=native,rig=rigpath,sequences=sequences,labels=labels,
+        outputs.append(dict(path=native,rig=rigpath,installed_animrigs=installed_animrigs,sequences=sequences,labels=labels,
                             animated_sequences=animated,
                             ik_chains=len(m.ik_chains()),external_rig=m.get('i',0x158)==-1,
                             has_ref=any(a['name'].lower()=='ref' for a in m.attachments),
@@ -120,10 +131,11 @@ def package(models, output, name, repak, target):
 def main():
     p=argparse.ArgumentParser(description=__doc__); p.add_argument('models',nargs='+')
     p.add_argument('--target',required=True,choices=['s3']); p.add_argument('--repak',required=True)
+    p.add_argument('--installed-animrig',action='append',default=[],help='reference an existing animrig/*.rrig in the target game for every model; repeatable, not packaged')
     p.add_argument('--out',required=True); p.add_argument('--name',default='r5c_models')
     a=p.parse_args()
     try:
-        report=package(a.models,a.out,a.name,a.repak,a.target)
+        report=package(a.models,a.out,a.name,a.repak,a.target,installed_animrigs=a.installed_animrig)
         print(json.dumps(report,indent=2))
     except (OSError,ValueError,subprocess.SubprocessError) as e: p.exit(1,str(e)+'\n')
 

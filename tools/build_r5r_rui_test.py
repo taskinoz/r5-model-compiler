@@ -69,7 +69,10 @@ qc2.write_text(control)
 compile_qc('vinson_noui', qc2, [(skin_name, skin['guid'])])
 assert not Model(compiled / 'vinson_noui.rmdl', 's3').ui_panels()
 
-report = package(models, out / 'pak', 'r5c_rui', args.repak, 's3')
+# The retail weapon rig supplies the animations selected by mp_weapon_vinson.
+# RePak references this installed dependency without copying it into our package.
+report = package(models, out / 'pak', 'r5c_rui', args.repak, 's3',
+                 installed_animrigs=['animrig/weapons/vinson/ptpov_vinson.rrig'])
 report['runtime_exclusions'] = []
 (out / 'pak/r5c_rui.report.json').write_text(json.dumps(report, indent=2))
 print(json.dumps([m['path'] for m in report['models']], indent=2), report['outputs'])

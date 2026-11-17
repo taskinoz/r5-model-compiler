@@ -21,6 +21,14 @@ and vertex data. The compiler does not yet implement RPak baking/relocations.
 | event | 0x110; 256-byte options string |
 | IK chain / link / lock | 0x14 / 0x10 / 0x10 |
 
+Body parts use the header count/index at 0xEC/0xF0 and 16-byte records
+(relative name, model count, selection base, relative model-table offset).
+Each model choice owns its meshes; a zero-mesh choice is a blank, not an absent
+body part. The exporter preserves this grouping instead of promoting every mesh
+to a separate always-visible body part. Runtime evidence for the rebuilt Flatline
+is recorded in VALIDATION.md. Material name suffix loss is a separate import
+limitation, exposed by comparing each choice's material names exactly.
+
 The header overlaps TF2 through 0x108. Mesh offset is 0x110; IK chains 0x124/128;
 RUI 0x12C/130; poses 0x134/138; surface property 0x13C; mass 0x150; linear bones
 0x194; procedural lookups 0x198..1A0; component offsets 0x1C0..1CC and sizes
