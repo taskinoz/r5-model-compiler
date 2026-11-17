@@ -316,6 +316,15 @@ confirmed in R5R where noted.
   rebuilt (TRACE_MASK_SHOT hits hitboxes instead).
 
 
+Hull polygons in the compiler's BVH are recursively split at the shortest internal
+diagonal, measured on the source float positions before BVH quantization. Winding
+is retained. This policy reproduces the native bent-face split in wood_gib01c;
+fixed first-vertex fans gave the wrong enclosed volume. An independent survey of
+765 rigid PHY/BVH pairs over S0-S3 has no volume failures at the existing 0.1%
+budget with this policy (the fixed fan fails wood_gib01c in each profile). This is
+not a claim that every coplanar native triangle diagonal is reproduced byte for
+byte. PHY polygon mass properties continue to use their measured first-vertex fan.
+
 ## Keyvalues, hitboxes and reference-pose sequences
 
 - Keyvalues (0x140 offset, 0x144 size): in all 1,789 S0-S3 models exactly

@@ -705,6 +705,58 @@ rebuilt weapon, its normal sights and the lit ammo screen displaying "00". All s
 are deliberately bound to one installed skin; this verifies alias/override and
 viewmodel integration, not general VMT resolution or texture equivalence.
 
+## BVH bent-face triangulation (18 November 2026)
+
+The fixed first-vertex fan in the BVH writer split wood_gib01c's bent quad along
+the opposite diagonal from native. Its stored vertices matched, but the resulting
+volume did not. Hull faces now split recursively along the shortest internal
+diagonal, measured before BVH packing. This changes the BVH surface, not the PHY's
+stored face loops or their independently measured fan-based mass properties.
+
+Compiler SHA-256:
+`34dc1ba74025e3911f07993c3db63df3f05aa28166d7d3399f810ddd3fe946ef`.
+All 79 locked-uv regressions and both CTest groups pass. The new authored bent-face
+fixture covers all four profiles, asserts the actual BVH triangle corners and
+enclosed volume, and separately checks that the PHY retains its polygons and mass.
+Each authored bent fixture also decompiles/recompiles with both PHY and BVH
+comparisons passing. A fresh ZIP extraction passes all 28 example round trips
+across four profiles, with the executable hash matching the frozen compiler above.
+
+Before implementation, a native rigid-model survey tested the same triangulation
+on source float positions and compared volumes on each retail BVH's packing grid:
+172 S0, 195 S1, 184 S2 and 214 S3 models (765 total). The fixed fan fails
+wood_gib01c once in every profile; shortest-diagonal splitting has no volume failures
+at the unchanged 0.1% budget. Evidence: `test-output/shortest-diagonal-survey.json`.
+This survey does not establish byte-identical triangulation for coplanar faces or
+make the malformed axe hull exportable.
+
+The new compiler then rebuilt all 1,128 BVH models in
+`test-output/collision54-v7`, using render-only + PHY exports. Independent comparison
+checks the rebuilt BVH geometry and strict tree bounds, and the native PHY where
+present. S0: 228 pass / 1 differ; S1: 271 / 1; S2: 272 / 1;
+S3: 352 / 1 / 1 error. Total: 1,123 pass, four differ, one error.
+All four wood_gib01c cases now pass. No new PHY/BVH issue appears against the
+previous collision reports, and source RMDL hashes match for every model. The
+compiler/tool hashes stayed frozen. `results.json`, `summary.json` and
+`comparison.json` record the evidence under that directory. This run's scope is
+collision; full render/animation corpus evidence remains the v6 run, supplemented
+by the current 79 regressions.
+
+The updated collision package also passes isolated R5R with exit 0 and no harness
+failures: 204 ordinary trace checks, 204 high-detail trace checks, eight physics
+drops and two ragdoll switches. Evidence:
+`test-output/r5r-collision/run-diagonals.json`. This exercises the existing authored
+fixtures and retail rocket; bent-face parity is established by the independent
+binary comparisons and authored regression, rather than a new wood-specific live
+trace. Client ragdoll motion equivalence is still not established.
+
+The wood_gib01d radius remains unresolved. A separate survey covered 1,245 valid S3
+hulls with first/last/largest-triangle normals, Newell normals and multiple plane
+origins; additional probes tested fitted planes, unit-normal averages and convex
+supporting planes. None establishes the stored radius consistently. The compiler
+radius rule and validation limits remain unchanged. Evidence:
+`test-output/radius-candidates.json` and the ignored radius probe scripts.
+
 ## Remaining limitations
 
 - Measuring client-side ragdoll motion in game (not reachable from R5R scripts),

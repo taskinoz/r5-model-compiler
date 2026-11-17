@@ -341,6 +341,37 @@ class Compiler54(unittest.TestCase):
                 self.assertEqual(result['issues'],[])
                 self.assertIn('ragdollconstraint',rebuilt.with_suffix('.phy').read_bytes().decode('latin-1'))
 
+    def test_bvh_bent_hull_face_uses_shortest_diagonal(self):
+        import bvh54, phy54
+        from decompile53 import write_dmx
+        from compare_bvh54 import _volume, compare as compare_bvh
+        from compare_phy54 import compare as compare_phy
+        verts=[(0,0,0),(6,0,0),(4,2,0),(0,2,0),
+               (0,0,2),(6,0,2),(4,2,3),(0,2,2)]
+        loops=[(0,3,2,1),(5,6,7,4),(0,1,5,4),(1,2,6,5),(2,3,7,6),(3,0,4,7)]
+        faces=[('phys',0,[(verts[i],(0,0,1),[(0,1.)],{}) for i in loop]) for loop in loops]
+        write_dmx(self.work/'bent.dmx',self.bones,self.frames[0],faces,model_space=True)
+        qc=self.qc+'$collisionmodel "bent.dmx" { $mass 5 }\n'
+        for target in PROFILES:
+            with self.subTest(target=target):
+                out,_=self.run_compiler(qc,target=target,name=target+'bent')
+                (hull,)=phy54.parse(out.with_suffix('.phy').read_bytes(),target)['solids'][0]['hulls']
+                self.assertEqual(phy54.check_hull(hull,target=='s3'),[])
+                # PHY retains its source polygon and first-vertex-fan mass rule.
+                self.assertEqual(sorted(map(len,hull['faces'])),[4]*6)
+                self.assertAlmostEqual(phy54.hull_mass(hull)[0],64/3,places=4)
+                (entry,)=bvh54.from_model(out,strict=True)['entries']
+                self.assertEqual(entry['problems'],[])
+                top=[frozenset(tuple(round(c,4) for c in p) for p in tri)
+                     for tri in entry['triangles'] if all(p[2]>=2-1e-4 for p in tri)]
+                self.assertEqual(set(top),{frozenset(verts[i] for i in tri) for tri in [(4,5,6),(4,6,7)]})
+                self.assertAlmostEqual(_volume(entry['triangles']),-70/3,places=4)
+                export=decompile(out,self.work/(target+'bent_export'),target,render_only=True,with_physics=True)
+                rebuilt,_=self.run_compiler(export.read_text(),target=target,name=target+'bent_rebuilt',
+                                             extra=['-path',str(export.parent)])
+                self.assertEqual(compare_bvh(out,rebuilt)['issues'],[])
+                self.assertEqual(compare_phy(out.with_suffix('.phy'),rebuilt.with_suffix('.phy'),target)['issues'],[])
+
     def test_bvh_roles_and_header(self):
         import bvh54
         write_smd(self.work/'box.smd',self.bones,self.frames,self.box_tris((-1,2,0),(3,5,4)))

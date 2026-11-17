@@ -29,6 +29,37 @@ struct Entry {
     std::vector<std::array<int, 3>> tris;  // counter-clockwise seen from outside
 };
 
+// PHY mass properties use a first-vertex fan. BVH faces instead split along
+// their shortest internal diagonal; on bent polygons the two surfaces differ.
+void AddHullFace(Entry& entry, const std::vector<int>& face, int base) {
+    if (face.size() < 3) Fatal("BVH hull face needs at least three vertices");
+    if (face.size() == 3) {
+        entry.tris.push_back({base + face[0], base + face[1], base + face[2]});
+        return;
+    }
+    size_t first = 0, last = 2;
+    double shortest = DBL_MAX;
+    for (size_t i = 0; i < face.size(); i++)
+        for (size_t j = i + 2; j < face.size(); j++) {
+            if (i == 0 && j + 1 == face.size()) continue;  // closing edge
+            double length2 = 0;
+            for (int axis = 0; axis < 3; axis++) {
+                double d = double(entry.verts[base + face[i]][axis]) - double(entry.verts[base + face[j]][axis]);
+                length2 += d * d;
+            }
+            if (length2 < shortest) {
+                shortest = length2;
+                first = i;
+                last = j;
+            }
+        }
+    std::vector<int> a(face.begin() + first, face.begin() + last + 1);
+    std::vector<int> b(face.begin() + last, face.end());
+    b.insert(b.end(), face.begin(), face.begin() + first + 1);
+    AddHullFace(entry, a, base);
+    AddHullFace(entry, b, base);
+}
+
 struct Built {
     bool packed = true;
     Vec3 origin;
@@ -332,8 +363,7 @@ CBvh BuildBvh54(const CompiledModel& m) {
             for (auto& h : s->hulls) {
                 int base = static_cast<int>(e.verts.size());
                 for (auto& v : h.verts) e.verts.push_back(v);
-                for (auto& f : h.faces)
-                    for (size_t k = 1; k + 1 < f.size(); k++) e.tris.push_back({base + f[0], base + f[k], base + f[k + 1]});
+                for (auto& f : h.faces) AddHullFace(e, f, base);
             }
         return e;
     };

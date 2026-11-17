@@ -90,6 +90,11 @@ use. Like retail, the compiler writes:
 - for `$collisionmodel`: the physics hull, as triangles;
 - for `$collisionjoints`: one entry per solid, in bone order.
 
+BVH hull polygons split recursively along their shortest internal diagonal. This
+matters for bent faces: their collision surface can differ from the first-vertex
+fan used to measure native PHY mass properties. The PHY's stored polygons and mass
+calculation remain separate from BVH triangulation.
+
 Coordinates are packed into int16 on a power-of-two grid around a whole-inch origin; a
 model too large for packing uses float vertices. As in retail, flat parallelograms are
 stored as quads and mixed leaves as leaf lists. `tools/bvh54.py` reads every retail
