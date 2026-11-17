@@ -608,8 +608,16 @@ void BuildContext::BuildSequences() {
 void BuildContext::BuildSkins() {
     for (auto& t : qc.textures) {
         std::string n = t;
-        for (auto& r : qc.renameMaterials)
-            if (IEquals(n, StripExtension(r.first))) n = StripExtension(r.second);
+        bool renamed = false;
+        for (auto& r : qc.renameMaterials) {
+            // Source readers strip image extensions. A rename's destination is an
+            // asset name, however: Apex also stores names ending in .vmt. Once
+            // renamed, match subsequent rules exactly so foo and foo.vmt stay distinct.
+            if (IEquals(n, r.first) || (!renamed && IEquals(n, StripExtension(r.first)))) {
+                n = r.second;
+                renamed = true;
+            }
+        }
         out.textures.push_back(n);  // as written: retail keeps both slash styles
     }
     out.numSkinRef = static_cast<int>(out.textures.size());

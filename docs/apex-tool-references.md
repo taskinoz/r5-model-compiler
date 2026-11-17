@@ -56,8 +56,9 @@ The WateryContinent projects link two additional SMD authoring tools:
    tool does not establish native write support here.
 2. Keep body-part choices and empty models, and compare their structure. The v5
    corpus exposed 56 material-name differences with a `.vmt` suffix, rather than
-   new body-choice or geometry differences; they remain reported, not normalized
-   away. See VALIDATION.md.
+   new body-choice or geometry differences. The exporter now preserves these exact
+   names through source aliases and rename rules; comparisons remain exact. See
+   VALIDATION.md for the measured follow-up run.
 3. Record existing rig dependencies explicitly in RePak maps. `pack54.py` now accepts
    `--installed-animrig` for the already-tested Flatline fixture. It packages the
    authored rig and references the installed weapon rig; it does not import that

@@ -8,6 +8,13 @@ from mdl54 import Model, PROFILES
 from decompile53 import write_dmx, matrix_angles, qc_quote
 
 
+def material_quote(name):
+    # QC asset paths use literal backslashes; only event options decode escapes.
+    if any(c in name for c in ('"','\n','\r','\0')):
+        raise ValueError('material name cannot be represented as a QC string')
+    return '"'+name+'"'
+
+
 def write_smd(path,bones,frames,tris=None):
     """Nine significant digits preserve float32 mesh attributes and angles."""
     fmt=lambda values:' '.join(format(x,'.9g') for x in values)
@@ -268,6 +275,16 @@ def decompile(path, outdir, target, *, render_only=False, with_physics=False):
     name=m.name.replace('\\','/')
     if name.startswith('mdl/'): name=name[4:]
     lines+=['$modelname '+qc_quote(name), '$cdmaterials ""', '$origin 0 0 0 -90']
+    # Mesh readers strip extensions and compare source names case/slash-insensitively.
+    # Give each material slot its own source alias, then restore the exact asset name
+    # after import; foo and foo.vmt must not collapse into the same material.
+    prefix='r5c_material_'
+    stored_names={mat['name'].lower() for mat in m.materials}
+    while any((prefix+str(i)).lower() in stored_names for i in range(len(m.materials))):
+        prefix+='alias_'
+    material_aliases=[prefix+str(i) for i in range(len(m.materials))]
+    lines+=['$renamematerial '+qc_quote(alias)+' '+material_quote(mat['name'])
+            for alias,mat in zip(material_aliases,m.materials)]
     # the stored hull box (it also sets the BVH box at 0x1F0); collision can widen a
     # computed one, so keep retail's exactly
     lines+=['$bbox '+' '.join(format(x,'.9g') for x in m.get('6f',0x6C))]
@@ -306,7 +323,7 @@ def decompile(path, outdir, target, *, render_only=False, with_physics=False):
             for li,lod in enumerate(lods):
                 faces=[]
                 for mesh in md['meshes']:
-                    mi=mesh_index[id(mesh)]; mat=m.materials[mesh['material']]['name']
+                    mi=mesh_index[id(mesh)]; mat=material_aliases[mesh['material']]
                     for tri in lod[mi]['triangles']:
                         corners=[]
                         for i in (0,2,1):

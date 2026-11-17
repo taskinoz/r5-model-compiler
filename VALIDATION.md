@@ -653,10 +653,62 @@ and render + PHY comparisons for the physics example. See
 licenses and the limits of conclusions drawn from the newly supplied Apex tools.
 No third-party implementation was copied or added as a runtime dependency.
 
+## Exact material names (17-18 November 2026)
+
+The material importer historically stripped filename extensions. The decompiler now
+assigns each mesh material an unambiguous source alias and restores its exact asset
+name with `$renamematerial`. Rename destinations retain suffixes, case and slash
+styles; later rules match the full restored name (case-insensitive matching is
+retained), keeping `shared` and `shared.vmt` separate. Generated aliases avoid
+collisions with stored names. QC path backslashes are literal and are not doubled
+like event-option escapes. Names containing quotes, line breaks or NUL fail export
+explicitly because this QC path-string syntax cannot represent them.
+
+Frozen compiler SHA-256:
+`b5cdcf58a52de478e486539b0b6080548efc276f4b5822f75d01b9b3202b6c97`.
+Decompile54 SHA-256:
+`fc38122d220117320d63ea349c8a3c26a223389b32157a8678830cef91204591`.
+The exact roundtrip54 comparator is unchanged from v5:
+`6c9146348d280f791b9fca32f8ae5c7d53e028115e7c07220a5a74e0fde4b559`.
+
+Full native run `test-output/full54-v6` completed all 1,789 models, including
+full-frame supported animation checks and PHY/BVH comparisons where present:
+S0 358 pass / 2 differ; S1 418 / 2; S2 426 / 2; S3 578 / 2 / 1 error.
+Total: 1,780 pass, eight differ and one error. All 56 v5 material-name failures now
+pass the unchanged exact comparator. No previously passing model newly fails.
+The remaining error and all remaining PHY/BVH/extras diagnostics are identical to
+v5: tablet_mini (S0-S2), wood_gib01c (S0-S3), wood_gib01d (S3), and the refused
+w_bloodhound_axe hull (S3). No tolerances were widened and no known anomaly was
+reclassified as a pass.
+
+Canonical reports are `full/s0/results.json` through `full/s3/results.json` under
+that run. `comparison-v5.json` records the cleared models, remaining diagnostics,
+source RMDL hash equality, compiler/tool hashes and the empty new-failure set.
+Worker checkpoints were reused only with matching compiler/tool hashes and checked
+source RMDL hashes; the compiler and tools remained frozen throughout the run.
+
+All 78 regressions pass through locked uv, and both CTest groups pass. The new
+regression covers S0-S3, suffixed and bare names sharing a stem, mixed case and
+slash styles, an alias-like stored name, final-name GUID/type binding and a later
+material override. Render geometry and the existing exact body-part comparison
+must both pass; no comparison thresholds or normalizations changed.
+A fresh ZIP extraction passes all 28 example round trips (seven examples across
+four targets), including PHY/BVH reads and render + PHY comparison for the physics
+example. The extracted executable hash matches the frozen compiler above.
+
+The Flatline fixture rebuilt successfully with the new compiler/exporter and the
+installed RePak. A new isolated R5R run finishes with exit 0, `passed: true`,
+`failures: []` and the weapon given. Evidence:
+`test-output/r5r-rui/run-material-names.json` and
+`test-output/r5r-rui/rebuilt_material_names_weapon.png`. Visual review confirms the
+rebuilt weapon, its normal sights and the lit ammo screen displaying "00". All slots
+are deliberately bound to one installed skin; this verifies alias/override and
+viewmodel integration, not general VMT resolution or texture equivalence.
+
 ## Remaining limitations
 
 - Measuring client-side ragdoll motion in game (not reachable from R5R scripts),
-  non-jiggle procedural bones (none in S0-S3), exact material names with `.vmt` suffixes, importing arbitrary
+  non-jiggle procedural bones (none in S0-S3), importing arbitrary
   existing rig dependencies, native asset-GUID layers, IK rules, transition
   nodes and followers. Export also rejects sequence keyvalues, transitions and
   procedural weight fixups, and unknown animation/sequence flags or event types.

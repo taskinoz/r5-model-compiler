@@ -208,6 +208,40 @@ class Compiler54(unittest.TestCase):
         self.run_compiler(name='unknownshader',extra=['--material-type','test/material=invalid'],ok=False)
         self.run_compiler(name='unknownslot',extra=['--material-type','missing=rgdp'],ok=False)
 
+    def test_exact_material_names_round_trip(self):
+        from roundtrip54 import compare_extras
+        names=['models/test/shared.vmt','models/test/shared',
+               'Models\\Test/Mixed.VMT','r5c_material_0']
+        triangles=[]
+        for i,name in enumerate(names):
+            corners=[((p[0]+i*8,p[1],p[2]),n,uv,w) for p,n,uv,w in self.tris[0][1]]
+            triangles.append((f'source_{i}',corners))
+        write_smd(self.work/'materials.smd',self.bones,self.frames,triangles)
+        qc=self.qc.replace('$body body "mesh.smd"','$body body "materials.smd"')
+        qc+=''.join(f'$renamematerial "source_{i}.bmp" "{name}"\n' for i,name in enumerate(names))
+        for target in PROFILES:
+            with self.subTest(target=target):
+                out,_=self.run_compiler(qc,target=target,name=target+'materials',extra=[
+                    '--material-guid',names[0]+'=123456789abcdef0',
+                    '--material-type',names[0]+'=sknp'])
+                original=Model(out,target)
+                self.assertEqual([m['name'] for m in original.materials],names)
+                self.assertEqual(original.materials[0]['guid'],0x123456789abcdef0)
+                q=decompile(out,self.work/(target+'materials_src'),target)
+                rebuilt=q.with_name('rebuilt.rmdl')
+                run=subprocess.run([str(self.compiler),'--target',target,'-quiet','-o',str(rebuilt),str(q)],
+                                   capture_output=True,text=True,timeout=40)
+                self.assertEqual(run.returncode,0,run.stdout+run.stderr)
+                self.assertEqual([m['name'] for m in Model(rebuilt,target).materials],names)
+                self.assertEqual(compare_extras(out,rebuilt,target)['issues'],[])
+                self.assertEqual(validate(rebuilt,target,out)['differences'],[])
+        # A later rename (the viewmodel fixture's installed-skin override) must
+        # match the restored suffixed name without also renaming the bare name.
+        qc+='$renamematerial "models/test/shared.vmt" "models/test/rebound.vmt"\n'
+        out,_=self.run_compiler(qc,name='materials_rebound')
+        self.assertEqual([m['name'] for m in Model(out,'s0').materials],
+                         ['models/test/rebound.vmt',*names[1:]])
+
     def test_animation_sections_and_native_tracks(self):
         frames=[]
         for i in range(95):

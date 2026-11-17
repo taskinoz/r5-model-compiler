@@ -226,6 +226,11 @@ sets its shader family. Supported families are `rgdu`, `rgdp`, `rgdc`, `sknu`,
 `--packed-positions` (S2/S3 only). This uses the native 1/1024-inch position grid
 and rejects coordinates outside its range or exceeding 0.0001-inch error.
 
+`$renamematerial "source.bmp" "models/example.vmt"` matches the imported source
+without its image extension and stores the destination exactly, including `.vmt`.
+Subsequent rename rules match the restored name, so `example` and `example.vmt`
+remain distinct. GUID and shader-family bindings use that final exact slot name.
+
 The complete vertex layout must also match the shader. For example, the installed
 S3 `opaque_normalz_front_sknc` debug material accepts float positions and requires
 vertex colors. A runtime copy of the animated-prop QC can use:
@@ -301,8 +306,10 @@ python -I tools\survey54.py --target s0 extracted\models --geometry --out test-o
 `decompile54.py` exports QC, keyvalues2 DMX meshes with preserved corner identities,
 and SMD animations. Body-part names, ordered choices and blank choices are retained
 as `$body`/`$bodygroup`, with all meshes of each choice in one DMX and matching LOD
-replacements. The round-trip metadata check compares these choices. Material names
-ending in `.vmt` currently lose their suffix on import and remain reported differences.
+replacements. The round-trip metadata check compares these choices. Mesh materials
+use unique source aliases and `$renamematerial` rules to preserve their exact asset
+names, including `.vmt` suffixes, case and literal backslashes. Rename destinations
+are stored exactly as written; source image extensions are still stripped on import.
 Supported animation export includes rectangular blend grids,
 pose parameters/keys, per-blend FPS and flags, numeric/named events, fades, activity
 names/modifiers, bounds and sequence bone weights. Named `$animation` definitions
