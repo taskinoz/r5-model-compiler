@@ -175,6 +175,27 @@ class Model(Reader):
         self.span(p,words*2)
         return mode,total,words
 
+    def ik_rules(self, descriptor):
+        """An animation's IK rules (0x88 bytes each: v53's mstudioikrule_t with 0x1C bytes
+        inserted at +0x3C, whose meaning is unknown, and the trailing unused block dropped).
+        The rule-relative error index is reported as its distance past the rule array."""
+        self.span(descriptor,0x34)
+        count=self.get('i',descriptor+0x24); base=descriptor+self.get('i',descriptor+0x28)
+        result=[]
+        for k,p in enumerate(self.array(count,base,0x88)):
+            index,kind,chain,bone,slot=self.get('5i',p)
+            values=self.get('3f3f4f',p+0x14)
+            error,start_frame,unknown_60=self.get('3i',p+0x58)
+            timing=self.get('8f',p+0x64)
+            attachment=self.get('i',p+0x80)
+            result.append(dict(index=index,type=kind,chain=chain,bone=bone,slot=slot,
+                               height=values[0],radius=values[1],floor=values[2],pos=tuple(values[3:6]),q=tuple(values[6:10]),
+                               unknown_3c=self.data[p+0x3C:p+0x58].hex(),
+                               error_past_rules=error-(count-k)*0x88 if error else None,i_start=start_frame,unknown_60=unknown_60,
+                               start=timing[0],peak=timing[1],tail=timing[2],end=timing[3],contact=timing[4],drop=timing[5],top=timing[6],
+                               attachment=self.string(p+attachment) if attachment else '',end_height=timing[7]))
+        return result
+
     def movements(self, descriptor):
         """Native piecewise root-motion records; separate from frame-movement streams."""
         self.span(descriptor,0x34); frames=self.get('i',descriptor+16)

@@ -228,8 +228,11 @@ int main(int argc, char** argv) {
             Fatal("Apex procedural bones other than jiggle bones are not implemented (retail S0-S3 uses only jiggle bones)");
         if(model.bones.size()>255 && !model.jiggles.empty())
             Fatal("Apex jiggle bones need at most 255 bones (the procedural tables index bones with bytes)");
-        for(auto& anim:model.animations) if(!anim.ikRules.empty())
-            Fatal("Apex IK rules are not implemented yet");
+        // Apex sequence assets store only whole-range release rules (studiomdl's automatic
+        // releases); other rule types need error streams with no retail evidence yet
+        for(auto& anim:model.animations) for(auto& rule:anim.ikRules)
+            if(rule.type!=IK_RELEASE)
+                Fatal("%s: Apex IK rules other than release are not implemented yet",anim.name.c_str());
         if(!model.boneFollowers.empty() || !model.includeModels.empty())
             Fatal("Apex followers and external animation rigs are not implemented yet");
         if(!model.nodeNames.empty()) Fatal("Apex transition nodes are not implemented yet");

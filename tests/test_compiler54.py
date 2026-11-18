@@ -73,7 +73,9 @@ class Compiler54(unittest.TestCase):
                     # 0x40000 (retail assets); the model's own copy does not
                     moving=all(asset.get('i',d+12)&0x40000 for d in asset.sequences[0]['animations'])
                     self.assertEqual(asset.sequences[0]['flags'],seq['flags']|(0x40000 if moving else 0))
-                    self.assertEqual(compare_animation_metadata(asset,ref),['sequence 0 flags'] if moving else [])
+                    # ...and stores end 1 on its unused blend axes (retail assets); the model 0
+                    self.assertEqual(asset.sequence_metadata(asset.sequences[0])['end'],(1.0,1.0))
+                    self.assertEqual(compare_animation_metadata(asset,ref),(['sequence 0 flags'] if moving else [])+['sequence 0 end'])
                     ref.sequences=expected
                     self.assertTrue(all(asset.get('i',d)==0 for d in asset.sequences[0]['animations']))
 
@@ -115,6 +117,41 @@ class Compiler54(unittest.TestCase):
         struct.pack_into('<i',data,0,1);seq.write_bytes(data)
         with self.assertRaisesRegex(ValueError,'base selector'):
             import_animations(rig,[seq],self.work/'badbase','s3')
+
+    def test_release_ik_rules_match_retail_layout_and_import(self):
+        # Retail sequence assets store only studiomdl's automatic releases: 0x88-byte rules
+        # (index k, type 4, slot = chain, range 0-0-1-1, error index past the rule array).
+        from import_anim54 import import_animations
+        from decompile54 import release_rules
+        bones=[dict(name='root',parent=-1),dict(name='hip',parent=0),dict(name='knee',parent=1),dict(name='foot',parent=2),
+               dict(name='arm',parent=0),dict(name='hand',parent=4),dict(name='palm',parent=5)]
+        frames=[[((0,0,i),(0,f*.01*i,0),(1,1,1)) for i in range(7)] for f in range(6)]
+        write_smd(self.work/'ikmesh.smd',bones,frames[:1],self.tris)
+        write_smd(self.work/'ikmove.smd',bones,frames)
+        qc=('$modelname "test/ikrel.rmdl"\n$body body "ikmesh.smd"\n$sequence idle "ikmesh.smd"\n'
+            '$sequence wave "ikmove.smd"\n$ikchain leg foot links hip knee foot\n$ikchain arm palm links arm hand palm\n')
+        out,_=self.run_compiler(qc,target='s3',name='ikrel',extra=['--external-assets'])
+        rig=Model(out.with_suffix('.rrig'),'s3')
+        asset=SequenceAsset(out.with_suffix('.seq2.rseq'),rig)
+        desc=asset.sequences[0]['animations'][0]
+        self.assertEqual(release_rules(asset,desc),[0,1])
+        self.assertEqual(asset.get('i',asset.sequences[0]['offset']+0x90),2)
+        base=desc+asset.get('i',desc+0x28)
+        for k in range(2):
+            words=struct.unpack_from('<34I',asset.data,base+k*0x88)
+            self.assertEqual(words[:5],(k,4,k,0,k))
+            self.assertEqual((words[0x58//4],words[0x6C//4],words[0x70//4]),((2-k)*0x88,0x3F800000,0x3F800000))
+        sequences=[out.with_suffix(f'.seq{i}.rseq') for i in range(3)]
+        qci=import_animations(out.with_suffix('.rrig'),sequences,self.work/'ikrel-import','s3')
+        self.assertIn('ikrule "leg" release ikrule "arm" release',qci.read_text())
+        host=qc[:qc.index('$sequence')]+'$include "'+str(qci).replace(chr(92),'/')+'"\n'
+        rebuilt,_=self.run_compiler(host,target='s3',name='ikrel-rebuilt',extra=['--external-assets','-path',str(qci.parent)])
+        again=SequenceAsset(rebuilt.with_suffix('.seq2.rseq'),Model(rebuilt.with_suffix('.rrig'),'s3'))
+        d2=again.sequences[0]['animations'][0]
+        self.assertEqual(asset.data[base:base+2*0x88],again.data[d2+again.get('i',d2+0x28):][:2*0x88])
+        # other rule types have no retail layout evidence: refused for Apex
+        self.run_compiler(qc.replace('$sequence wave "ikmove.smd"','$sequence wave "ikmove.smd" ikrule leg touch root'),
+                          target='s3',name='ikrel-touch',ok=False)
 
     def test_package_embedded_ik_requires_linkage_and_matching_rig(self):
         from pack54 import package

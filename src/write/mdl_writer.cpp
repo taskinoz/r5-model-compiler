@@ -45,7 +45,7 @@ enum HdrOff : size_t {
 
 constexpr size_t kBoneSize = 0xB8, kJiggleSize = 0x78, kAttachSize = 0x3C, kHboxSetSize = 0x0C, kHboxSize = 0x2C,
                  kAnimDescSize = 0x34, kSeqDescSize = 0xD0, kEventSize = 0x110, kAutoLayerSize = 0x18, kIKLockSize = 0x10,
-                 kBodyPartSize = 0x10, kModelSize = 0x88, kMeshSize = 0x5C, kIKChainSize = 0x14, kIKLinkSize = 0x10, kIKRuleSize = 0x8C,
+                 kBodyPartSize = 0x10, kModelSize = 0x88, kMeshSize = 0x5C, kIKChainSize = 0x14, kIKLinkSize = 0x10, kIKRuleSize = 0x88,
                  kPoseParamSize = 0x14, kModelGroupSize = 0x08, kTextureSize = 0xC, kMovementSize = 0x2C;
 
 class MdlWriter {
@@ -78,6 +78,7 @@ private:
     void WriteBoneTable();
     void WriteAnimations();
     void WriteSequences();
+    void WriteIKRules(size_t p, const CAnimation& a);
     void WriteAnimDesc(size_t p, const CAnimation& a, bool inlineClip);
     void WriteNodes();
     void WriteBodyParts();
@@ -300,6 +301,50 @@ void MdlWriter::WriteAnimDesc(size_t p, const CAnimation& a, bool inlineClip) {
             }
         }
         b_.Align(4);
+        if (!a.ikRules.empty()) WriteIKRules(p, a);
+    }
+}
+
+// v54 mstudioikrule_t (0x88): v53's fields with 0x1C bytes inserted at +0x3C and the
+// trailing unused block dropped (stride and fields measured on S3 sequence assets, all
+// of whose rules are whole-range releases). The error index is rule-relative; a rule
+// without an error stream points past the rule array, as retail's do.
+void MdlWriter::WriteIKRules(size_t p, const CAnimation& a) {
+    b_.PatchI32(p + 0x24, static_cast<int32_t>(a.ikRules.size()));
+    b_.PatchI32(p + 0x28, Rel(p));
+    size_t rules = b_.Reserve(kIKRuleSize * a.ikRules.size());
+    size_t after = b_.Tell();
+    for (size_t j = 0; j < a.ikRules.size(); j++) {
+        const CIKRule& r = a.ikRules[j];
+        if (!r.compressedError.empty())
+            Fatal("%s: Apex IK rules with error streams are not implemented (retail stores only releases)", a.name.c_str());
+        size_t q = rules + j * kIKRuleSize;
+        b_.PatchI32(q + 0x00, r.index);
+        b_.PatchI32(q + 0x04, r.type);
+        b_.PatchI32(q + 0x08, r.chain);
+        b_.PatchI32(q + 0x0C, r.bone);
+        b_.PatchI32(q + 0x10, r.slot);
+        b_.PatchAt<float>(q + 0x14, r.height);
+        b_.PatchAt<float>(q + 0x18, r.radius);
+        b_.PatchAt<float>(q + 0x1C, r.floor);
+        b_.PatchAt<float>(q + 0x20, r.pos.x);
+        b_.PatchAt<float>(q + 0x24, r.pos.y);
+        b_.PatchAt<float>(q + 0x28, r.pos.z);
+        b_.PatchAt<float>(q + 0x2C, r.q.x);
+        b_.PatchAt<float>(q + 0x30, r.q.y);
+        b_.PatchAt<float>(q + 0x34, r.q.z);
+        b_.PatchAt<float>(q + 0x38, r.q.w);
+        b_.PatchI32(q + 0x58, static_cast<int32_t>(after - q));
+        b_.PatchI32(q + 0x5C, r.iStart);
+        b_.PatchAt<float>(q + 0x64, r.start);
+        b_.PatchAt<float>(q + 0x68, r.peak);
+        b_.PatchAt<float>(q + 0x6C, r.tail);
+        b_.PatchAt<float>(q + 0x70, r.end);
+        b_.PatchAt<float>(q + 0x74, r.contact);
+        b_.PatchAt<float>(q + 0x78, 0.f);  // drop
+        b_.PatchAt<float>(q + 0x7C, 0.f);  // top
+        if (!r.attachment.empty()) Str(q + 0x80, q, r.attachment);
+        b_.PatchAt<float>(q + 0x84, r.endHeight);
     }
 }
 
@@ -335,7 +380,10 @@ void MdlWriter::WriteSequences() {
         I(0x4C, s.paramIndex[0]);
         I(0x50, s.paramIndex[1]);
         F(0x54, s.paramStart[0]); F(0x58, s.paramStart[1]);
-        F(0x5C, s.paramEnd[0]); F(0x60, s.paramEnd[1]);
+        // a standalone sequence asset stores end 1 on an axis without a pose parameter
+        // (every unused axis of the 4,249 S3 assets; in-model descriptors store 0)
+        for (int axis = 0; axis < 2; ++axis)
+            F(0x5C + 4 * axis, standaloneSequence_ && s.paramIndex[axis] < 0 ? 1.f : s.paramEnd[axis]);
         F(0x68, s.fadeIn);
         F(0x6C, s.fadeOut);
         I(0x70, s.entryNode);

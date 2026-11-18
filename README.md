@@ -332,6 +332,10 @@ stored fields; authored models can use them too. Measured over all 581 S3 models
 - `$boneflags "bone" 0xN`: a bone's stored flags verbatim. Retail sets usage bits and
   0x20/0x100000 by rules the stored data does not give; otherwise the compiler derives
   usage flags, and a static prop's bone gets every usage bit (0xFFFF00) as retail's do.
+- `$externalassets`: `--external-assets` for this model (the external-rig sentinel, a
+  `.rrig` and `.rseq` assets). Retail stores the sentinel in 386 of 581 S3 models,
+  never for single-bone models or static props; elsewhere it is a build choice, so the
+  decompiler writes the command whenever the sentinel is present.
 - The lighting origin (`$illumposition`), `$fadedistance`, the header `$mass` of a model
   without physics and `$surfaceprop` are written when retail's differ from the defaults.
 
@@ -351,7 +355,9 @@ python -I tools\import_anim54.py --target s3 --out work\anims --namespace drone 
 ```
 
 Put `$include "work/anims/animations.qci"` after your `$body` lines and pass
-`-path work\anims` to the compiler. Your mesh's bones must match the rig's. Imported
+`-path work\anims` to the compiler. Your mesh's bones must match the rig's, and the host
+QC needs retail's orientation, `$origin 0 0 0 -90` (decompiled QCs have it): without it
+the root bone's clips are turned 90 degrees. Imported
 labels keep retail's form, the asset path (`animseq/props/.../drone_EMP.rseq`).
 `pack54.py` names each packaged sequence `animseq/<model path>/<label base name>.rseq`,
 as retail does, so scripts can also play it by its short name (`drone_EMP`). A

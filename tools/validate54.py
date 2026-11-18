@@ -43,12 +43,15 @@ def compare_animation_metadata(model, reference, metrics=None):
     if len(model.sequences)!=len(reference.sequences): differences.append('sequence count')
     for index,(seq,ref) in enumerate(zip(model.sequences,reference.sequences)):
         if len(seq['animations'])!=len(ref['animations']): differences.append(f'sequence {index} blend count')
+        if model.get('i',seq['offset']+0x90)!=reference.get('i',ref['offset']+0x90): differences.append(f'sequence {index} IK rule count')
         a,b=model.sequence_metadata(seq),reference.sequence_metadata(ref)
         for field in a:
             if not equal(a[field],b[field]): differences.append(f'sequence {index} {field}')
         for blend,(desc,rdesc) in enumerate(zip(seq['animations'],ref['animations'])):
             if not equal(model.movements(desc),reference.movements(rdesc)):
                 differences.append(f'sequence {index} blend {blend} movements')
+            if not equal(model.ik_rules(desc),reference.ik_rules(rdesc)):
+                differences.append(f'sequence {index} blend {blend} IK rules')
             fm,rfm=model.frame_movement(desc),reference.frame_movement(rdesc)
             bad=bool(fm)!=bool(rfm)
             if fm and rfm:

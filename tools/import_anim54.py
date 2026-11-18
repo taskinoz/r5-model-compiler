@@ -57,7 +57,8 @@ def import_animations(rig_path, sequence_paths, output, target, *, namespace='im
     # Unsupported exports fail in staging, preserving an existing include and clips.
     with tempfile.TemporaryDirectory(prefix='.import54-',dir=output) as tmp:
         stage=Path(tmp)
-        lines=['// Early-Apex animation include; use after $body and add this directory with -path.']
+        lines=['// Early-Apex animation include; use after $body and add this directory with -path.',
+               '// The host QC must use retail orientation: $origin 0 0 0 -90 (as decompiled QCs do).']
         lines+=export_skeleton(rig)
         for i,asset in enumerate(assets): lines+=export_sequences(asset,stage,namespace=f'{namespace}_{i}')
         (stage/'animations.qci').write_text('\n'.join(lines)+'\n',encoding='utf-8')

@@ -317,6 +317,35 @@ def export_skeleton(m, *, metadata=True):
     return lines
 
 
+IK_RULE_SIZE=0x88
+
+
+def release_rules(m, desc):
+    """Chains of an animation's IK rules when every rule is a whole-range release, the
+    only kind retail sequence assets store (studiomdl's automatic releases: index k,
+    slot = chain, bone 0, range 0-0-1-1, an empty error stream past the rule array).
+    v54 rules are 0x88 bytes: v53's fields with 0x1C bytes inserted at +0x3C."""
+    import struct
+    count=m.get('i',desc+0x24)
+    if not count: return []
+    base=desc+m.get('i',desc+0x28); chains=[]
+    nchains=len(m.ik_chains())
+    for k in range(count):
+        q=base+k*IK_RULE_SIZE
+        words=struct.unpack_from('<34I',m.data,q)
+        index,kind,chain,bone,slot=struct.unpack_from('<5i',m.data,q)
+        start,peak,tail,end=struct.unpack_from('<4f',m.data,q+0x64)
+        expected=list(words); expected[0]=k; expected[1]=4; expected[2]=expected[4]=chain
+        expected[0x58//4]=(count-k)*IK_RULE_SIZE
+        expected[0x6C//4]=expected[0x70//4]=0x3F800000
+        for i,w in enumerate(words):
+            if i not in (0,1,2,4,0x58//4,0x6C//4,0x70//4): expected[i]=0
+        if list(words)!=expected or not 0<=chain<nchains:
+            raise ValueError('IK rules other than whole-range releases need a richer native export')
+        chains.append(chain)
+    return chains
+
+
 def export_sequences(m, out, *, namespace=""):
     """Export the supported sequence subset using its owning skeleton."""
     lines=[]
@@ -324,7 +353,7 @@ def export_sequences(m, out, *, namespace=""):
     for si,seq in enumerate(m.sequences):
         p=seq['offset']
         # These fields have no supported source representation in this exporter.
-        if any(m.get('i',p+off) for off in (0x40,0x64,0x70,0x74,0x78,0x88,0x8C,0x90,0x94,0xA4,0xB0,0xCC)) or any(m.get('f',p+off) for off in (0x7C,0x80,0x84)):
+        if any(m.get('i',p+off) for off in (0x40,0x64,0x70,0x74,0x78,0x88,0x8C,0x94,0xA4,0xB0,0xCC)) or any(m.get('f',p+off) for off in (0x7C,0x80,0x84)):
             raise ValueError('sequence nodes/layers/IK/keyvalues need a richer native export')
         meta=m.sequence_metadata(seq)
         # a 1x1 descriptor without a clip holds the reference pose (retail ref, ragdoll)
@@ -336,8 +365,7 @@ def export_sequences(m, out, *, namespace=""):
             raise ValueError('sequence frame-movement flag without frame-movement clips')
         names=[]
         for ai,desc in enumerate(seq['animations']):
-            if m.get('i',desc+0x24):
-                raise ValueError('animation frame-movement/IK needs a richer native export')
+            rules=release_rules(m,desc)
             flags=m.get('i',desc+12)
             if flags & ~0x68017: raise ValueError('unsupported animation flags')
             frames=m.animation(desc); filename=f'{prefix}anim{si}_{ai}.smd'
@@ -358,7 +386,12 @@ def export_sequences(m, out, *, namespace=""):
             for move in m.movements(desc):
                 values=(move['v0'],move['v1'],move['angle'],*move['vector'],*move['position'])
                 options+=' movementrecord '+str(move['end_frame'])+' '+str(move['flags'])+' '+' '.join(format(x,'.9g') for x in values)
+            chains=m.ik_chains()
+            for chain in rules: options+=' ikrule '+qc_quote(chains[chain]['name'])+' release'
             lines+=['$animation '+qc_quote(name)+' '+qc_quote(filename)+options]
+        # the sequence's rule count is its animations' largest (the compiler derives it)
+        if m.get('i',p+0x90)!=max([m.get('i',d+0x24) for d in seq['animations']] or [0]):
+            raise ValueError('sequence IK rule count differs from its animations')
         weightname=f'{prefix}r5c_weights_{si}'
         lines+=['$weightlist '+qc_quote(weightname)+' {']
         lines+=['  '+qc_quote(b['name'])+' '+format(w,'.9g') for b,w in zip(m.bones,meta['weights'])]
