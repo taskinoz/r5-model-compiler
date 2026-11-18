@@ -3,6 +3,8 @@
 // Command line mirrors Valve's studiomdl so Crowbar can drive it:
 //   r5studiomdl --target s0 [-game <dir>] [-o <out.rmdl>] model.qc
 // Output goes to <game>/models/<$modelname>, or next to the QC when -game is absent.
+#include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -28,6 +30,7 @@ static void Usage() {
         "  --material-guid <name=hex> bind a material to an existing RPak asset\n"
         "  --packed-positions use native 64-bit positions for packed-position shaders (s2/s3)\n"
         "  --material-type <name=type> native shader family (rgdu/rgdp/rgdc/sknu/sknp/sknc/wldu/wldc/ptcu/ptcs)\n"
+        "  --surface-properties <file> the game's surfaceproperties.rson: surface ids for header/bone lookups\n"
         "  --external-assets emit a native rig and standalone sequence assets alongside the model\n"
         "  --list-targets show supported compiler profiles\n"
         "  -game <dir>     game/mod directory; output is written to <dir>/models/<$modelname>\n"
@@ -44,6 +47,7 @@ int main(int argc, char** argv) {
     std::map<std::string,uint64_t> materials;
     std::map<std::string,uint8_t> materialTypes;
     bool externalAssets = false, packedPositions = false, noBvh = false;
+    std::string surfaceTable;  // the game's surfaceproperties.rson: name -> id
     QcOptions opt;
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
@@ -64,6 +68,7 @@ int main(int argc, char** argv) {
             else if (l == "--external-assets") externalAssets = true;
             else if (l == "--packed-positions") packedPositions = true;
             else if (l == "--no-bvh") noBvh = true;  // diagnostics only
+            else if (l == "--surface-properties") surfaceTable = next();
             else if (l == "--material-type") {
                 auto value=next(); auto eq=value.find('=');
                 const std::vector<std::string> names={"rgdu","rgdp","rgdc","sknu","sknp","sknc","wldu","wldc","ptcu","ptcs"};
@@ -117,6 +122,42 @@ int main(int argc, char** argv) {
         if (!game.empty()) Info("gamedir: \"%s\"", game.c_str());
         Info("Working on \"%s\"", qc.c_str());
         auto def = ParseQC(qc, opt);
+        for (const auto& binding : def->materialGuids) materials.emplace(binding.first, binding.second);
+        if (!surfaceTable.empty()) {
+            // the game's surface-property ids ("name: { id: N ..."), for names the QC's
+            // $surfacepropid does not give
+            std::ifstream in(std::filesystem::u8path(surfaceTable));
+            if (!in) Fatal("cannot read surface properties \"%s\"", surfaceTable.c_str());
+            std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            std::string clean;
+            for (size_t i = 0; i < text.size(); i++) {  // drop // comments
+                if (text[i] == '/' && i + 1 < text.size() && text[i + 1] == '/') {
+                    while (i < text.size() && text[i] != '\n') i++;
+                }
+                if (i < text.size()) clean += text[i];
+            }
+            size_t found = 0;
+            for (size_t i = 0; i < clean.size(); i++) {
+                if (!(std::isalnum(static_cast<unsigned char>(clean[i])) || clean[i] == '_')) continue;
+                if (i && (std::isalnum(static_cast<unsigned char>(clean[i - 1])) || clean[i - 1] == '_' || clean[i - 1] == '.')) continue;
+                size_t j = i;
+                while (j < clean.size() && (std::isalnum(static_cast<unsigned char>(clean[j])) || clean[j] == '_' || clean[j] == '.')) j++;
+                std::string name = clean.substr(i, j - i);
+                size_t k = j;
+                auto skip = [&]() { while (k < clean.size() && std::isspace(static_cast<unsigned char>(clean[k]))) k++; };
+                skip(); if (k >= clean.size() || clean[k] != ':') continue; k++;
+                skip(); if (k >= clean.size() || clean[k] != '{') continue; k++;
+                skip(); if (clean.compare(k, 2, "id") != 0) continue; k += 2;
+                skip(); if (k >= clean.size() || clean[k] != ':') continue; k++;
+                skip();
+                size_t d = k;
+                while (k < clean.size() && std::isdigit(static_cast<unsigned char>(clean[k]))) k++;
+                if (k == d) continue;
+                def->surfacePropIds.emplace(ToLower(name), std::stoi(clean.substr(d, k - d)));
+                found++;
+            }
+            if (!found) Fatal("no surface property ids in \"%s\"", surfaceTable.c_str());
+        }
         for (const auto& anim : def->animations) {
             bool imported = anim->hasFmTrack || !anim->fmStream.empty();
             bool motionCommands = false;
@@ -135,13 +176,15 @@ int main(int argc, char** argv) {
         if(!EndsWithI(model.name,".rmdl")) model.name += ".rmdl";
         model.flags &= ~0x4000;
         if(model.HasComplexWeights()) model.flags |= 0x4000;
+        model.flags |= model.extraHeaderFlags;
         for(const auto& binding:materials) {
             bool found=false;
             for(const auto& name:model.textures) if(name==binding.first) found=true;
             if(!found) Fatal("material binding '%s' does not match a texture slot",binding.first.c_str());
         }
         if(!materialTypes.empty()) {
-            model.materialTypes.assign(model.textures.size(),model.bones.size()>1 ? 5 : 2);
+            // command-line bindings override the QC's $materialtype slots
+            if(model.materialTypes.empty()) model.materialTypes.assign(model.textures.size(),model.bones.size()>1 ? 5 : 2);
             for(const auto& binding:materialTypes) {
                 bool found=false;
                 for(size_t i=0;i<model.textures.size();++i) if(model.textures[i]==binding.first) {
@@ -159,6 +202,22 @@ int main(int argc, char** argv) {
         // Apex replaces the per-triangle tree with the BVH block
         model.perTri = CPerTri();
         if (!noBvh) model.bvh = BuildBvh54(model);
+        // each bone's BVH entry (+0xB4), as all 581 S3 models store it: 0 without a BVH or
+        // with only the trace mesh; -1 with a rigid hull; jointed models number the bones
+        // that have a solid in bone order (their entries' order), the rest -1
+        {
+            int value = model.bvh.block.empty() || model.bvh.hullEntry < 0 ? 0 : -1;
+            bool jointed = !model.bvh.block.empty() && model.physics.jointed && !model.physics.apexSolids.empty();
+            for (auto& b : model.bones) b.bvhEntry = jointed ? -1 : value;
+            if (jointed) {
+                std::vector<int> withSolid;
+                for (auto& s : model.physics.apexSolids) withSolid.push_back(s.bone);
+                std::sort(withSolid.begin(), withSolid.end());
+                for (size_t i = 0; i < withSolid.size(); i++)
+                    if (withSolid[i] >= 0 && withSolid[i] < static_cast<int>(model.bones.size()))
+                        model.bones[withSolid[i]].bvhEntry = static_cast<int>(i);
+            }
+        }
         model.physics.collisionBlock.clear();
         model.physics.staticCollisionCount = 0;
         if (!model.physics.apexSolids.empty()) {
@@ -207,7 +266,13 @@ int main(int argc, char** argv) {
         if(target=="s2" || target=="s3") {
             vg=WriteVG(model);
             // VG uses separate streaming bytes, but retains native pre-bake allocation sizes.
-            std::memset(mdl.data()+0x1C0,0,12);
+            // component offsets as retail stores them for VG models (all 581 S3): VTX -1,
+            // VVD after VTX, VVC after both (0 without vertex colour)
+            {
+                int32_t sizes[3]; std::memcpy(sizes,mdl.data()+0x1D0,12);
+                int32_t offsets[3]={-1,sizes[0],sizes[2] ? sizes[0]+sizes[1] : 0};
+                std::memcpy(mdl.data()+0x1C0,offsets,12);
+            }
             std::memset(mdl.data()+0x21C,0,8);
         }
 

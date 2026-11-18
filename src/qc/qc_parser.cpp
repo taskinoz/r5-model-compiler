@@ -122,6 +122,7 @@ private:
     void CmdBodygroup();
     void CmdLOD(bool shadow);
     void CmdTextureGroup();
+    void CmdSkinFamilies();
     void CmdDefineBone();
     void CmdAttachment();
     void CmdHBox();
@@ -342,6 +343,35 @@ void Parser::CmdLOD(bool shadow) {
     }
     if (shadow) m_.flags |= STUDIOHDR_FLAGS_HASSHADOWLOD;
     m_.lods.push_back(lod);
+}
+
+void Parser::CmdSkinFamilies() {
+    if (m_.hasSkinFamilies) Fatal("%s: duplicate $skinfamilies", tk_.Where().c_str());
+    if (!tk_.Get(true) || T() != "{") Fatal("%s: expected '{' after $skinfamilies", tk_.Where().c_str());
+    m_.hasSkinFamilies = true;
+    while (tk_.Get(true)) {
+        if (!tk_.Cur().quoted && T() == "}") break;
+        std::string name;
+        if (tk_.Cur().quoted) {
+            name = T();
+            if (!tk_.Get(true)) Fatal("%s: expected '{' for skin family", tk_.Where().c_str());
+        }
+        if (tk_.Cur().quoted || T() != "{") Fatal("%s: expected '{' for skin family", tk_.Where().c_str());
+        if (m_.skinFamilies.empty() && !name.empty()) Fatal("%s: the first skin family has no name", tk_.Where().c_str());
+        std::vector<std::string> row;
+        while (tk_.Get(true)) {
+            if (!tk_.Cur().quoted && T() == "}") break;
+            row.push_back(StripExtension(T()));
+            // the first row registers every texture slot in order
+            if (m_.skinFamilies.empty()) m_.TextureIndex(T(), true);
+        }
+        if (!m_.skinFamilies.empty() && row.size() != m_.skinFamilies[0].size())
+            Fatal("$skinfamilies: family \"%s\" lists %d slots, not %d", name.c_str(), static_cast<int>(row.size()),
+                  static_cast<int>(m_.skinFamilies[0].size()));
+        if (!m_.skinFamilies.empty()) m_.skinFamilyNames.push_back(name);
+        m_.skinFamilies.push_back(row);
+    }
+    if (m_.skinFamilies.empty()) Fatal("$skinfamilies needs at least one family");
 }
 
 void Parser::CmdTextureGroup() {
@@ -1859,6 +1889,28 @@ void Parser::Register() {
     h["$lod"] = [&] { CmdLOD(false); };
     h["$shadowlod"] = [&] { CmdLOD(true); };
     h["$texturegroup"] = [&] { CmdTextureGroup(); };
+    h["$skinfamilies"] = [&] { CmdSkinFamilies(); };
+    h["$headerflags"] = [&] {
+        unsigned long v = std::strtoul(S("flags").c_str(), nullptr, 0);
+        if (v > 0xFFFFFFFFul) Fatal("$headerflags must fit 32 bits");
+        m_.extraHeaderFlags |= static_cast<int>(v);
+    };
+    h["$complexweights"] = [&] { m_.forceComplexWeights = true; };
+    h["$surfacepropid"] = [&] {
+        std::string name = S("surface property");
+        int id = I("id");
+        if (id < 0) Fatal("%s: $surfacepropid must not be negative", tk_.Where().c_str());
+        m_.surfacePropIds[ToLower(name)] = id;
+    };
+    h["$materialtype"] = [&] {
+        std::string name = S("material");
+        std::string type = S("type");
+        static const char* names[] = {"rgdu","rgdp","rgdc","sknu","sknp","sknc","wldu","wldc","ptcu","ptcs"};
+        int value = -1;
+        for (int i = 0; i < 10; i++) if (IEquals(type, names[i])) value = i;
+        if (value < 0) Fatal("%s: unknown material type \"%s\" (rgdu/rgdp/rgdc/sknu/sknp/sknc/wldu/wldc/ptcu/ptcs)", tk_.Where().c_str(), type.c_str());
+        m_.materialTypes.push_back({name, value});
+    };
     h["$renamematerial"] = [&] {
         std::string a = S("from"), b = S("to");
         m_.renameMaterials.push_back({a, b});
@@ -1997,6 +2049,20 @@ void Parser::Register() {
         }
         in >> std::ws; if (!in.eof()) bad();
         mesh.present = true; m_.perTriMode = 2;
+    };
+    h["$materialguid"] = [&] {
+        std::string name = S("material");
+        std::string hex = S("material GUID");
+        size_t used = 0; uint64_t guid = 0;
+        try { guid = std::stoull(hex, &used, 0); } catch (...) { used = 0; }
+        if (!used || used != hex.size() || !guid) Fatal("%s: invalid $materialguid \"%s\"", tk_.Where().c_str(), hex.c_str());
+        m_.materialGuids.push_back({name, guid});
+    };
+    h["$boneflags"] = [&] {
+        std::string bone = S("bone");
+        unsigned long flags = std::strtoul(S("bone flags").c_str(), nullptr, 0);
+        if (flags > 0xFFFFFFFFul) Fatal("$boneflags must fit 32 bits");
+        m_.boneFlags.push_back({bone, static_cast<int>(flags)});
     };
     h["$boneusage"] = [&] {
         std::string bone = S("bone");

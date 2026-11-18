@@ -627,6 +627,27 @@ void BuildContext::BuildSkins() {
         out.cdTextures.push_back(FixSlashes(d, '\\'));
     } else
         out.cdTextures = qc.cdMaterials;
+    if (qc.hasSkinFamilies) {
+        // the stored table: every texture slot in row 0, no renumbering
+        if (!qc.textureGroups.empty()) Fatal("$skinfamilies and $texturegroup cannot be combined");
+        if (qc.skinFamilies[0].size() != out.textures.size())
+            Fatal("$skinfamilies lists %d texture slots, but the model has %d (every material belongs in the first family)",
+                  static_cast<int>(qc.skinFamilies[0].size()), static_cast<int>(out.textures.size()));
+        for (size_t j = 0; j < qc.skinFamilies[0].size(); j++)
+            if (qc.TextureIndex(qc.skinFamilies[0][j], false) != static_cast<int>(j))
+                Fatal("$skinfamilies: the first family must list every texture slot once, in order");
+        for (auto& row : qc.skinFamilies) {
+            std::vector<int16_t> fam;
+            for (auto& name : row) {
+                int t = qc.TextureIndex(name, false);
+                if (t < 0) Fatal("$skinfamilies: material \"%s\" is not a texture slot", name.c_str());
+                fam.push_back(static_cast<int16_t>(t));
+            }
+            out.skins.push_back(fam);
+        }
+        out.skinNames = qc.skinFamilyNames;
+        return;
+    }
     int families = 1;
     if (!qc.textureGroups.empty()) families = std::max<int>(1, static_cast<int>(qc.textureGroups[0].size()));
     out.skins.assign(families, std::vector<int16_t>(out.numSkinRef));
@@ -910,9 +931,9 @@ CompiledModel Build(QcModelDef& qc) {
     ctx.FinalizeBones();
 
     CompiledModel& out = ctx.out;
-    // a static prop's single bone is marked used by everything, as retail's are
+    // a static prop's single bone has every usage bit through 0x800000 (all 152 S3 props)
     if (qc.staticProp)
-        for (auto& b : out.bones) b.flags |= BONE_USED_BY_ANYTHING & ~BONE_USED_BY_BONE_FOLLOWER;
+        for (auto& b : out.bones) { b.flags |= 0xFFFF00; b.flagsVerbatim = true; }
     out.name = qc.modelName;  // as written (retail names keep their slashes)
     if (!EndsWithI(out.name, ".mdl")) out.name += ".mdl";
     out.surfaceProp = qc.surfaceProp;
@@ -980,12 +1001,31 @@ CompiledModel Build(QcModelDef& qc) {
         if (qc.respawnFlag) out.flags |= STUDIOHDR_FLAGS_RESPAWN_800000;
     }
     out.zeroUnusedLods = qc.zeroUnusedLods;
+    for (auto& f : qc.boneFlags) {
+        int k = ctx.FindBone(f.first);
+        if (k < 0) Fatal("unknown bone '%s' in $boneflags", f.first.c_str());
+        out.bones[k].flags = f.second;
+        out.bones[k].flagsVerbatim = true;
+    }
     for (auto& usage : qc.boneUsage) {
         int k = ctx.FindBone(usage.first);
         if (k < 0) Fatal("unknown bone '%s' in $boneusage", usage.first.c_str());
         out.bones[k].flags = (out.bones[k].flags & ~0xfff00) | usage.second;
     }
     if (qc.staticProp) out.flags |= STUDIOHDR_FLAGS_STATIC_PROP;
+    out.forceComplexWeights = qc.forceComplexWeights;
+    out.surfacePropIds = qc.surfacePropIds;
+    out.extraHeaderFlags = qc.extraHeaderFlags;
+    // $materialtype: the slot's shader family, matched against the final material names
+    if (!qc.materialTypes.empty()) {
+        out.materialTypes.assign(out.textures.size(), out.bones.size() > 1 ? 5 : 2);
+        for (auto& binding : qc.materialTypes) {
+            bool found = false;
+            for (size_t i = 0; i < out.textures.size(); i++)
+                if (out.textures[i] == binding.first) { out.materialTypes[i] = static_cast<uint8_t>(binding.second); found = true; }
+            if (!found) Fatal("$materialtype \"%s\" does not match a texture slot", binding.first.c_str());
+        }
+    }
     BuildPerTriAABB(ctx);
     if (qc.perTriMesh.present && !qc.bboxSet) {
         out.hullMin = Min(out.hullMin, qc.perTriMesh.bmin);

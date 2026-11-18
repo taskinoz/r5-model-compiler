@@ -15,6 +15,12 @@ def literal_quote(name, kind='asset name'):
     return '"'+name+'"'
 
 
+# studio flags the compiler derives: generated hitboxes, static prop, complex weights,
+# the single-bone/collision bit, vertex colour and UV2
+DERIVED_FLAGS=0x1|0x10|0x4000|0x800000|0x1000000|0x2000000
+MATERIAL_TYPES=('rgdu','rgdp','rgdc','sknu','sknp','sknc','wldu','wldc','ptcu','ptcs')
+
+
 def material_quote(name):
     return literal_quote(name,'material name')
 
@@ -429,10 +435,53 @@ def decompile(path, outdir, target, *, render_only=False, with_physics=False):
     material_aliases=[prefix+str(i) for i in range(len(m.materials))]
     lines+=['$renamematerial '+qc_quote(alias)+' '+material_quote(mat['name'])
             for alias,mat in zip(material_aliases,m.materials)]
+    # the skin table as stored: the first family lists every texture slot in order (so it
+    # also fixes the texture order), later families are named
+    skins=m.skins()
+    if skins['families']:
+        lines+=['$skinfamilies','{']
+        for f,row in enumerate(skins['families']):
+            label='' if not f else qc_quote(skins['names'][f-1])+' '
+            lines+=['  '+label+'{ '+' '.join(qc_quote(material_aliases[t]) for t in row)+' }']
+        lines+=['}']
     # the stored hull box (it also sets the BVH box at 0x1F0); collision can widen a
     # computed one, so keep retail's exactly
     lines+=['$bbox '+' '.join(format(x,'.9g') for x in m.get('6f',0x6C))]
     if m.get('i',0x9C)&16: lines+=['$staticprop']
+    # studio flags the compiler cannot derive (retail's material bits 0x2/0x4/0x8/0x80/
+    # 0x800): kept verbatim; 0x4000 also selects the complex-weight vertex layout
+    # the stored lighting origin (0x60; derived otherwise from sequence 0's box, which 451
+    # S3 models do not follow); $illumposition is rotated like studiomdl's: stored = (-y, x, z)
+    ix,iy,iz=m.get('3f',0x60)
+    lines+=['$illumposition %s %s %s'%(format(iy,'.9g'),format(-ix,'.9g'),format(iz,'.9g'))]
+    fade=m.get('f',0x16C)
+    if fade!=-1: lines+=['$fadedistance '+format(fade,'.9g')]
+    # header mass of a model without physics (the compiler's default is 1)
+    if not m.get('i',0x1DC) and m.get('f',0x150)!=1: lines+=['$mass '+format(m.get('f',0x150),'.9g')]
+    # the model's surface property (every bone shares it in all 581 S3 models)
+    surface=m.string(m.get('i',0x13C))
+    if surface.lower()!='default': lines+=['$surfaceprop '+qc_quote(surface)]
+    # the game's surface-property ids stored as lookups (header 0x180, bone +0xAC)
+    ids={}
+    ids[m.string(m.get('i',0x13C))]=m.get('i',0x180)
+    for k in range(len(m.bones)):
+        p=m.get('i',0xA4)+0xB8*k
+        ids.setdefault(m.string(p+m.get('i',p+0xA4)),m.get('i',p+0xAC))
+    lines+=['$surfacepropid '+qc_quote(name)+' '+str(v) for name,v in ids.items() if v]
+    # each bone's stored flags: retail usage bits and 0x20/0x100000 follow rules the
+    # stored data does not give
+    lines+=['$boneflags '+qc_quote(b['name'])+' 0x%x'%(b['flags']&0xffffffff) for b in m.bones]
+    flags=m.get('i',0x9C)
+    extra=flags&~DERIVED_FLAGS
+    if extra: lines+=['$headerflags 0x%x'%extra]
+    if flags&0x4000: lines+=['$complexweights']
+    # each texture slot's material asset (so the model packages without bindings)
+    lines+=['$materialguid '+material_quote(mat['name'])+' 0x%016x'%mat['guid'] for mat in m.materials if mat['guid']]
+    # each texture slot's native shader family (studiohdr 0xCC, one byte per slot)
+    types=m.get('i',0xCC)
+    if types:
+        lines+=['$materialtype '+material_quote(mat['name'])+' '+MATERIAL_TYPES[m.data[types+i]]
+                for i,mat in enumerate(m.materials)]
     lines+=export_skeleton(m,metadata=not render_only)
     lods=m.render() if m.meshes else [[]]
     vertex_ids={}

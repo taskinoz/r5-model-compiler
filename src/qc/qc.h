@@ -403,6 +403,24 @@ struct QcModelDef {
     std::vector<QcLod> lods;
     std::vector<std::string> textures;  // global material table, order of first use
     std::vector<std::vector<std::vector<std::string>>> textureGroups;
+    // "$skinfamilies" (r5): Apex's skin table as stored, one row per family listing the
+    // material in every texture slot; row 0 is every slot in order (it fixes the texture
+    // order), later rows are named. All 1,789 S0-S3 models have this form.
+    // "$headerflags N" (r5): studio flags ORed in after derivation; retail's material
+    // bits (0x2, 0x4, 0x8, 0x80, 0x800) come from its binary materials
+    int extraHeaderFlags = 0;
+    // "$surfacepropid name N" (r5): the game's surface-property id for a name, stored as
+    // the header's (0x180) and each bone's (+0xAC) lookup; unknown names store 0. The ids
+    // are the game table's (surfaceproperties.rson), 580 of 581 S3 models.
+    std::map<std::string, int> surfacePropIds;  // lower-case names
+    // "$complexweights" (r5): the complex-weight vertex layout (studio flag 0x4000) even
+    // when no vertex needs more than three influences, as 78 S3 models store it
+    bool forceComplexWeights = false;
+    // "$materialtype name type" (r5): a texture slot's native shader family (0xCC table)
+    std::vector<std::pair<std::string, int>> materialTypes;
+    bool hasSkinFamilies = false;
+    std::vector<std::vector<std::string>> skinFamilies;
+    std::vector<std::string> skinFamilyNames;
     std::vector<std::pair<std::string, std::string>> renameMaterials;
 
     std::vector<QcDefineBone> defineBones;
@@ -455,6 +473,12 @@ struct QcModelDef {
         std::vector<std::array<uint32_t, 4>> triangles;
     } perTriMesh;
     std::vector<std::pair<std::string, int>> boneUsage;
+    // "$boneflags bone N" (r5): a bone's stored flags verbatim (retail sets usage bits and
+    // 0x20/0x100000 by rules the stored data does not give)
+    std::vector<std::pair<std::string, int>> boneFlags;
+    // "$materialguid name 0xGUID" (r5): bind a texture slot to an existing material asset,
+    // as --material-guid does (the command line wins)
+    std::vector<std::pair<std::string, uint64_t>> materialGuids;
     std::vector<std::pair<std::string, std::string>> modelSourceNames;
     // $srcbonetransform (r2c extension): a bone's pre/post transforms as 3x4 matrices,
     // which the engine applies to animations from included models

@@ -118,6 +118,7 @@ void MdlWriter::WriteHeader() {
     b_.PatchAt<uint8_t>(H_NUMALLOWEDROOTLODS, m_.numAllowedRootLods);
     b_.PatchAt<float>(H_FADEDISTANCE, m_.fadeDistance);
     Str(H_SURFACEPROPINDEX, 0, m_.surfaceProp);
+    Hdr(H_SURFACEPROPLOOKUP, m_.SurfacePropId(m_.surfaceProp));
     Str(H_UNKSTRINGOFFSET, 0, m_.unkString);
     Hdr(H_ILLUMPOSATTACHMENTINDEX, m_.illumPositionAttachment);
 }
@@ -148,11 +149,12 @@ void MdlWriter::WriteBones() {
         f(0x48, bn.scale.x); f(0x4C, bn.scale.y); f(0x50, bn.scale.z);
         for (int r = 0; r < 3; r++)
             for (int c = 0; c < 4; c++) f(0x54 + (r * 4 + c) * 4, bn.poseToBone.m[r][c]);
-        b_.PatchI32(p + 0x94, bn.flags & ~BONE_USED_BY_BONE_MERGE);
+        b_.PatchI32(p + 0x94, bn.flagsVerbatim ? bn.flags : bn.flags & ~BONE_USED_BY_BONE_MERGE);
         b_.PatchI32(p + 0xA0, bn.physicsBone);
         Str(p + 0xA4, p, bn.surfaceProp);
         b_.PatchI32(p + 0xA8, bn.contents);
-        b_.PatchI32(p + 0xB4, -1);
+        b_.PatchI32(p + 0xAC, m_.SurfacePropId(bn.surfaceProp));  // the game's surface id
+        b_.PatchI32(p + 0xB4, bn.bvhEntry);
     }
     WriteProceduralBones(base);
     // the bone-controller offset is the unpadded end of the procedural tables (all 114
@@ -252,6 +254,7 @@ void MdlWriter::WriteAnimations() {
     size_t base = b_.Reserve(kAnimDescSize * count);
     animationBase_ = base;
     for (size_t i = 0; i < count; ++i) WriteAnimDesc(base + i * kAnimDescSize, m_.animations[i], false);
+    if (!count) Hdr(H_LOCALANIMINDEX, 0);  // retail stores 0 for an empty table (all S3 models)
 }
 
 // One animation descriptor (reserved at p) and its data. A reference descriptor's
@@ -442,10 +445,12 @@ void MdlWriter::WriteNodes() {
     Hdr(H_LOCALNODEUNK, m_.localNodeUnk);
     b_.Append(m_.transitions);
     b_.Align(4);
+    if (m_.nodeNames.empty() && m_.transitions.empty()) Hdr(H_LOCALNODEINDEX, 0);  // as retail
 }
 
 void MdlWriter::WriteBodyParts() {
     HdrHere(H_BODYPARTINDEX);
+    HdrHere(H_FLEXDESCINDEX);  // the empty flex-descriptor table sits here in retail
     Hdr(H_NUMBODYPARTS, static_cast<int>(m_.bodyParts.size()));
     size_t base = b_.Reserve(kBodyPartSize * m_.bodyParts.size());
     for (size_t i = 0; i < m_.bodyParts.size(); i++) {
@@ -625,6 +630,14 @@ void MdlWriter::WriteTextures() {
     Hdr(H_NUMSKINFAMILIES, static_cast<int>(m_.skins.size()));
     for (auto& fam : m_.skins)
         for (int16_t v : fam) b_.I16(v);
+    // Apex names every family after the first: int32 string offsets after the table
+    // (all S0-S3 models; an unnamed family points at an empty string)
+    if (m_.skins.size() > 1) {
+        b_.Align(4);
+        size_t names = b_.Reserve(4 * (m_.skins.size() - 1));
+        for (size_t f = 1; f < m_.skins.size(); f++)
+            Str(names + 4 * (f - 1), 0, f - 1 < m_.skinNames.size() ? m_.skinNames[f - 1] : std::string());
+    }
     b_.Align(4);
 }
 
@@ -779,6 +792,8 @@ std::vector<uint8_t> MdlWriter::Run() {
         Hdr(H_PHYOFFSET, -123456);
         Hdr(H_PHYSIZE, m_.physics.apexPhySize);
     }
+    // no bone followers: retail points their (empty) table at the end of the file
+    Hdr(H_BONEFOLLOWEROFFSET, static_cast<int>(b_.Size()));
     Hdr(H_LENGTH, static_cast<int>(b_.Size()));
     return b_.Data();
 }

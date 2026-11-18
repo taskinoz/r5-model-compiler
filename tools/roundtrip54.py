@@ -58,6 +58,34 @@ def compare_extras(original,rebuilt,target):
         return all(m.data[lb+h[i]+size*k:lb+h[i]+size*(k+1)]==m.data[bi+0xB8*k+at:bi+0xB8*k+at+size]
                    for i,size,at in fields for k in range(nb))
     if linear(a)!=linear(b): issues.append('linear bone table differs: %r vs %r'%(linear(a),linear(b)))
+    if a.get('i',0x9C)!=b.get('i',0x9C): issues.append('header flags differ: 0x%x vs 0x%x'%(a.get('i',0x9C),b.get('i',0x9C)))
+    def surface(m):
+        # the header's surface property and contents, and each bone's
+        names=[m.string(m.get('i',0x13C)),m.get('i',0x154)]
+        for k in range(len(m.bones)):
+            q=m.get('i',0xA4)+0xB8*k; names.append((m.string(q+m.get('i',q+0xA4)),m.get('i',q+0xA8)))
+        return names
+    if surface(a)!=surface(b): issues.append('surface properties differ: %r vs %r'%(surface(a)[0],surface(b)[0]))
+    def bone_words(m):
+        # each bone's flags and BVH entry (+0x94, +0xB4)
+        return [(m.get('i',m.get('i',0xA4)+0xB8*k+0x94),m.get('i',m.get('i',0xA4)+0xB8*k+0xB4)) for k in range(len(m.bones))]
+    if bone_words(a)!=bone_words(b):
+        diff=[k for k,(x,y) in enumerate(zip(bone_words(a),bone_words(b))) if x!=y]
+        issues.append('bone flags/BVH entries differ on %d bones'%len(diff))
+    def lookups(m):
+        # surface-property ids: the header's and each bone's
+        return m.get('i',0x180),[m.get('i',m.get('i',0xA4)+0xB8*k+0xAC) for k in range(len(m.bones))]
+    if lookups(a)!=lookups(b): issues.append('surface property ids differ: %r vs %r'%(lookups(a)[0],lookups(b)[0]))
+    def types(m):
+        # each texture slot's native shader family (0xCC), by material name
+        off=m.get('i',0xCC)
+        return [(x['name'],m.data[off+i]) for i,x in enumerate(m.materials)] if off else None
+    if types(a)!=types(b): issues.append('material types differ')
+    def skins(m):
+        # families by material name (slot order included) and their names
+        s=m.skins(); names=[x['name'] for x in m.materials]
+        return [[names[t] for t in row] for row in s['families']],s['names']
+    if skins(a)!=skins(b): issues.append('skin families differ')
     def bodyparts(m):
         # body parts by name, each model's meshes (materials, in any order) and its
         # triangle count per LOD: the choices a body group offers

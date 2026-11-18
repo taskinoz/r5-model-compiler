@@ -225,6 +225,18 @@ class Model(Reader):
                             **dict(zip(self.JIGGLE_FIELDS,self.get('30f',r+4))),raw=self.data[r:r+0x7C]))
         return out
 
+    def skins(self):
+        """Skin families (studiohdr 0xE0 slots, 0xE4 families, 0xE8 table): each family
+        lists a texture index per slot; families after the first have a name (int32 string
+        offsets after the table)."""
+        slots,count,index=self.get('3i',0xE0)
+        if not 0<=slots<=4096 or not 0<=count<=4096: raise ValueError('unreasonable skin table')
+        families=[[self.get('h',index+2*(slots*f+j)) for j in range(slots)] for f in range(count)]
+        end=index+2*slots*count; end=(end+3)&~3
+        names=[self.string(self.get('i',end+4*k)) for k in range(count-1)] if count>1 else []
+        if any(not 0<=t<len(self.materials) for f in families for t in f): raise ValueError('skin texture out of range')
+        return dict(families=families,names=names)
+
     @staticmethod
     def ui_face_mask(bounds):
         """A v54 RUI face's mask: bit 4*row+column for each cell of a 4x4 grid over the

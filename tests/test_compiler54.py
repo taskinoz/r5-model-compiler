@@ -687,6 +687,52 @@ class Compiler54(unittest.TestCase):
         self.assertIn('$illumpositionattachment 10',text)
         self.assertNotIn('$illumpositionattachment',decompile(out,self.work/'illum_src2','s3').read_text())
 
+    def test_retail_compatibility_fields_round_trip(self):
+        # Fields measured on all 581 S3 models, written by rule or kept verbatim by the
+        # decompiler; each survives decompile and rebuild exactly.
+        from decompile54 import decompile
+        from roundtrip54 import compare_extras
+        tris=[('test/other',[(p,(0,0,1),uv,[(0,.5),(1,.5)]) for p,uv in [((0,0,4),(0,0)),((1,0,4),(1,0)),((0,1,4),(0,1))]])]
+        write_smd(self.work/'second.smd',self.bones,self.frames,tris)
+        table=self.work/'surfaceproperties.rson'
+        table.write_text('// comment\ndefault:\n{\n\tid: 0\n}\nmetal:\n{\n\tid: 7\n\tdensity: 2\n}\n')
+        qc=('$modelname "test/compat.rmdl"\n$origin 0 0 0 -90\n'
+            '$skinfamilies\n{\n  { "test/material" "test/other" "test/alt" }\n  "recolor" { "test/alt" "test/other" "test/alt" }\n}\n'
+            '$body body "mesh.smd"\n$body second "second.smd"\n$sequence idle "mesh.smd"\n'
+            '$surfaceprop "metal"\n$headerflags 0x8a\n$complexweights\n$materialtype "test/other" sknc\n'
+            '$materialguid "test/material" 0x1122334455667788\n$boneflags "arm" 0x100520\n')
+        out,_=self.run_compiler(qc,target='s3',name='compat',extra=['--surface-properties',str(table)])
+        m=Model(out,'s3')
+        self.assertEqual([x['name'] for x in m.materials],['test/material','test/other','test/alt'])
+        self.assertEqual(m.skins(),dict(families=[[0,1,2],[2,1,2]],names=['recolor']))
+        self.assertEqual(m.get('i',0x9C)&0x408a,0x408a)                     # material bits + complex layout
+        self.assertEqual(m.materials[0]['guid'],0x1122334455667788)
+        self.assertEqual(m.data[m.get('i',0xCC)+1],5)                       # sknc
+        self.assertEqual((m.string(m.get('i',0x13C)),m.get('i',0x180)),('metal',7))
+        base=m.get('i',0xA4)
+        self.assertEqual([m.get('i',base+0xB8*k+0xAC) for k in range(2)],[7,7])   # bone surface ids
+        self.assertEqual(m.bones[1]['flags'],0x100520)                      # verbatim
+        self.assertEqual([m.get('i',base+0xB8*k+0xB4) for k in range(2)],[0,0])  # no BVH: 0
+        self.assertEqual(m.get('i',0x100),0)                                # an empty node table at 0
+        self.assertEqual(m.get('i',0x10C),m.get('i',0xF0))                  # flex descriptors at body parts
+        self.assertEqual(m.get('i',0x1EC),len(m.data))                      # follower table at the end
+        text=decompile(out,self.work/'compat_src','s3').read_text()
+        for line in ('$surfaceprop "metal"','$surfacepropid "metal" 7','$headerflags 0x8a','$complexweights',
+                     '$materialtype "test/other" sknc','$materialguid "test/material" 0x1122334455667788',
+                     '$boneflags "arm" 0x100520','"recolor" {'):
+            self.assertIn(line,text)
+        q=self.work/'compat_src'/'rebuilt.qc'; q.write_text(text); rebuilt=q.with_suffix('.rmdl')
+        run=subprocess.run([str(self.compiler),'--target','s3','-quiet','-o',str(rebuilt),str(q)],capture_output=True,text=True,timeout=40)
+        self.assertEqual(run.returncode,0,run.stdout+run.stderr)
+        self.assertEqual(compare_extras(out,rebuilt,'s3')['issues'],[])
+        # a static prop's bone has every usage bit through 0x800000
+        prop,_=self.run_compiler(self.qc+'$staticprop\n',target='s3',name='compat_prop')
+        self.assertEqual(Model(prop,'s3').bones[0]['flags']&0xFFFF00,0xFFFF00)
+        # the first family lists every texture slot: a mesh material missing from it fails
+        self.run_compiler(qc.replace('{ "test/material" "test/other" "test/alt" }','{ "test/material" "test/alt" "test/alt" }')
+                          .replace('"recolor" { "test/alt" "test/other" "test/alt" }','"recolor" { "test/alt" "test/alt" "test/alt" }'),
+                          target='s3',name='compat_bad',ok=False)
+
     def test_hitboxes_and_keyvalues_round_trip(self):
         from decompile54 import decompile
         from roundtrip54 import compare_extras
@@ -1211,7 +1257,10 @@ class Compiler54(unittest.TestCase):
             palette=vg.get('Q',0x10); count=vg.get('Q',0x18)
             self.assertEqual(vg.data[palette:palette+count],bytes(range(len(model.bones))))
             self.assertTrue(all(model.get('i',o)>0 for o in (0x1D0,0x1D4)))
-            self.assertEqual(model.get('3i',0x1C0),(0,0,0))
+            # retail's component offsets for VG models: VTX -1, VVD after VTX, VVC after
+            # both (0 without vertex colour), from the allocation sizes at 0x1D0
+            vtx,vvd,vvc=model.get('3i',0x1D0)
+            self.assertEqual(model.get('3i',0x1C0),(-1,vtx,vtx+vvd if vvc else 0))
             self.assertFalse(out.with_suffix('.vvd').exists())
             self.assertFalse(out.with_suffix('.dx11.vtx').exists())
             expected=Model(self.run_compiler(target=target,name=target+'float')[0],target)

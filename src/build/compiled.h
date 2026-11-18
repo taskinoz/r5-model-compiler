@@ -3,12 +3,14 @@
 #pragma once
 
 #include <array>
+#include <map>
 #include <cstdint>
 #include <string>
 #include <vector>
 #include "core/weights.h"
 
 #include "core/math.h"
+#include "core/strings.h"
 
 namespace r2c {
 
@@ -41,6 +43,8 @@ struct CBone {
     int jiggle = -1;  // index into CompiledModel::jiggles
     std::vector<uint8_t> procData;  // other procedural types: the encoded struct (self-relative)
     int physicsBone = 0;
+    int bvhEntry = -1;  // +0xB4: the bone's BVH entry (see main.cpp)
+    bool flagsVerbatim = false;  // written as is (static props, $boneflags)
     int collisionIndex = -1, collisionCount = 0;  // entries in the map-collision block
     std::string surfaceProp;
     int contents = 1;
@@ -296,7 +300,9 @@ struct CPerTri {
 };
 
 struct CompiledModel {
+    bool forceComplexWeights = false;
     bool HasComplexWeights() const {
+        if (forceComplexWeights) return true;
         for(const auto& bp:bodyParts) for(const auto& md:bp.models)
             for(const auto& mesh:md.meshes) for(const auto& v:mesh.verts)
                 if(v.numBones>3) return true;
@@ -304,6 +310,12 @@ struct CompiledModel {
     }
     std::string name;       // internal name, e.g. "props/crate.mdl"
     int flags = 0;
+    int extraHeaderFlags = 0;  // $headerflags, ORed in last
+    std::map<std::string, int> surfacePropIds;  // lower-case name -> game id (lookups)
+    int SurfacePropId(const std::string& name) const {
+        auto it = surfacePropIds.find(ToLower(name));
+        return it == surfacePropIds.end() ? 0 : it->second;
+    }
     Vec3 eyePosition, illumPosition;
     Vec3 hullMin, hullMax, viewMin, viewMax;
     float mass = 0;
@@ -336,7 +348,8 @@ struct CompiledModel {
     bool rigAsset = false;  // written as a standalone .rrig
     std::vector<uint8_t> materialTypes; // optional native per-slot shader family
     std::vector<std::string> cdTextures;
-    std::vector<std::vector<int16_t>> skins;  // [family][skinref]
+    std::vector<std::vector<int16_t>> skins;
+    std::vector<std::string> skinNames;  // families 1.. (Apex stores a name for each)  // [family][skinref]
     int numSkinRef = 0;
     std::vector<CBodyPart> bodyParts;
     int numLods = 1;
