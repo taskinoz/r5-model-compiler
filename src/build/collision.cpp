@@ -1543,6 +1543,20 @@ void BuildCollisionModel(BuildContext& ctx) {
     ctx.out.physics.phy = phy.Data();
     ctx.out.physics.text = text;
     ctx.out.physics.apexSolids = std::move(apex);
+    for (auto& p : qc.hullPoints) {
+        auto& solids = ctx.out.physics.apexSolids;
+        if (p.solid >= static_cast<int>(solids.size()) || p.hull >= static_cast<int>(solids[p.solid].hulls.size()))
+            Fatal("$hullpoint %d %d: no such hull", p.solid, p.hull);
+        auto& verts = solids[p.solid].hulls[p.hull].verts;
+        verts.push_back(p.pos);
+        if (verts.size() > 255) Fatal("$hullpoint %d %d: more than 255 hull vertices", p.solid, p.hull);
+    }
+    for (auto& r : qc.hullRadii) {
+        auto& solids = ctx.out.physics.apexSolids;
+        if (r.solid >= static_cast<int>(solids.size()) || r.hull >= static_cast<int>(solids[r.solid].hulls.size()))
+            Fatal("$hullradius %d %d: no such hull", r.solid, r.hull);
+        solids[r.solid].hulls[r.hull].innerRadius = r.radius;
+    }
     ctx.out.physics.jointed = qc.joints;
     ctx.out.physics.mass = static_cast<float>(totalMass);
     ctx.out.physics.solidCount = static_cast<int>(solids.size());

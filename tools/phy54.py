@@ -113,8 +113,11 @@ def check_hull(hull, edge_faces):
         problems.append('edges do not match the face loops')
     if any((b, a) not in directed for a, b in directed):
         problems.append('open surface')
-    if nv - ne + nf != 2:
-        problems.append('Euler characteristic %d' % (nv - ne + nf))
+    # vertices no face uses (retail keeps a few, e.g. w_bloodhound_axe) are not part of
+    # the surface: Euler's formula counts the referenced ones
+    used = len({v for loop in hull['faces'] for v in loop})
+    if used - ne + nf != 2:
+        problems.append('Euler characteristic %d' % (used - ne + nf))
     if edge_faces:
         for e in hull['edges']:
             if len(e) == 4 and (directed.get((e[0], e[1])) != e[2] or directed.get((e[1], e[0])) != e[3]):

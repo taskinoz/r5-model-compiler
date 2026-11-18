@@ -1453,6 +1453,22 @@ void Parser::CmdCollision(bool joints) {
             auto a = args(2);
             if (a.size() != 2 || !std::isfinite(fl(a,1)) || fl(a,1) < 0) Fatal("invalid $jointmass");
             jointProp(a[0]).mass = fl(a,1);
+        } else if (IEquals(cmd, "$hullpoint")) {
+            auto a = args(5);
+            if (a.size() != 5) Fatal("invalid $hullpoint: expected solid, hull and x y z");
+            QcCollision::HullPoint h;
+            h.solid = std::atoi(a[0].c_str()); h.hull = std::atoi(a[1].c_str());
+            h.pos = Vec3(fl(a, 2), fl(a, 3), fl(a, 4));
+            if (h.solid < 0 || h.hull < 0 || !std::isfinite(h.pos.x) || !std::isfinite(h.pos.y) || !std::isfinite(h.pos.z))
+                Fatal("invalid $hullpoint");
+            c.hullPoints.push_back(h);
+        } else if (IEquals(cmd, "$hullradius")) {
+            auto a = args(3);
+            if (a.size() != 3) Fatal("invalid $hullradius: expected solid, hull and radius");
+            QcCollision::HullRadius r;
+            r.solid = std::atoi(a[0].c_str()); r.hull = std::atoi(a[1].c_str()); r.radius = fl(a, 2);
+            if (r.solid < 0 || r.hull < 0 || !std::isfinite(r.radius) || r.radius < 0) Fatal("invalid $hullradius");
+            c.hullRadii.push_back(r);
         } else if (IEquals(cmd, "$jointdrag")) {
             auto a = args(2);
             if (a.size() != 2 || !std::isfinite(fl(a,1))) Fatal("invalid $jointdrag");

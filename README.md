@@ -128,6 +128,12 @@ python tools\phy54.py out\physics_box.phy --target s3
 python tools\bvh54.py out\physics_box.rmdl
 ```
 
+
+Two collision-block options keep retail values the stored geometry cannot give (the
+decompiler writes them only where needed): `$hullradius solid hull radius` stores a
+hull's inscribed radius (derived otherwise from the nearest face plane: 1,240 of 1,246
+S3 hulls; the rest have bent faces), and `$hullpoint solid hull x y z` keeps a stored
+vertex no face uses, in solid space (w_bloodhound_axe has three).
 ## Piecewise root motion and IK chains
 
 Use `$legacymovement` with animation controls `LX`, `LY`, `LZ`, `LZR` or

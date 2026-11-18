@@ -60,6 +60,23 @@ def _rotate34(m,n):
     return tuple(x/length for x in v)
 
 
+def _hull_radius(hull):
+    """The compiler's inscribed radius: the nearest Newell face plane (through the face's
+    farthest vertex) from the stored centroid."""
+    c=hull['centroid']; best=None
+    for loop in hull['faces']:
+        pts=[hull['verts'][i] for i in loop]; n=[0.,0.,0.]
+        for k in range(len(pts)):
+            p,q=pts[k],pts[(k+1)%len(pts)]
+            n[0]+=(p[1]-q[1])*(p[2]+q[2]); n[1]+=(p[2]-q[2])*(p[0]+q[0]); n[2]+=(p[0]-q[0])*(p[1]+q[1])
+        length=math.sqrt(sum(x*x for x in n))
+        if not length: continue
+        n=[x/length for x in n]
+        d=max(sum(a*b for a,b in zip(n,p)) for p in pts)-sum(a*b for a,b in zip(n,c))
+        best=d if best is None else min(best,d)
+    return max(best or 0.,0.)
+
+
 def export_physics(m, out, target):
     """$collisionmodel / $collisionjoints for the model's native PHY: each hull becomes
     one piece of DMX polygons (its stored faces), so the compiler rebuilds the same
@@ -134,6 +151,18 @@ def export_physics(m, out, target):
     for a,b in re.findall(r'"collisionpair"\s+"(\d+),(\d+)"',text):
         lines.append('\t$jointcollide %s %s'%(qc_quote(names[int(a)]),qc_quote(names[int(b)])))
     if re.search(r'"selfcollisions"\s+"0"',text): lines.append('\t$noselfcollisions')
+    # stored vertices no face uses, kept in their hull (solid space)
+    for si,s in enumerate(parsed['solids']):
+        for hi,hull in enumerate(s['hulls']):
+            used={v for loop in hull['faces'] for v in loop}
+            for k,v in enumerate(hull['verts']):
+                if k not in used: lines.append('\t$hullpoint %d %d %s'%(si,hi,' '.join(format(x,'.9g') for x in v)))
+    # a stored inscribed radius the compiler's rule (nearest Newell face plane from the
+    # centroid) does not give: six S3 hulls with bent faces; kept verbatim
+    for si,s in enumerate(parsed['solids']):
+        for hi,hull in enumerate(s['hulls']):
+            if abs(_hull_radius(hull)-hull['radius'])>1e-5*max(hull['radius'],1e-6):
+                lines.append('\t$hullradius %d %d %s'%(si,hi,format(hull['radius'],'.9g')))
     af=re.search(r'animatedfriction\s*\{([^}]*)\}',text)
     if af:
         kv=dict(re.findall(r'"([^"]+)"\s+"([^"]*)"',af[1]))

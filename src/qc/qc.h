@@ -377,6 +377,15 @@ struct QcCollision {
     std::vector<std::string> skipBones;
     std::vector<std::pair<std::string, std::string>> merges;
     std::vector<std::pair<std::string, std::string>> collisionPairs;
+    // "$hullradius solid hull radius" (r5): a stored inscribed radius kept verbatim. The
+    // derived one (nearest Newell face plane from the centroid) matches 1,240 of 1,246
+    // S3 hulls; the rest have bent faces and values no stored-geometry rule gives.
+    struct HullRadius { int solid = 0, hull = 0; float radius = 0; };
+    std::vector<HullRadius> hullRadii;
+    // "$hullpoint solid hull x y z" (r5): a stored vertex no face uses, kept in the hull's
+    // vertex list in solid space (w_bloodhound_axe keeps three just outside its hull)
+    struct HullPoint { int solid = 0, hull = 0; Vec3 pos; };
+    std::vector<HullPoint> hullPoints;
     std::vector<QcCollisionJoint> jointProps;
     std::vector<QcJointConstraint> constraints;
     bool hasMassCenter = false;

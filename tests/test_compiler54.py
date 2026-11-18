@@ -359,6 +359,33 @@ class Compiler54(unittest.TestCase):
                 self.assertIn('"mass" "5.000000"',parsed['text'])
                 self.assertIn('"surfaceprop" "metal"',parsed['text'])
 
+    def test_stored_hull_radius_and_loose_points_round_trip(self):
+        # Retail quirks kept verbatim: six S3 hulls store a radius no stored-geometry
+        # rule gives, and w_bloodhound_axe keeps three vertices no face uses.
+        import phy54
+        from decompile54 import decompile
+        from compare_phy54 import compare
+        write_smd(self.work/'box.smd',self.bones,self.frames,self.box_tris((-1,2,0),(3,5,4)))
+        base=self.qc+'$collisionmodel "box.smd" { $mass 5 %s}\n'
+        out,_=self.run_compiler(base%'$hullradius 0 0 1.25 $hullpoint 0 0 1 3.5 4.01 ',target='s3',name='quirks')
+        (solid,)=phy54.parse(out.with_suffix('.phy').read_bytes(),'s3')['solids']; (hull,)=solid['hulls']
+        self.assertAlmostEqual(hull['radius'],1.25,places=6)
+        self.assertEqual(len(hull['verts']),9)
+        self.assertIn((1.0,3.5,4.010000228881836),hull['verts'])
+        self.assertEqual(phy54.check_hull(hull,True),[])  # the loose point is not surface
+        text=decompile(out,self.work/'quirks_src','s3').read_text()
+        self.assertIn('$hullradius 0 0 1.25',text)
+        self.assertIn('$hullpoint 0 0 1 3.5 4.01000023',text)
+        q=self.work/'quirks_src'/'rebuilt.qc'; q.write_text(text); rebuilt=q.with_suffix('.rmdl')
+        run=subprocess.run([str(self.compiler),'--target','s3','-quiet','-o',str(rebuilt),str(q)],capture_output=True,text=True,timeout=40)
+        self.assertEqual(run.returncode,0,run.stdout+run.stderr)
+        self.assertEqual(compare(out.with_suffix('.phy'),rebuilt.with_suffix('.phy'),'s3')['issues'],[])
+        # a plain hull derives its radius and is exported without either option
+        plain,_=self.run_compiler(base%'',target='s3',name='plain')
+        text=decompile(plain,self.work/'plain_src','s3').read_text()
+        self.assertNotIn('$hullradius',text); self.assertNotIn('$hullpoint',text)
+        self.run_compiler(base%'$hullradius 0 3 1 ',target='s3',name='badhull',ok=False)
+
     def test_phy_negative_maximum_stored_as_flt_min(self):
         import phy54
         write_smd(self.work/'box.smd',self.bones,self.frames,self.box_tris((-4,-6,1),(-1,-2,3)))
