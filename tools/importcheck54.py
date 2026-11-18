@@ -21,7 +21,7 @@ import subprocess
 import sys
 import tempfile
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from mdl54 import Model, SequenceAsset, PROFILES  # noqa: E402
+from mdl54 import Model, SequenceAsset, PROFILES, asset_guid  # noqa: E402
 from decompile54 import export_sequences, write_smd  # noqa: E402
 from import_anim54 import import_animations  # noqa: E402
 from validate54 import compare_animation_metadata  # noqa: E402
@@ -92,12 +92,23 @@ def main():
     ap.add_argument('--only', action='append', help='check only rigs whose path contains this text (repeatable)')
     args = ap.parse_args()
     out = Path(args.out).resolve(); compiler = Path(args.compiler).resolve()
-    rigs = {}
+    rigs = {}; listed = {}
     for p in sorted(Path(args.rigs).rglob('*.rrig')):
-        rigs.setdefault(rig_key(Model(p, args.target)), p)
+        key = rig_key(Model(p, args.target))
+        rigs.setdefault(key, p)
+        # RSX writes each rig's sequence GUIDs beside it (<rig>.rson "seqs"); a sequence
+        # belongs to the rig that lists it (e.g. *_light banner sequences live in their
+        # character's folder but play on empty_lights_<character>)
+        rson = p.with_suffix('.rson')
+        if rson.exists():
+            for line in rson.read_text(encoding='utf-8', errors='replace').splitlines():
+                word = line.strip()
+                if word and all(c in '0123456789abcdefABCDEF' for c in word):
+                    listed.setdefault(int(word, 16), key)
     owned = collections.defaultdict(list); orphans = 0
     for p in sorted(Path(args.sequences).rglob('*.rseq')):
-        owner = asset_label(p)[len('animseq/'):].rsplit('/', 1)[0]
+        label = asset_label(p)
+        owner = listed.get(asset_guid(label)) or label[len('animseq/'):].rsplit('/', 1)[0]
         if owner in rigs: owned[owner].append(p)
         else: orphans += 1
     keys = [k for k in sorted(owned) if not args.only or any(o.lower() in k for o in args.only)][:args.limit]
