@@ -39,11 +39,18 @@ def compare_animation_metadata(model, reference, metrics=None):
         return a==b
     if not equal(model.pose_parameters(),reference.pose_parameters()): differences.append('pose parameters')
     if not equal(model.ik_chains(),reference.ik_chains()): differences.append('IK chains')
+    if model.node_names()!=reference.node_names(): differences.append('transition node names')
     if [b['name'] for b in model.bones]!=[b['name'] for b in reference.bones]: differences.append('animation bone identities')
     if len(model.sequences)!=len(reference.sequences): differences.append('sequence count')
     for index,(seq,ref) in enumerate(zip(model.sequences,reference.sequences)):
         if len(seq['animations'])!=len(ref['animations']): differences.append(f'sequence {index} blend count')
         if model.get('i',seq['offset']+0x90)!=reference.get('i',ref['offset']+0x90): differences.append(f'sequence {index} IK rule count')
+        # entry/exit nodes and node flags, by name (node tables may be ordered differently)
+        def nodes(m,s):
+            names=m.node_names()
+            entry,exit_,flags=(m.get('i',s['offset']+off) for off in (0x70,0x74,0x78))
+            return (names[entry-1] if entry else None,names[exit_-1] if exit_ else None,flags)
+        if nodes(model,seq)!=nodes(reference,ref): differences.append(f'sequence {index} transition nodes')
         a,b=model.sequence_metadata(seq),reference.sequence_metadata(ref)
         for field in a:
             if not equal(a[field],b[field]): differences.append(f'sequence {index} {field}')

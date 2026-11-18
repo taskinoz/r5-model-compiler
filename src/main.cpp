@@ -235,7 +235,6 @@ int main(int argc, char** argv) {
                 Fatal("%s: Apex IK rules other than release are not implemented yet",anim.name.c_str());
         if(!model.boneFollowers.empty() || !model.includeModels.empty())
             Fatal("Apex followers and external animation rigs are not implemented yet");
-        if(!model.nodeNames.empty()) Fatal("Apex transition nodes are not implemented yet");
         for (const auto& seq : model.sequences) if (!seq.layers.empty())
             Fatal("Apex asset-GUID animation layers are not implemented yet");
         // the command line or the QC ($externalassets) asks for the rig/sequence assets

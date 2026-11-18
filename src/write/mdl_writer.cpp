@@ -488,12 +488,11 @@ void MdlWriter::WriteNodes() {
     HdrHere(H_LOCALNODENAMEINDEX);
     size_t names = b_.Reserve(4 * m_.nodeNames.size());
     for (size_t i = 0; i < m_.nodeNames.size(); i++) Str(names + i * 4, 0, m_.nodeNames[i]);
-    HdrHere(H_LOCALNODEINDEX);
+    // v54 stores the node names without a transition table: every S3 rig with nodes (62)
+    // has index 0 (sequences keep their entry/exit nodes)
     Hdr(H_NUMLOCALNODES, static_cast<int>(m_.nodeNames.size()));
     Hdr(H_LOCALNODEUNK, m_.localNodeUnk);
-    b_.Append(m_.transitions);
-    b_.Align(4);
-    if (m_.nodeNames.empty() && m_.transitions.empty()) Hdr(H_LOCALNODEINDEX, 0);  // as retail
+    Hdr(H_LOCALNODEINDEX, 0);
 }
 
 void MdlWriter::WriteBodyParts() {
@@ -893,6 +892,9 @@ std::vector<uint8_t> WriteRig54(const CompiledModel& model) {
     rig.hitboxSets = model.hitboxSets;
     rig.ikChains = model.ikChains;
     rig.poseParams = model.poseParams;
+    // the rig owns the transition node names its sequence assets refer to (62 S3 rigs)
+    rig.nodeNames = model.nodeNames;
+    rig.localNodeUnk = model.localNodeUnk;
     rig.surfaceProp = model.surfaceProp;
     rig.sourceFiles = model.sourceFiles;
     return WriteMDL(rig, true);

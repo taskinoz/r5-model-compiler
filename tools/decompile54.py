@@ -295,6 +295,9 @@ def export_skeleton(m, *, metadata=True):
     """QC skeleton/pose/IK definitions shared by model and standalone-rig export."""
     lines=[]
     if metadata:
+        # transition nodes in table order, including any no sequence uses
+        lines+=['$node '+qc_quote(name) for name in m.node_names()]
+        if m.get('i',0x108): lines+=['$localnodeunk '+str(m.get('i',0x108))]
         for pose in m.pose_parameters():
             if pose['flags'] & ~1: raise ValueError('unsupported pose parameter flags')
             option=' loop '+format(pose['loop'],'.9g') if pose['flags']&1 else ''
@@ -372,7 +375,7 @@ def export_sequences(m, out, *, namespace=""):
     for si,seq in enumerate(m.sequences):
         p=seq['offset']
         # These fields have no supported source representation in this exporter.
-        if any(m.get('i',p+off) for off in (0x40,0x64,0x70,0x74,0x78,0x88,0x8C,0x94,0xA4,0xB0,0xCC)) or any(m.get('f',p+off) for off in (0x7C,0x80,0x84)):
+        if any(m.get('i',p+off) for off in (0x40,0x64,0x88,0x8C,0x94,0xA4,0xB0,0xCC)) or any(m.get('f',p+off) for off in (0x7C,0x80,0x84)):
             raise ValueError('sequence nodes/layers/IK/keyvalues need a richer native export')
         meta=m.sequence_metadata(seq)
         # a 1x1 descriptor without a clip holds the reference pose (retail ref, ragdoll)
@@ -437,12 +440,23 @@ def export_sequences(m, out, *, namespace=""):
                 '  fadein '+format(meta['fade'][0],'.9g')+' fadeout '+format(meta['fade'][1],'.9g'),
                 '  bbox '+' '.join(format(x,'.9g') for x in meta['bounds']),
                 '  ikresetmask '+str(meta['ik_reset'])+' unk_c4 '+str(meta['unknown_c4'])]
+        entry,exit_,nodeflags=(m.get('i',p+off) for off in (0x70,0x74,0x78))
+        if entry or exit_:
+            names=m.node_names()
+            if nodeflags&~1 or not (0<=entry<=len(names) and 0<=exit_<=len(names)): raise ValueError('invalid transition nodes')
+            if entry==exit_ and not nodeflags: lines+=['  node '+qc_quote(names[entry-1])]
+            elif entry and exit_: lines+=['  '+('rtransition' if nodeflags else 'transition')+' '+qc_quote(names[entry-1])+' '+qc_quote(names[exit_-1])]
+            elif nodeflags: raise ValueError('reversible transition without both nodes')
+            # one side only (3 S3 mantle sequences have just an exit node)
+            elif entry: lines+=['  entrynode '+qc_quote(names[entry-1])]
+            else: lines+=['  exitnode '+qc_quote(names[exit_-1])]
+        elif nodeflags: raise ValueError('node flags without transition nodes')
         if meta['activity']: lines+=['  activity '+qc_quote(meta['activity'])+' '+str(meta['activity_weight'])]
         poses=m.pose_parameters()
         for axis,index in enumerate(meta['params']):
             if index>=0:
-                lines+=['  blend '+qc_quote(poses[index]['name'])+' '+format(meta['start'][axis],'.9g')+' '+format(meta['end'][axis],'.9g')]
-            elif axis==0 and meta['params'][1]>=0: raise ValueError('unsupported second-axis-only blend')
+                # an axis-1 blend without an axis-0 one names its axis
+                lines+=['  '+('blendaxis 1 ' if axis==1 and meta['params'][0]<0 else 'blend ')+qc_quote(poses[index]['name'])+' '+format(meta['start'][axis],'.9g')+' '+format(meta['end'][axis],'.9g')]
             else:
                 # an axis without a pose parameter stores 0..1 in sequence assets and 0..0 in
                 # models; keep any other stored range (11 S3 assets)
@@ -450,6 +464,7 @@ def export_sequences(m, out, *, namespace=""):
                 stored=(meta['start'][axis],meta['end'][axis])
                 if stored!=default:
                     lines+=['  axisrange '+str(axis)+' '+' '.join(format(x,'.9g') for x in stored)]
+        if not meta['posekeys'] and meta['grid'][0]*meta['grid'][1]>1: lines+=['  noposekeys']
         if meta['posekeys']: lines+=['  posekeys '+str(len(meta['posekeys']))+' '+' '.join(format(x,'.9g') for x in meta['posekeys'])]
         if seq['flags']&0x80:
             index=meta['cycle_pose']
@@ -475,7 +490,7 @@ def decompile(path, outdir, target, *, render_only=False, with_physics=False):
     # PHY solids, so it is not listed here; roundtrip54 compares it.
     for label,offset in [
                          ('followers',0x1E8),('include models',0x158),
-                         ('IK autoplay locks',0x148),('transition nodes',0xFC)]:
+                         ('IK autoplay locks',0x148)]:
         # include-model count -1 is not an include model: it is the external-rig linkage
         # (the loader builds the virtual rig from asset references), 386 of 581 S3 models
         if offset==0x158 and m.get('i',offset)==-1: continue

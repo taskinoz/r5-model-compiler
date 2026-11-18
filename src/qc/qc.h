@@ -270,6 +270,9 @@ struct QcSequence {
     // "axisrange <axis> <start> <end>" (r5): the stored range of an axis without a pose
     // parameter (11 S3 sequence assets keep a stale one, e.g. -90..90)
     bool axisRange[2] = {false, false};
+    // "noposekeys" (r5): a blend stored without its pose-key table (retail assets have
+    // both forms for the same grid, e.g. 38 of 62 2x1 blends have none)
+    bool noPoseKeys = false;
     std::vector<float> poseKeys;  // explicit blend positions ("posekeys"); empty = evenly spaced
     std::string seqWeights;       // "seqweights": the sequence's own weight list (else max of its animations)
     std::string entryNode, exitNode;

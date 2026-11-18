@@ -30,8 +30,8 @@ def import_animations(rig_path, sequence_paths, output, target, *, namespace='im
         raise ValueError('expected a skeleton-only standalone rig')
     if len(rig.bones)>256: raise ValueError('early-profile skeleton exceeds 256 bones')
     if any(b['proctype'] for b in rig.bones): raise ValueError('rig procedural bones are unsupported')
-    if any(rig.get('i',off) for off in (0xFC,0x148,0x158,0x1A4,0x1E8)):
-        raise ValueError('rig transitions, IK locks, dependencies, weight fixups or followers are unsupported')
+    if any(rig.get('i',off) for off in (0x148,0x158,0x1A4,0x1E8)):
+        raise ValueError('rig IK locks, dependencies, weight fixups or followers are unsupported')
     if any(not math.isfinite(x) for b in rig.bones for k in ('pos','rot','quat','scale','pose_to_bone') for x in b[k]):
         raise ValueError('non-finite rig skeleton')
     assets=[SequenceAsset(p,rig) for p in sequence_paths]

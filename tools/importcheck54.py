@@ -89,6 +89,7 @@ def main():
     ap.add_argument('--out', required=True)
     ap.add_argument('--jobs', type=int, default=1)
     ap.add_argument('--limit', type=int, help='check only the first N rigs (sorted)')
+    ap.add_argument('--only', action='append', help='check only rigs whose path contains this text (repeatable)')
     args = ap.parse_args()
     out = Path(args.out).resolve(); compiler = Path(args.compiler).resolve()
     rigs = {}
@@ -99,7 +100,7 @@ def main():
         owner = asset_label(p)[len('animseq/'):].rsplit('/', 1)[0]
         if owner in rigs: owned[owner].append(p)
         else: orphans += 1
-    keys = sorted(owned)[:args.limit]
+    keys = [k for k in sorted(owned) if not args.only or any(o.lower() in k for o in args.only)][:args.limit]
     report = dict(target=args.target, compiler=str(compiler),
                   compiler_sha256=hashlib.sha256(compiler.read_bytes()).hexdigest(),
                   tools={p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in Path(__file__).parent.glob('*54.py')},

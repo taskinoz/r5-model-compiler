@@ -163,6 +163,32 @@ class Compiler54(unittest.TestCase):
         self.run_compiler(qc.replace('$sequence wave "ikmove.smd"','$sequence wave "ikmove.smd" ikrule leg touch root'),
                           target='s3',name='ikrel-touch',ok=False)
 
+    def test_transition_nodes_in_rig_and_sequence_assets(self):
+        # v54 keeps node names (index 0x100 is 0: no transition table) and each sequence's
+        # entry/exit nodes; an unused declared node stays in the table
+        from import_anim54 import import_animations
+        from validate54 import compare_animation_metadata
+        qc=self.qc.replace('$sequence idle "mesh.smd"',
+            '$node "spare"\n$sequence idle { "mesh.smd" node "stand" }\n'
+            '$sequence go { "mesh.smd" transition "stand" "run" }\n$sequence back { "mesh.smd" rtransition "run" "stand" }\n'
+            '$sequence mantle { "mesh.smd" exitnode "run" eventcycle "AE_X" .5 "dir\\file" }\n')
+        out,_=self.run_compiler(qc,target='s3',name='nodes',extra=['--external-assets'])
+        rig=Model(out.with_suffix('.rrig'),'s3')
+        self.assertEqual(rig.node_names(),['spare','stand','run'])
+        self.assertEqual(rig.get('i',0x100),0)
+        assets=[SequenceAsset(out.with_suffix(f'.seq{i}.rseq'),rig) for i in range(5)]
+        self.assertEqual([tuple(a.get('i',a.sequences[0]['offset']+o) for o in (0x70,0x74,0x78)) for a in assets],
+                         [(0,0,0),(2,2,0),(2,3,0),(3,2,1),(0,3,0)])
+        # an eventcycle's options keep a literal backslash through export and rebuild
+        self.assertEqual(assets[4].sequence_metadata(assets[4].sequences[0])['events'][0]['options'],'dir'+chr(92)+'file')
+        qci=import_animations(out.with_suffix('.rrig'),[out.with_suffix(f'.seq{i}.rseq') for i in range(5)],self.work/'nodes-import','s3')
+        host=qc[:qc.index('$node')]+'$include "'+str(qci).replace(chr(92),'/')+'"\n'
+        rebuilt,_=self.run_compiler(host,target='s3',name='nodes-rebuilt',extra=['--external-assets','-path',str(qci.parent)])
+        new_rig=Model(rebuilt.with_suffix('.rrig'),'s3')
+        for i in range(5):
+            a=SequenceAsset(rebuilt.with_suffix(f'.seq{i}.rseq'),new_rig)
+            self.assertEqual(compare_animation_metadata(a,assets[i]),[])
+
     def test_package_embedded_ik_requires_linkage_and_matching_rig(self):
         from pack54 import package
         bones=[dict(name='root',parent=-1),dict(name='knee',parent=0),dict(name='foot',parent=1)]

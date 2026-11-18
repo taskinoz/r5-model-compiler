@@ -1098,8 +1098,18 @@ void Parser::CmdSequence(bool declare) {
             for (int k = 0; k < n; k++) seq.poseKeys.push_back(F("pose key"));
             return true;
         }
-        if (Is("blend")) {
+        if (Is("noposekeys")) {
+            seq.noPoseKeys = true;
+            return true;
+        }
+        if (Is("blend") || Is("blendaxis")) {
+            // "blendaxis <axis> ..." (r5): a blend on a given axis, e.g. only axis 1 (128 S3
+            // sequence assets); "blend" takes the first free axis
             int i = seq.paramName[0].empty() ? 0 : 1;
+            if (Is("blendaxis")) {
+                i = I("blend axis");
+                if (i < 0 || i > 1) Fatal("%s: blendaxis axis must be 0 or 1", tk_.Where().c_str());
+            }
             seq.paramName[i] = S("pose parameter");
             int j = poseIndex(seq.paramName[i]);
             seq.paramStart[i] = F("start");

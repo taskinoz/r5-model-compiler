@@ -505,7 +505,7 @@ void BuildContext::BuildSequences() {
             if (static_cast<int>(qs.poseKeys.size()) != s.groupSize[0] + s.groupSize[1])
                 Fatal("sequence %s: posekeys needs %d values", qs.name.c_str(), s.groupSize[0] + s.groupSize[1]);
             s.poseKeys = qs.poseKeys;
-        } else if (s.groupSize[0] > 1 || s.groupSize[1] > 1) {
+        } else if (!qs.noPoseKeys && (s.groupSize[0] > 1 || s.groupSize[1] > 1)) {
             for (int p = 0; p < 2; p++)
                 for (int m = 0; m < s.groupSize[p]; m++) {
                     float f = s.groupSize[p] > 1 ? static_cast<float>(m) / (s.groupSize[p] - 1) : 0.f;

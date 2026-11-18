@@ -175,6 +175,11 @@ class Model(Reader):
         self.span(p,words*2)
         return mode,total,words
 
+    def node_names(self):
+        """Transition node names (v54 stores no transition table: index 0x100 is 0)."""
+        count=self.get('i',0xFC); base=self.get('i',0x104)
+        return [self.string(self.get('i',base+4*k)) for k in range(count)]
+
     def ik_rules(self, descriptor):
         """An animation's IK rules (0x88 bytes each: v53's mstudioikrule_t with 0x1C bytes
         inserted at +0x3C, whose meaning is unknown, and the trailing unused block dropped).
@@ -641,6 +646,7 @@ class SequenceAsset(Model):
 
     def pose_parameters(self): return self.rig.pose_parameters()
     def ik_chains(self): return self.rig.ik_chains()
+    def node_names(self): return self.rig.node_names()
 
 
 def main():

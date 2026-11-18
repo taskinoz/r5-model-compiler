@@ -56,9 +56,11 @@ std::vector<Token> Tokenizer::TokenizeText(const std::string& text, const std::s
         newline = false;
         if (c == '"') {
             // QC paths use literal backslashes, including a trailing backslash
-            // before the closing quote. Decode escapes only in event options,
+            // before the closing quote. Decode escapes only in event options (after
+            // "event name frame" or "eventcycle name cycle"),
             // where retail strings can contain literal quote characters.
-            bool eventOptions = out.size() >= 3 && IEquals(out[out.size() - 3].text, "event");
+            bool eventOptions = out.size() >= 3 && (IEquals(out[out.size() - 3].text, "event") ||
+                                                    IEquals(out[out.size() - 3].text, "eventcycle"));
             i++;
             while (i < n && text[i] != '"') {
                 if (eventOptions && text[i] == '\\' && i + 1 < n && (text[i + 1] == '"' || text[i + 1] == '\\')) {
