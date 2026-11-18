@@ -1,4 +1,4 @@
-# Apex early-season compiler validation - 8 November 2026
+# Apex compiler validation - S3 v1, 19 November 2026
 
 Experimental development checkpoint for native S0-S3 output. Offline structure,
 render and authored-animation checks pass. R5R v2.6.52 completed six spawns,
@@ -6,16 +6,18 @@ eleven sequence checks and 55 server playback/movement samples with the original
 walking IK chain retained. All six client screenshots show the expected shapes;
 the float-position prop also shows its bent pose. This fixes the preceding
 checkpoint's IK-linkage crash and invalid float-material visual control.
-This is not a stable release or proof of full Apex model equivalence.
-Retail and later self-hostable seasons remain future targets.
+S3 v1 (19 November 2026): every installed S3 model rebuilds with the fields retail
+stores ("S3 v1 retail compatibility" below), and every retail S3 sequence asset that
+a rig lists imports and rebuilds identical to retail in every compared field and frame.
+Later seasons remain future targets.
 
 Windows x64 MSVC Release: build/r5studiomdl.exe
-SHA-256: `9b71dbacedaa98b80cee8064323a6a750f713c05817cf7a8b1bee76b5509276f` (18 November 2026; the build of the full corpus run under "Retail animation import").
-Independent reader SHA-256: `03897508469135bd6b1475b6e10f87bf42e29afee46c665c3dbeafb57c5728f1`.
+SHA-256: `eaa58a420fd6aaa3ac9a18b845da3c17f9c015fb2f00d627aac04077a388c1ae` (19 November 2026, source `fe5c663`; the build of the S3 v1 corpus and import runs).
+Independent reader (mdl54.py) SHA-256 prefix: `6e2908c1`.
 
 ## Automated checks
 
-- All 84 native compiler/packaging/runtime-harness regressions pass on ordinary Python 3.10 and locked uv/Python 3.14.
+- All 92 native compiler/packaging/runtime-harness regressions pass on ordinary Python 3.10 and locked uv/Python 3.14.7.
 - Both CTest groups pass: convex-hull math and native compiler regressions. The
   inherited hull tests are not Apex physics emission evidence.
 - Complex-skinning tests exercise mixed 1/2/3/4/8/16-influence vertices across all
@@ -818,13 +820,73 @@ pass.
 Not established: other rigs' imports in game, retail's section-size rule (decompiled
 clips store it), and in-model sequences with frame-movement clips (no retail example).
 
+## S3 v1 retail compatibility (19 November 2026)
+
+Compiler `eaa58a42...` (source `fe5c663`); tools mdl54 `6e2908c1`, decompile54
+`39badb96`, import_anim54 `f2f1dbef`, importcheck54 `d583a7c8`, validate54 `ece17a95`,
+roundtrip54 `c570a6f7`, pack54 `f89099e8`. Each run used frozen copies of the compiler
+and tools.
+
+Models (`test-output/full54-v11-release`, `--discard-sources`): full mode S0 359 pass /
+1 error, S1 419 / 1, S2 427 / 1, S3 581 / 0. Render + PHY: S0 228 / 1, S1 271 / 1, S2
+272 / 1, S3 354 / 0. The only failure is tablet_mini (S0-S2), whose retail data fails
+the reader's sanity checks. No model newly fails against the previous runs.
+`headerdiff54.py` over the S3 rebuilds:
+- every header field matches;
+- every bone, attachment and material-GUID record matches, except pose-to-bone
+  matrices, whose largest difference is 2.41e-5 (float32 rounding of the recomputed
+  chain).
+
+Fixed or kept since the previous section:
+- Skin-family names are written literally: five legendary skins named
+  `purple\blue fade` had rebuilt with a doubled backslash.
+- `$externalassets` keeps the include-model sentinel -1 (386 models), which no stored
+  data predicts.
+- The retail skins, header flags, material types, surface ids, bone flags and BVH
+  entries listed in README "Retail fields" are reproduced.
+
+Retail sequence imports (`test-output/importcheck-s3-v4`, `importcheck54.py --jobs 8`).
+The check pairs each of the 4,249 extracted S3 sequence assets with the exported rig
+that lists it (4,158 by the rig's `.rson` GUID list, the rest by folder; 79 have no
+exported rig). It imports every sequence, compiles each rig's include on a stub body
+with `--external-assets` and compares every rebuilt `.rseq` with retail using
+validate54: sequence fields, events, IK rules, autolayers, nodes, the 0xC8 table,
+movements, frame movement and every decoded frame of every blend, with the existing
+limits. **4,163 pass, 0 differ.** Seven are refused: none is in any rig's sequence list,
+and each reads past its file when decoded with the rig of its folder, so its real rig
+was not extracted.
+
+Getting there (first full check: 985 pass, 6 differ, 3,055 refused or failed) took
+these retail facts, each in docs/mdl-v54-format.md:
+- whole-range release IK rules and the 0x88 rule layout;
+- the asset GUID hash for autolayers;
+- rig transition nodes without a transition table;
+- the 0xC8 table;
+- unused-axis ranges, optional pose keys, axis-1 blends and declared pose ranges;
+- stored sequence flag 0x20000 and flag 0x40;
+- all-zeros and track-less clips;
+- additive delta scale;
+- the 128-inch position grid;
+- curve-mode tracks, which are carried verbatim (`animstream`) because re-encoding
+  missed by up to 0.0016 inches against the 0.001 limit.
+
+The limits were not changed. The comparison now treats identical NaN/inf values as
+equal: retail's 0xC8 table stores them, and `abs(a-b) <= 1e-6` is false for them.
+
+All 92 regressions pass on Python 3.10.7 and uv/Python 3.14.7; both CTest groups pass.
+
+Not established in game for this release: imported autolayers and transition nodes,
+the additive delta scale of authored `subtract` clips (retail encoding only), and the
+runtime meaning of flag 0x40 and the 0xC8 table (kept as stored).
+
 ## Remaining limitations
 
 - Measuring client-side ragdoll motion in game (not reachable from R5R scripts),
-  non-jiggle procedural bones (none in S0-S3), importing rigs with procedural bones,
-  transitions, IK locks, weight fixups or followers, native asset-GUID layers, IK rules, transition
-  nodes and followers. Export also rejects sequence keyvalues, transitions and
-  procedural weight fixups, and unknown animation/sequence flags or event types.
+  non-jiggle procedural bones (none in S0-S3), and importing rigs with procedural
+  bones, IK locks, weight fixups or followers. Apex IK rules other than whole-range
+  releases and local-index layers (addlayer/blendlayer) are refused: retail S3 has no
+  examples. Export rejects sequence keyvalues, procedural weight fixups and unknown
+  event types.
 - S3 RPak loading and limited embedded playback/rendering have live evidence.
   Other profiles require a matching-season packager. External-rig-only playback,
   arbitrary external dependencies and general shader compatibility remain unverified.
@@ -836,4 +898,4 @@ clips store it), and in-model sequences with frame-movement clips (no retail exa
   arbitrary sequence metadata, procedural or collision equivalence. Compact retail
   animation decoding still needs broader external-rig validation.
 - Historical TF2 corpus reports/tests are reference material, not Apex evidence.
-  No R5 release has been tagged or published.
+  S3 v1 is tagged locally as r5/v1.0.0-s3; it has not been published.

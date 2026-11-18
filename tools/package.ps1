@@ -18,7 +18,7 @@ New-Item -ItemType Directory -Path (Join-Path $package 'docs'),(Join-Path $packa
 Copy-Item -LiteralPath (Join-Path $projectRoot 'docs\mdl-v54-format.md') -Destination (Join-Path $package 'docs')
 Copy-Item -LiteralPath (Join-Path $projectRoot 'docs\apex-tool-references.md') -Destination (Join-Path $package 'docs')
 foreach ($tool in @('mdl54.py','decompile54.py','import_anim54.py','validate54.py','survey54.py','roundtrip54.py','pack54.py','ingame54.py',
-                    'mdl53.py','decompile53.py','phy.py','phy54.py','compare_phy54.py','bvh54.py','compare_bvh54.py')) {
+                    'importcheck54.py','headerdiff54.py','mdl53.py','decompile53.py','phy.py','phy54.py','compare_phy54.py','bvh54.py','compare_bvh54.py')) {
     Copy-Item -LiteralPath (Join-Path $projectRoot "tools\$tool") -Destination (Join-Path $package 'tools')
 }
 $archive = Join-Path $outputRoot 'r5-model-compiler-win64.zip'

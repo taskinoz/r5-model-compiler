@@ -45,6 +45,14 @@ Read README.md, VALIDATION.md and docs/mdl-v54-format.md before changing writers
   r5apex.exe+0x1CA771/0x1CA80B crashes) or divides by zero in BecomeRagdoll. R5R has no server prop_ragdoll, and client ragdolls are not found by
   GetClientEntArrayBySignifier, so ragdoll motion is not script-measurable there.
   Retail keyvalues are always compact `mdlkeyvalue{prop_data{base "X"}}`.
+- Retail field checks: `headerdiff54.py --target s3 <run>/full/s3` compares every
+  header, bone, attachment and material-GUID field of a `--discard-sources` run with
+  retail; `importcheck54.py` imports, rebuilds and compares every retail sequence asset
+  (pairing rigs through their `.rson` GUID lists; `--only` selects rigs). Freeze the
+  compiler and a copy of tools/ in the run folder (both runs import tools at start).
+  Lessons: a field retail sets with no predictor is stored data — find the rule over the
+  whole corpus, else keep it with a QC command; asset GUIDs are `mdl54.asset_guid` of
+  the path; compare identical NaN/inf as equal, not by subtraction.
 - Jiggle bones in game: tools/build_r5r_jiggle_test.py, then `ingame54.py --jiggle`.
   Jiggle bones are simulated on the client only; the harness steps client props sideways
   and samples an attachment on a jiggle bone (the charm's MENU_CAMERA_FOCUS) relative to
