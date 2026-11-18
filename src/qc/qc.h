@@ -122,6 +122,9 @@ struct QcPoseParam {
     std::string name;
     float min = 0, max = 1;
     bool minSet = false, maxSet = false;
+    // the range came from $poseparameter: stored as declared, not widened by blends
+    // (retail rigs keep e.g. aim_yaw -60..60 with sequences blending -90..90)
+    bool declared = false;
     int flags = 0;
     float loop = 0;
 };
@@ -206,6 +209,10 @@ struct QcAnimation {
     // "animflags 0xN" (r5): descriptor flag bits stored as given (0x40 on 206 S3 clips,
     // with the same bit on their sequences; its runtime meaning is not established)
     int extraFlags = 0;
+    // "notracks" (r5): stored without tracks (flag 0x20000 clear, no data), playing the
+    // base pose; retail has such clips with and without all-zeros (0x20), so a decompile
+    // states both
+    bool noTracks = false;
     bool rawDelta = false;  // "delta": source frames are local deltas (STUDIO_DELTA on the animation)
     // "posscale bone s" (r2c extension): the stored position step for a bone, which a
     // decompiled animation keeps so it re-quantizes onto retail's grid

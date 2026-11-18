@@ -410,6 +410,8 @@ def export_sequences(m, out, *, namespace="", asset_paths=()):
             for bit,word in ((1,'loop'),(2,'snap'),(4,'delta'),(0x10,'post'),(0x8000,'noforceloop')):
                 if flags&bit: options+=' '+word
             if flags&0x40: options+=' animflags 0x40'
+            # a clip without tracks plays its base pose; all-zeros (0x20) is stored data
+            if not flags&0x20000: options+=' notracks'+(' animflags 0x20' if flags&0x20 else '')
             movement=m.frame_movement(desc)
             if movement:
                 import struct

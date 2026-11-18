@@ -32,6 +32,8 @@ def compare_animation_metadata(model, reference, metrics=None):
     """Compare the exported sequence subset and every decoded blend frame."""
     differences=[]
     def equal(a,b):
+        # identical special values (NaN, inf) are equal; finite floats within 1e-6
+        if isinstance(a,float) and isinstance(b,float) and (a==b or (math.isnan(a) and math.isnan(b))): return True
         if isinstance(a,dict) and isinstance(b,dict): return a.keys()==b.keys() and all(equal(a[k],b[k]) for k in a)
         if isinstance(a,(list,tuple)) and isinstance(b,(list,tuple)): return len(a)==len(b) and all(equal(x,y) for x,y in zip(a,b))
         if isinstance(a,float) or isinstance(b,float):

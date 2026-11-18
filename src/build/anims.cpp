@@ -1548,7 +1548,7 @@ void EncodeAnimations(BuildContext& ctx) {
         }
         // A delta clip that is zero throughout is stored as all-zeros (0x20): no tracks and
         // no data, as retail's 231 such clips (the centre blends of aim grids)
-        if (a.flags & 4) {
+        if ((a.flags & 4) && !(a.qc && a.qc->noTracks)) {
             bool zero = true;
             for (int f = 0; f < a.numFrames && zero; f++)
                 for (size_t j = 0; j < ctx.bones.size() && zero; j++) {
@@ -1563,6 +1563,11 @@ void EncodeAnimations(BuildContext& ctx) {
                 ca.sectionFrames = 0;
                 ca.flags = (ca.flags & ~0x20000) | 0x20;
             }
+        }
+        if (a.qc && a.qc->noTracks) {  // all-zeros only when given (animflags 0x20)
+            ca.nativeSections.clear();
+            ca.sectionFrames = 0;
+            ca.flags &= ~0x20000;
         }
         ctx.out.animations.push_back(std::move(ca));
     }

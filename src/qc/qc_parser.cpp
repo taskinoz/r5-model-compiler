@@ -517,6 +517,7 @@ void Parser::CmdPoseParameter() {
         p.max = F("max");
         p.maxSet = true;
     }
+    p.declared = p.minSet && p.maxSet;
     while (Avail()) {
         tk_.Get(false);
         if (Is("wrap")) {
@@ -879,6 +880,8 @@ bool Parser::ParseAnimationToken(QcAnimation& a) {
         f.read(reinterpret_cast<char*>(a.fmStream.data()),size-8);
         if (!f) Fatal("truncated native frame-movement file");
         a.flags |= STUDIO_FRAMEMOVEMENT;
+    } else if (Is("notracks")) {
+        a.noTracks = true;
     } else if (Is("animflags")) {
         a.extraFlags |= static_cast<int>(std::strtoul(S("animation flags").c_str(), nullptr, 0));
     } else if (Is("animstream")) {
@@ -1140,8 +1143,10 @@ void Parser::CmdSequence(bool declare) {
             seq.paramStart[i] = F("start");
             seq.paramEnd[i] = F("end");
             auto& pp = m_.poseParams[j];
-            // studiomdl widens the pose range to cover every blend
-            if (!pp.minSet && !pp.maxSet && pp.min == 0 && pp.max == 1) {
+            // studiomdl widens the pose range to cover every blend; a range declared with
+            // $poseparameter is kept as retail rigs keep theirs
+            if (pp.declared) {
+            } else if (!pp.minSet && !pp.maxSet && pp.min == 0 && pp.max == 1) {
                 pp.min = std::min(seq.paramStart[i], seq.paramEnd[i]);
                 pp.max = std::max(seq.paramStart[i], seq.paramEnd[i]);
                 pp.minSet = pp.maxSet = true;

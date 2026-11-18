@@ -126,7 +126,7 @@ def main():
             counts = collections.Counter(r['status'] for r in report['rigs'][k].values())
             print(k, dict(counts), flush=True)
     totals = collections.Counter(r['status'] for rig in report['rigs'].values() for r in rig.values())
-    reasons = collections.Counter(r.get('reason') or ', '.join(sorted(set(d.split(' ', 2)[-1] for d in r['differences'])))
+    reasons = collections.Counter(r.get('reason') or ', '.join(sorted(set((d.split(' ', 2)[-1] if d.startswith('sequence ') else d) for d in r['differences'])))
                                   for rig in report['rigs'].values() for r in rig.values() if r['status'] != 'pass')
     report['totals'] = dict(totals); report['reasons'] = dict(reasons.most_common())
     (out / 'importcheck.json').write_text(json.dumps(report, indent=1) + '\n')
