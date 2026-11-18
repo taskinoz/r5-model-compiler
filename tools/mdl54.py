@@ -542,6 +542,11 @@ class Model(Reader):
     def animation(self, descriptor):
         p=descriptor; self.span(p,52)
         frames=self.get('i',p+16); flags=self.get('i',p+12)
+        if not flags&0x20000:
+            # no tracks: the base pose (zeros for a delta clip; all-zeros clips set 0x20)
+            if frames<=0 or frames>1000000: raise ValueError('invalid frame count')
+            base=[((0.,0.,0.),(0.,0.,0.),(0.,0.,0.)) if flags&4 else (tuple(b['pos']),tuple(b['rot']),tuple(b['scale'])) for b in self.bones]
+            return [list(base) for _ in range(frames)]
         table,sf=self.get('2i',p+44)
         if frames<=0 or frames>1000000: raise ValueError('invalid frame count')
         output=[]

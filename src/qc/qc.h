@@ -203,6 +203,9 @@ struct QcAnimation {
     int loopRestart = 0;
     bool fudgeLoop = false;
     bool noAutoIK = false;
+    // "animflags 0xN" (r5): descriptor flag bits stored as given (0x40 on 206 S3 clips,
+    // with the same bit on their sequences; its runtime meaning is not established)
+    int extraFlags = 0;
     bool rawDelta = false;  // "delta": source frames are local deltas (STUDIO_DELTA on the animation)
     // "posscale bone s" (r2c extension): the stored position step for a bone, which a
     // decompiled animation keeps so it re-quantizes onto retail's grid

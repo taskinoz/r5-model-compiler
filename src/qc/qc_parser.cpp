@@ -879,6 +879,8 @@ bool Parser::ParseAnimationToken(QcAnimation& a) {
         f.read(reinterpret_cast<char*>(a.fmStream.data()),size-8);
         if (!f) Fatal("truncated native frame-movement file");
         a.flags |= STUDIO_FRAMEMOVEMENT;
+    } else if (Is("animflags")) {
+        a.extraFlags |= static_cast<int>(std::strtoul(S("animation flags").c_str(), nullptr, 0));
     } else if (Is("animstream")) {
         if (!a.nativeStream.empty()) Fatal("duplicate native animation stream");
         std::string name = S("native animation stream file");

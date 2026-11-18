@@ -222,6 +222,32 @@ class Compiler54(unittest.TestCase):
         # local-index layers are refused for Apex
         self.run_compiler(qc.replace('autolayer 0x0123456789abcdef','addlayer idle'),target='s3',name='layers-local',ok=False)
 
+    def test_all_zero_delta_and_stored_animation_flags(self):
+        # an all-zero delta clip is stored as all-zeros (0x20, no tracks or data);
+        # animflags/seqflags keep bit 0x40 (206 S3 clips and their sequences)
+        from import_anim54 import import_animations
+        from validate54 import compare_animation_metadata
+        write_smd(self.work/'still.smd',self.bones,self.frames*3)
+        qc=self.qc.replace('$sequence idle "mesh.smd"',
+            '$sequence idle "mesh.smd"\n$sequence zero { "still.smd" subtract idle 0 }\n'
+            '$sequence marked { "mesh.smd" animflags 0x40 seqflags 64 }\n')
+        out,_=self.run_compiler(qc,target='s3',name='zeroflags',extra=['--external-assets'])
+        rig=Model(out.with_suffix('.rrig'),'s3')
+        zero=SequenceAsset(out.with_suffix('.seq2.rseq'),rig); marked=SequenceAsset(out.with_suffix('.seq3.rseq'),rig)
+        d=zero.sequences[0]['animations'][0]
+        self.assertEqual(zero.get('i',d+12)&0x20024,0x24)
+        self.assertTrue(all(x==0 for pose in zero.animation(d) for bone in pose for ch in bone for x in ch))
+        self.assertEqual(marked.get('i',marked.sequences[0]['animations'][0]+12)&0x40,0x40)
+        self.assertEqual(marked.sequences[0]['flags']&0x40,0x40)
+        sequences=[out.with_suffix(f'.seq{i}.rseq') for i in range(4)]
+        qci=import_animations(out.with_suffix('.rrig'),sequences,self.work/'zeroflags-import','s3')
+        host=self.qc[:self.qc.index('$sequence')]+'$include "'+str(qci).replace(chr(92),'/')+'"\n'
+        rebuilt,_=self.run_compiler(host,target='s3',name='zeroflags-rebuilt',extra=['--external-assets','-path',str(qci.parent)])
+        new_rig=Model(rebuilt.with_suffix('.rrig'),'s3')
+        for i in range(4):
+            self.assertEqual(compare_animation_metadata(SequenceAsset(rebuilt.with_suffix(f'.seq{i}.rseq'),new_rig),
+                                                        SequenceAsset(sequences[i],rig)),[])
+
     def test_package_embedded_ik_requires_linkage_and_matching_rig(self):
         from pack54 import package
         bones=[dict(name='root',parent=-1),dict(name='knee',parent=0),dict(name='foot',parent=1)]

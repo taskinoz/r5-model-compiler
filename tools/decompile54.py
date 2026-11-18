@@ -385,7 +385,7 @@ def export_sequences(m, out, *, namespace="", asset_paths=()):
         meta=m.sequence_metadata(seq)
         # a 1x1 descriptor without a clip holds the reference pose (retail ref, ragdoll)
         reference=not seq['animations']
-        if seq['flags'] & ~0xE47BF: raise ValueError('unsupported sequence flags')
+        if seq['flags'] & ~0xE47FF: raise ValueError('unsupported sequence flags')
         # 0x40000 marks a standalone sequence whose clips have frame movement (retail
         # assets: exactly when all do); the compiler derives it
         if seq['flags'] & 0x40000 and not (seq['animations'] and all(m.get('i',d+12)&0x40000 for d in seq['animations'])):
@@ -394,7 +394,8 @@ def export_sequences(m, out, *, namespace="", asset_paths=()):
         for ai,desc in enumerate(seq['animations']):
             rules=release_rules(m,desc)
             flags=m.get('i',desc+12)
-            if flags & ~0x68017: raise ValueError('unsupported animation flags')
+            # 0x20 (all-zeros) is derived; 0x40 is kept with animflags
+            if flags & ~0x68077: raise ValueError('unsupported animation flags')
             frames=m.animation(desc); filename=f'{prefix}anim{si}_{ai}.smd'
             write_smd(out/filename,m.bones,frames)
             name=f'{prefix}r5c_anim_{si}_{ai}'; names.append(name)
@@ -402,11 +403,13 @@ def export_sequences(m, out, *, namespace="", asset_paths=()):
             options=' fps '+format(m.get('f',desc+8),'.9g')+' noautoik sectionframes '+str(m.get('i',desc+0x30))
             # retail's sections verbatim: its curve-mode tracks cannot be re-encoded exactly;
             # the compiler uses them while the SMD and skeleton are unchanged
-            stream=f'{prefix}anim{si}_{ai}.an54'
-            write_native_stream(out/stream,m,desc,out/filename)
-            options+=' animstream '+qc_quote(stream)
+            if flags&0x20000:  # a clip without tracks (all-zeros) has no sections
+                stream=f'{prefix}anim{si}_{ai}.an54'
+                write_native_stream(out/stream,m,desc,out/filename)
+                options+=' animstream '+qc_quote(stream)
             for bit,word in ((1,'loop'),(2,'snap'),(4,'delta'),(0x10,'post'),(0x8000,'noforceloop')):
                 if flags&bit: options+=' '+word
+            if flags&0x40: options+=' animflags 0x40'
             movement=m.frame_movement(desc)
             if movement:
                 import struct

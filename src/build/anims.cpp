@@ -489,6 +489,9 @@ void BuildContext::BuildAnimations() {
                             sanim[j][k].rot = QuaternionMAAngles(sanim[j][k].rot, -1, src[k].rot);
                             sanim[j][k].pos = src[k].pos - sanim[j][k].pos;
                         }
+                        // v54 delta scale is additive: retail delta clips store 0 for an
+                        // unchanged bone (and the all-zeros clips have no scale at all)
+                        sanim[j][k].scale = sanim[j][k].scale - src[k].scale;
                     }
                 }
                 break;
@@ -1485,6 +1488,7 @@ void EncodeAnimations(BuildContext& ctx) {
         // independently of the sequence's scale flag at that same bit.
         // EncodeNative54 emits explicit channels for every compiled bone.
         if (!bones.empty()) ca.flags |= 0x20000;
+        if (a.qc) ca.flags |= a.qc->extraFlags;
         if (!a.qc->fmStream.empty()) ca.frameMovement = a.qc->fmStream;
         else if (!a.frameMove.empty()) {
             // laid out by the clip's sections when they are given, else by retail's rule
@@ -1540,6 +1544,24 @@ void EncodeAnimations(BuildContext& ctx) {
                 ca.nativeSections.clear();
                 ca.sectionFrames = 0;
                 ca.flags &= ~0x20000;
+            }
+        }
+        // A delta clip that is zero throughout is stored as all-zeros (0x20): no tracks and
+        // no data, as retail's 231 such clips (the centre blends of aim grids)
+        if (a.flags & 4) {
+            bool zero = true;
+            for (int f = 0; f < a.numFrames && zero; f++)
+                for (size_t j = 0; j < ctx.bones.size() && zero; j++) {
+                    const auto& xf = a.sanim[f][j];
+                    for (int k = 0; k < 3; k++) {
+                        if (std::fabs(xf.pos[k]) > 1e-6f || std::fabs(std::remainder(xf.rot[k], 2 * kPi)) > 1e-6f ||
+                            std::fabs(xf.scale[k]) > 1e-6f) zero = false;
+                    }
+                }
+            if (zero) {
+                ca.nativeSections.clear();
+                ca.sectionFrames = 0;
+                ca.flags = (ca.flags & ~0x20000) | 0x20;
             }
         }
         ctx.out.animations.push_back(std::move(ca));
