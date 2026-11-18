@@ -175,6 +175,15 @@ class Model(Reader):
         self.span(p,words*2)
         return mode,total,words
 
+    def autolayers(self, seq):
+        """A sequence's v54 autolayers: 32 bytes each (asset GUID, int16 pose parameter,
+        int16 always 0 in S3, int32 flags, start/peak/tail/end)."""
+        p=seq['offset']; result=[]
+        for q in self.array(self.get('i',p+0x94),p+self.get('i',p+0x98),32):
+            guid=self.get('Q',q); pose,unused,flags=self.get('2hi',q+8)
+            result.append(dict(guid=guid,pose=pose,unused=unused,flags=flags,ramp=self.get('4f',q+16)))
+        return result
+
     def node_names(self):
         """Transition node names (v54 stores no transition table: index 0x100 is 0)."""
         count=self.get('i',0xFC); base=self.get('i',0x104)
@@ -647,6 +656,33 @@ class SequenceAsset(Model):
     def pose_parameters(self): return self.rig.pose_parameters()
     def ik_chains(self): return self.rig.ik_chains()
     def node_names(self): return self.rig.node_names()
+
+
+def asset_guid(path):
+    """RTech asset GUID of an asset path: letters fold to upper case and backslashes to
+    '/', four bytes at a time (resolves 208 of the 292 S3 autolayer GUIDs to extracted
+    sequences; the others name assets that were not extracted)."""
+    M64=(1<<64)-1; M32=(1<<32)-1
+    data=path.encode()+bytes(8)
+    def word(p):
+        nonlocal data
+        if p+4>len(data): data+=bytes(4)
+        return int.from_bytes(data[p:p+4],'little')
+    def fold(w):
+        x=w^0x5C5C5C5C
+        backslash=((~x&M32)>>7)&(((x-0x01010101)&M32)>>7)&0x01010101
+        return ((w-45*backslash)&M32)&0xDFDFDFDF
+    pos=length=h=0
+    w=word(0); folded=fold(w); zero=(~w&M32)&((w-0x01010101)&M32)&0x80808080
+    while not zero:
+        h=((((0xFB8C4D96501*folded)&M64)>>24)+0x633D5F1*h)&M64
+        h=(h>>61)^h
+        pos+=4; length+=4
+        w=word(pos); folded=fold(w); zero=(~w&M32)&((w-0x01010101)&M32)&0x80808080
+    below=((zero&-zero)-1)&M32
+    top=below.bit_length()-1 if below else -1
+    tail=((0xFB8C4D96501*(folded&below))&M64)>>24
+    return (0x633D5F1*h+tail-0xAE502812AA7333*((length+int(top/8))&M32))&M64
 
 
 def main():

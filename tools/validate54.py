@@ -51,6 +51,7 @@ def compare_animation_metadata(model, reference, metrics=None):
             entry,exit_,flags=(m.get('i',s['offset']+off) for off in (0x70,0x74,0x78))
             return (names[entry-1] if entry else None,names[exit_-1] if exit_ else None,flags)
         if nodes(model,seq)!=nodes(reference,ref): differences.append(f'sequence {index} transition nodes')
+        if not equal(model.autolayers(seq),reference.autolayers(ref)): differences.append(f'sequence {index} autolayers')
         a,b=model.sequence_metadata(seq),reference.sequence_metadata(ref)
         for field in a:
             if not equal(a[field],b[field]): differences.append(f'sequence {index} {field}')

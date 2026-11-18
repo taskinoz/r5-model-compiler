@@ -417,11 +417,14 @@ void MdlWriter::WriteSequences() {
         }
         b_.Align(4);
         // autolayers
-        I(0x94, static_cast<int>(s.layers.size()));
+        // v54 layers name their sequence asset by GUID (local-index layers are refused)
+        I(0x94, static_cast<int>(s.assetLayers.size()));
         I(0x98, Rel(p));
-        for (auto& l : s.layers) {
-            b_.I16(static_cast<int16_t>(l.sequence));
+        for (auto& l : s.assetLayers) {
+            b_.U32(static_cast<uint32_t>(l.guid));
+            b_.U32(static_cast<uint32_t>(l.guid >> 32));
             b_.I16(static_cast<int16_t>(l.pose));
+            b_.I16(0);
             b_.I32(l.flags);
             b_.F32(l.start);
             b_.F32(l.peak);

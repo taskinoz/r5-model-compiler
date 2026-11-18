@@ -501,6 +501,17 @@ void BuildContext::BuildSequences() {
                 s.paramEnd[p] = qs.paramEnd[p];
             }
         }
+        for (const auto& l : qs.assetLayers) {
+            CSequence::AssetLayer o;
+            o.guid = l.guid;
+            if (!l.pose.empty()) {
+                o.pose = qc.FindPoseParam(l.pose);
+                if (o.pose < 0) Fatal("sequence %s: autolayer pose parameter \"%s\" is not defined", qs.name.c_str(), l.pose.c_str());
+            }
+            o.flags = l.flags;
+            o.start = l.start; o.peak = l.peak; o.tail = l.tail; o.end = l.end;
+            s.assetLayers.push_back(o);
+        }
         if (!qs.poseKeys.empty()) {
             if (static_cast<int>(qs.poseKeys.size()) != s.groupSize[0] + s.groupSize[1])
                 Fatal("sequence %s: posekeys needs %d values", qs.name.c_str(), s.groupSize[0] + s.groupSize[1]);

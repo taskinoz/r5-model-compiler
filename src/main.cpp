@@ -236,7 +236,7 @@ int main(int argc, char** argv) {
         if(!model.boneFollowers.empty() || !model.includeModels.empty())
             Fatal("Apex followers and external animation rigs are not implemented yet");
         for (const auto& seq : model.sequences) if (!seq.layers.empty())
-            Fatal("Apex asset-GUID animation layers are not implemented yet");
+            Fatal("sequence %s: Apex layers name a sequence asset; use autolayer \"<asset path>\" instead of addlayer/blendlayer", seq.label.c_str());
         // the command line or the QC ($externalassets) asks for the rig/sequence assets
         const bool assets = externalAssets || model.externalAssetRig;
         if(assets && (model.sequences.empty() || model.sequences.front().label!="ref")) {

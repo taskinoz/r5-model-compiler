@@ -280,6 +280,16 @@ struct QcSequence {
     float exitPhase = 0, entryPhase = 0;
     float fadeIn = 0.2f, fadeOut = 0.2f;
     std::vector<QcAutoLayer> layers;
+    // "autolayer <asset path | 0xGUID> [pose p] [flags f] [range s p t e]" (r5): a layer
+    // naming a sequence asset by GUID (hashed from the path), as v54 stores them
+    struct AssetLayer {
+        std::string path;  // empty when given as a GUID
+        uint64_t guid = 0;
+        std::string pose;
+        int flags = 0;
+        float start = 0, peak = 0, tail = 0, end = 0;
+    };
+    std::vector<AssetLayer> assetLayers;
     std::vector<QcIKLock> ikLocks;
     std::string keyValues;
     std::string cyclePose;

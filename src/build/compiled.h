@@ -238,6 +238,13 @@ struct CSequence {
     int nextSeq = 0, pose = 0;
     int numIKRules = 0;
     std::vector<CAutoLayer> layers;
+    // v54 autolayers (32 bytes: asset GUID, int16 pose, int16 0, flags, start/peak/tail/end)
+    struct AssetLayer {
+        uint64_t guid = 0;
+        int pose = 0, flags = 0;
+        float start = 0, peak = 0, tail = 0, end = 0;
+    };
+    std::vector<AssetLayer> assetLayers;
     std::vector<float> weights;  // per bone
     std::vector<float> poseKeys; // groupSize[0] + groupSize[1]
     std::vector<CIKLock> ikLocks;

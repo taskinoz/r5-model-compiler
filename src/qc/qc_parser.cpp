@@ -1098,6 +1098,29 @@ void Parser::CmdSequence(bool declare) {
             for (int k = 0; k < n; k++) seq.poseKeys.push_back(F("pose key"));
             return true;
         }
+        if (Is("autolayer")) {
+            QcSequence::AssetLayer l;
+            std::string target = S("layer sequence asset");
+            if (target.size() > 2 && target[0] == '0' && (target[1] == 'x' || target[1] == 'X'))
+                l.guid = std::strtoull(target.c_str(), nullptr, 16);
+            else {
+                l.path = target;
+                l.guid = AssetGuid(target);
+            }
+            while (Avail()) {
+                tk_.Get(false);
+                if (Is("pose")) l.pose = S("pose parameter");
+                else if (Is("flags")) l.flags = static_cast<int>(std::strtoul(S("layer flags").c_str(), nullptr, 0));
+                else if (Is("range")) {
+                    l.start = F("start"); l.peak = F("peak"); l.tail = F("tail"); l.end = F("end");
+                } else {
+                    tk_.Unget();
+                    break;
+                }
+            }
+            seq.assetLayers.push_back(l);
+            return true;
+        }
         if (Is("noposekeys")) {
             seq.noPoseKeys = true;
             return true;

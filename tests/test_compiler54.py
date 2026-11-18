@@ -189,6 +189,39 @@ class Compiler54(unittest.TestCase):
             a=SequenceAsset(rebuilt.with_suffix(f'.seq{i}.rseq'),new_rig)
             self.assertEqual(compare_animation_metadata(a,assets[i]),[])
 
+    def test_autolayers_name_sequence_assets_by_guid(self):
+        # v54 autolayers: 32 bytes (asset GUID, int16 pose, int16 0, flags, ramp); the GUID
+        # is the asset path's RTech hash (the compiler's and mdl54's agree)
+        from import_anim54 import import_animations
+        from validate54 import compare_animation_metadata
+        from mdl54 import asset_guid
+        label='animseq/test/Model/layer_Base.rseq'
+        qc=self.qc.replace('$sequence idle "mesh.smd"',
+            '$poseparameter "charge" 0 1\n$sequence idle "mesh.smd"\n'
+            f'$sequence "{label}" {{ "mesh.smd" }}\n'
+            f'$sequence top {{ "mesh.smd" autolayer "{label}" pose "charge" flags 0xc000 range 0 .25 .75 1\n'
+            '  autolayer 0x0123456789abcdef }\n')
+        out,_=self.run_compiler(qc,target='s3',name='layers',extra=['--external-assets'])
+        rig=Model(out.with_suffix('.rrig'),'s3')
+        top=SequenceAsset(out.with_suffix('.seq3.rseq'),rig)
+        self.assertEqual(top.autolayers(top.sequences[0]),[
+            dict(guid=asset_guid(label),pose=0,unused=0,flags=0xc000,ramp=(0.0,0.25,0.75,1.0)),
+            dict(guid=0x0123456789abcdef,pose=0,unused=0,flags=0,ramp=(0.0,0.0,0.0,0.0))])
+        self.assertEqual(asset_guid('animseq\\Test/model/LAYER_base.rseq'),asset_guid(label))  # case and slashes fold
+        sequences=[out.with_suffix(f'.seq{i}.rseq') for i in range(4)]
+        qci=import_animations(out.with_suffix('.rrig'),sequences,self.work/'layers-import','s3')
+        text=qci.read_text()
+        self.assertIn(f'autolayer "{label}" pose "charge" flags 0xc000 range 0 0.25 0.75 1',text)
+        self.assertIn('autolayer 0x0123456789abcdef',text)
+        host=qc[:qc.index('$poseparameter')]+'$include "'+str(qci).replace(chr(92),'/')+'"\n'
+        rebuilt,_=self.run_compiler(host,target='s3',name='layers-rebuilt',extra=['--external-assets','-path',str(qci.parent)])
+        new_rig=Model(rebuilt.with_suffix('.rrig'),'s3')
+        for i in range(4):
+            self.assertEqual(compare_animation_metadata(SequenceAsset(rebuilt.with_suffix(f'.seq{i}.rseq'),new_rig),
+                                                        SequenceAsset(sequences[i],rig)),[])
+        # local-index layers are refused for Apex
+        self.run_compiler(qc.replace('autolayer 0x0123456789abcdef','addlayer idle'),target='s3',name='layers-local',ok=False)
+
     def test_package_embedded_ik_requires_linkage_and_matching_rig(self):
         from pack54 import package
         bones=[dict(name='root',parent=-1),dict(name='knee',parent=0),dict(name='foot',parent=1)]

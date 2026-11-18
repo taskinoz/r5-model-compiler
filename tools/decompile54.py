@@ -368,14 +368,19 @@ def release_rules(m, desc):
     return chains
 
 
-def export_sequences(m, out, *, namespace=""):
-    """Export the supported sequence subset using its owning skeleton."""
+def export_sequences(m, out, *, namespace="", asset_paths=()):
+    """Export the supported sequence subset using its owning skeleton. Autolayers name
+    their sequence asset by path when it is in asset_paths (or is this asset), else by
+    GUID."""
+    from mdl54 import asset_guid
+    known={asset_guid(path):path for path in asset_paths}
+    if isinstance(m,SequenceAsset): known.setdefault(asset_guid(m.name),m.name)
     lines=[]
     prefix=namespace+"_" if namespace else ""
     for si,seq in enumerate(m.sequences):
         p=seq['offset']
         # These fields have no supported source representation in this exporter.
-        if any(m.get('i',p+off) for off in (0x40,0x64,0x88,0x8C,0x94,0xA4,0xB0,0xCC)) or any(m.get('f',p+off) for off in (0x7C,0x80,0x84)):
+        if any(m.get('i',p+off) for off in (0x40,0x64,0x88,0x8C,0xA4,0xB0,0xCC)) or any(m.get('f',p+off) for off in (0x7C,0x80,0x84)):
             raise ValueError('sequence nodes/layers/IK/keyvalues need a richer native export')
         meta=m.sequence_metadata(seq)
         # a 1x1 descriptor without a clip holds the reference pose (retail ref, ragdoll)
@@ -451,6 +456,17 @@ def export_sequences(m, out, *, namespace=""):
             elif entry: lines+=['  entrynode '+qc_quote(names[entry-1])]
             else: lines+=['  exitnode '+qc_quote(names[exit_-1])]
         elif nodeflags: raise ValueError('node flags without transition nodes')
+        for layer in m.autolayers(seq):
+            if layer['unused']: raise ValueError('autolayer with a nonzero second index')
+            target=qc_quote(known[layer['guid']]) if layer['guid'] in known else '0x%016x'%layer['guid']
+            text='  autolayer '+target
+            poses=m.pose_parameters()
+            if layer['pose'] or layer['flags']&0x4000:
+                if not 0<=layer['pose']<len(poses): raise ValueError('autolayer pose parameter out of range')
+                text+=' pose '+qc_quote(poses[layer['pose']]['name'])
+            if layer['flags']: text+=' flags 0x%x'%layer['flags']
+            if any(layer['ramp']): text+=' range '+' '.join(format(x,'.9g') for x in layer['ramp'])
+            lines+=[text]
         if meta['activity']: lines+=['  activity '+qc_quote(meta['activity'])+' '+str(meta['activity_weight'])]
         poses=m.pose_parameters()
         for axis,index in enumerate(meta['params']):
