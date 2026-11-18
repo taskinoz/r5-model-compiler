@@ -945,6 +945,13 @@ CompiledModel Build(QcModelDef& qc) {
         out.illumPosition = (mn + mx) * 0.5f;
         out.illumPosition.z = (mn.z + mx.z) * 0.75f;
     }
+    // header 0x190: the __illumPosition attachment's index + 1, else 0 (580 of 1,789
+    // S0-S3 models have it, always last). Ten R-301 models store a value 8 past it,
+    // a stale retail index the decompiler keeps with $illumpositionattachment.
+    out.illumPositionAttachment = 0;
+    for (size_t i = 0; i < out.attachments.size(); i++)
+        if (IEquals(out.attachments[i].name, "__illumPosition")) out.illumPositionAttachment = static_cast<int>(i) + 1;
+    if (qc.illumAttachment >= 0) out.illumPositionAttachment = qc.illumAttachment;
     // collision may grow the bounds
     BuildCollisionModel(ctx);
     if (!qc.collision.present && qc.headerMass >= 0) out.physics.mass = qc.headerMass;

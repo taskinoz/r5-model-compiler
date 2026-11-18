@@ -166,9 +166,14 @@ cannot be combined with motion extraction or movement records. Raw stream
 preservation does not imply a polynomial encoder.
 
 `sectionframes N` on an `$animation` sets its frames per native section (0 for one
-section; the default is 30). The decompiler writes each clip's stored value, so a
-retail clip keeps its layout (retail leaves clips of up to 96 frames whole and splits
-longer ones into near-equal sections).
+section). The default is retail's rule: (frames + 32) // 64 equal sections, and a clip
+of up to 96 frames stays whole; frame movement follows the clip's sections when they
+are given, else the same rule without the 96-frame exception. The decompiler writes
+each clip's stored value.
+
+The header's illumination attachment (0x190) is the `__illumPosition` attachment's
+index + 1, else 0. `$illumpositionattachment N` stores another value verbatim; the
+decompiler writes it only for retail's stale values (ten R-301 models).
 
 `$ikchain leg foot links hip knee foot knee 1 0 0 angle_unknown 0.8660254` names
 three explicit links, permitting intervening twist bones to be skipped. Omit

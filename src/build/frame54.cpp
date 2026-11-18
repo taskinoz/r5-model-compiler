@@ -23,9 +23,16 @@ Vec4 NativeFrameScales54(const std::vector<Vec4>& frames) {
     return scales;
 }
 
-std::vector<uint8_t> EncodeFrameMovement54(const std::vector<Vec4>& frames,const Vec4& scales) {
+int RetailSectionFrames54(int frames, bool clip) {
+    int sections=(frames+32)/64;
+    if (sections<=1 || (clip && frames<=96)) return 0;
+    return (frames+sections-1)/sections;
+}
+
+std::vector<uint8_t> EncodeFrameMovement54(const std::vector<Vec4>& frames,const Vec4& scales,int requested) {
     if (frames.empty() || frames.size()>1000000) Fatal("invalid native frame-movement frame count");
-    constexpr size_t sectionFrames=30;
+    const size_t sectionFrames=requested>0 ? static_cast<size_t>(requested) : frames.size();
+    if (sectionFrames+1>255) Fatal("native frame-movement section exceeds 254 frames; set sectionframes");
     const size_t sections=(frames.size()+sectionFrames-1)/sectionFrames;
     Buffer b;
     for (int c=0;c<4;++c) {

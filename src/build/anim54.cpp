@@ -1,6 +1,7 @@
 // Independent early Apex animation encoder. Raw (mode 0) native tracks retain
 // signed 16-bit samples; the format is distinct from Source valid/total RLE.
 #include "build/anim54.h"
+#include "build/frame54.h"
 #include "core/buffer.h"
 #include "core/log.h"
 #include <algorithm>
@@ -79,6 +80,7 @@ std::vector<uint8_t> Section(const BuildContext& ctx, const WAnim& a, int first,
                 size_t words = (b.Tell() - data) / 2;
                 if (words > 255) Fatal("v54 axis offset overflow");
                 if (axis) b.PatchAt<uint8_t>(ptr + 1 + axis, uint8_t(words));
+                if (count + 1 > 255) Fatal("v54 animation section exceeds 254 frames; set sectionframes");
                 b.U8(0); b.U8(uint8_t(count + 1));
                 for (int f = first; f <= last + 1; ++f) {
                     const auto& xf = a.sanim[std::min(f, last)][j];
@@ -110,8 +112,8 @@ std::vector<uint8_t> Section(const BuildContext& ctx, const WAnim& a, int first,
 }
 }
 void EncodeNative54(const BuildContext& ctx, const WAnim& a, CAnimation& out) {
-    // frames per section: the animation's `sectionframes` (0 = one section), else 30
-    const int sectionFrames = a.qc && a.qc->sectionFrames >= 0 ? a.qc->sectionFrames : 30;
+    // frames per section: the animation's `sectionframes` (0 = one section), else retail's rule
+    const int sectionFrames = a.qc && a.qc->sectionFrames >= 0 ? a.qc->sectionFrames : RetailSectionFrames54(a.numFrames, true);
     if (sectionFrames == 0 || a.numFrames <= sectionFrames) {
         out.nativeSections.push_back(Section(ctx, a, 0, a.numFrames-1));
     } else {

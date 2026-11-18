@@ -362,9 +362,11 @@ byte. PHY polygon mass properties continue to use their measured first-vertex fa
   stores y at word 0 and z at word 25 with x absent. Reading them as consecutive
   streams returned y's values for z; R5R posed the installed drone 6.8 inches from
   that reading, and exactly as the per-slot reading gives.
-- Sections: a clip's frames per section (descriptor +0x30; 0 = one section) is chosen
-  by retail as: whole up to 96 frames, otherwise near-equal sections of 49 to 80 frames
-  (no fixed-size rule fits). Its frame-movement stream stores its own section size,
+- Sections: a clip's frames per section (descriptor +0x30; 0 = one section) is
+  ceil(frames / n) with n = (frames + 32) // 64 sections, and the clip stays whole when
+  n is 1 or it has at most 96 frames. This fits 284 of the 285 distinct (frames, size)
+  pairs in the 4,249 S3 assets; the exception is 96 frames, kept whole, whose frame
+  movement takes the rule's two 48-frame sections. Its frame-movement stream stores its own section size,
   equal to the clip's in 4,162 of 4,172 retail S3 clips (the rest: 96-frame whole clips
   with 48-frame movement sections). Decompiled clips keep their stored value
   (`sectionframes`).
@@ -375,6 +377,10 @@ byte. PHY polygon mass properties continue to use their measured first-vertex fa
   (`animseq/props/crypto_drone/crypto_drone/drone_EMP.rseq`), and R5R resolves a short
   label (`Anim_PlayOnly( "drone_EMP" )`) by the asset's file name: a rebuilt drone with
   assets named `seqN.rseq` found none of the short names.
+
+- Illumination attachment (0x190): the `__illumPosition` attachment's index + 1 (always
+  the last attachment), else 0, in 1,779 of 1,789 S0-S3 models; ten R-301 models store
+  a value 8 past it, apparently stale.
 
 ## RUI panels (studiohdr 0x12C count, 0x130 offset)
 

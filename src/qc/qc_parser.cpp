@@ -1910,6 +1910,10 @@ void Parser::Register() {
         m_.illumSet = true;
         if (Avail()) m_.illumBone = S("bone");
     };
+    h["$illumpositionattachment"] = [&] {
+        m_.illumAttachment = I("attachment index + 1");
+        if (m_.illumAttachment < 0) Fatal("%s: $illumpositionattachment must not be negative", tk_.Where().c_str());
+    };
     h["$eyeposition"] = [&] {
         float x = F("x"), y = F("y"), z = F("z");
         m_.eyePosition = Vec3(-y, x, z);

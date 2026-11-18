@@ -76,7 +76,7 @@ def compare_extras(original,rebuilt,target):
     return dict(issues=issues)
 
 
-def run(paths,target,compiler,out,render_only=False,jobs=1,with_physics=False,discard_work=False):
+def run(paths,target,compiler,out,render_only=False,jobs=1,with_physics=False,discard_work=False,discard_sources=False):
     out=Path(out).resolve(); out.mkdir(parents=True,exist_ok=True); compiler=Path(compiler).resolve()
     scope='render plus PHY' if with_physics else 'render-only' if render_only else 'implemented native subset'
     manifest=dict(target=target,scope=scope,
@@ -112,9 +112,10 @@ def run(paths,target,compiler,out,render_only=False,jobs=1,with_physics=False,di
                     result['bvh']=compare_bvh(path,rebuilt)
                     if result['bvh']['issues']: result['status']='differ'
         except Exception as e: result.update(status='error',error=str(e))
-        if discard_work:
+        if discard_work or discard_sources:
             import shutil
-            shutil.rmtree(work,ignore_errors=True)  # the result is recorded; sources and rebuilds are regenerable
+            # the result is recorded; sources (and, unless kept, rebuilds) are regenerable
+            shutil.rmtree(work/'sources' if discard_sources and not discard_work else work,ignore_errors=True)
         return result
     with ThreadPoolExecutor(max_workers=jobs) as pool:
         for result in pool.map(one,enumerate(paths)):
@@ -131,6 +132,7 @@ if __name__=='__main__':
     p.add_argument('--render-only',action='store_true')
     p.add_argument('--with-physics',action='store_true',help='with --render-only: also rebuild and compare PHY collision')
     p.add_argument('--discard-work',action='store_true',help='delete each model work folder (sources, rebuild) after recording its result')
+    p.add_argument('--discard-sources',action='store_true',help='delete only the exported sources, keeping each rebuild for field-level comparison')
     a=p.parse_args()
     if a.with_physics and not a.render_only: p.error('--with-physics extends --render-only')
     if a.jobs<1: p.error('--jobs must be positive')
@@ -138,5 +140,5 @@ if __name__=='__main__':
     for value in a.models:
         path=Path(value); paths.extend(sorted(path.rglob('*.rmdl')) if path.is_dir() else [path])
     if not paths: p.error('no model files found')
-    report=run(paths,a.target,a.compiler,a.out,a.render_only,a.jobs,a.with_physics,a.discard_work)
+    report=run(paths,a.target,a.compiler,a.out,a.render_only,a.jobs,a.with_physics,a.discard_work,a.discard_sources)
     raise SystemExit(any(r['status']!='pass' for r in report['results']))

@@ -464,6 +464,7 @@ struct QcModelDef {
     bool illumSet = false;
     Vec3 illumPosition;
     std::string illumBone;
+    int illumAttachment = -1;  // "$illumpositionattachment N" (r5): header 0x190 verbatim
     bool bboxSet = false, cboxSet = false;
     Vec3 bbox[2], cbox[2];
     float fadeDistance = -1.f;

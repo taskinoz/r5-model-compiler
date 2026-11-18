@@ -621,7 +621,14 @@ class Compiler54(unittest.TestCase):
         def sections(option,name):
             out,_=self.run_compiler(base%option,target='s3',name=name,extra=['--external-assets'])
             m=Model(out,'s3'); return out,m,m.get('i',m.sequences[-1]['animations'][0]+0x30)
-        self.assertEqual(sections('','sf_default')[2],30)
+        # retail's rule: (frames + 32) // 64 equal sections, whole up to 96 frames
+        self.assertEqual(sections('','sf_default')[2],50)
+        for count,expected,movement in ((96,0,48),(97,49,49),(160,54,54)):
+            clip=[[((f*.1,0,0),(0,0,0),(1,1,1)),((0,0,2),(0,f*.001,0),(1,1,1))] for f in range(count)]
+            write_smd(self.work/f'clip{count}.smd',self.bones,clip)
+            out,_=self.run_compiler(self.qc+f'$animation c{count} "clip{count}.smd" rm\n$sequence s{count} c{count}\n',target='s3',name=f'sf{count}')
+            m=Model(out,'s3'); desc=m.sequences[-1]['animations'][0]
+            self.assertEqual((m.get('i',desc+0x30),m.frame_movement(desc)['section_frames']),(expected,movement))
         self.assertEqual(sections('sectionframes 0','sf_none')[2],0)
         self.assertEqual(sections('sectionframes 50','sf_fifty')[2],50)
         out,m,_=sections('sectionframes 50 rm','sf_moving')
@@ -638,6 +645,20 @@ class Compiler54(unittest.TestCase):
         rseq=out.with_suffix('.seq1.rseq').read_bytes()  # idle: no frame movement
         self.assertEqual(struct.unpack_from('<i',rseq,12)[0]&0x40000,0)
         self.run_compiler(base%'sectionframes -1',target='s3',name='sf_bad',ok=False)
+
+    def test_illumination_attachment_index(self):
+        from decompile54 import decompile
+        qc=self.qc+'$attachment "tip" "arm" 0 0 1\n$attachment "__illumPosition" "root" 0 0 2\n'
+        out,_=self.run_compiler(qc,target='s3',name='illum')
+        self.assertEqual(Model(out,'s3').get('i',0x190),2)  # its index + 1
+        none,_=self.run_compiler(target='s3',name='illum_none')
+        self.assertEqual(Model(none,'s3').get('i',0x190),0)
+        # retail's stale values (ten R-301 models) are kept verbatim through export
+        stale,_=self.run_compiler(qc+'$illumpositionattachment 10\n',target='s3',name='illum_stale')
+        self.assertEqual(Model(stale,'s3').get('i',0x190),10)
+        text=decompile(stale,self.work/'illum_src','s3').read_text()
+        self.assertIn('$illumpositionattachment 10',text)
+        self.assertNotIn('$illumpositionattachment',decompile(out,self.work/'illum_src2','s3').read_text())
 
     def test_hitboxes_and_keyvalues_round_trip(self):
         from decompile54 import decompile

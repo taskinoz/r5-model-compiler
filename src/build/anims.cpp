@@ -788,7 +788,8 @@ void BuildContext::BuildAnimations() {
             // of the root bones so they absorb the quantization error. Extracted linear
             // motion was already removed from the roots, so only the difference is applied.
             Vec4 fs = NativeFrameScales54(a.frameMove);
-            EncodeFrameMovement54(a.frameMove, fs); // Validate before removing motion.
+            // Validate before removing motion, laid out as it will be stored.
+            EncodeFrameMovement54(a.frameMove, fs, a.qc->sectionFrames >= 0 ? a.qc->sectionFrames : RetailSectionFrames54(a.numFrames, false));
             a.fmScales = fs;
             a.fixedFmScales = true;
             for (int j = 0; j < a.numFrames; j++) {
@@ -1485,7 +1486,11 @@ void EncodeAnimations(BuildContext& ctx) {
         // EncodeNative54 emits explicit channels for every compiled bone.
         if (!bones.empty()) ca.flags |= 0x20000;
         if (!a.qc->fmStream.empty()) ca.frameMovement = a.qc->fmStream;
-        else if (!a.frameMove.empty()) ca.frameMovement = EncodeFrameMovement54(a.frameMove, a.fixedFmScales ? a.fmScales : NativeFrameScales54(a.frameMove));
+        else if (!a.frameMove.empty()) {
+            // laid out by the clip's sections when they are given, else by retail's rule
+            int fmSections = a.qc->sectionFrames >= 0 ? a.qc->sectionFrames : RetailSectionFrames54(a.numFrames, false);
+            ca.frameMovement = EncodeFrameMovement54(a.frameMove, a.fixedFmScales ? a.fmScales : NativeFrameScales54(a.frameMove), fmSections);
+        }
         else ca.flags &= ~STUDIO_FRAMEMOVEMENT;
         ca.numFrames = a.numFrames;
         ca.movements = a.movements;

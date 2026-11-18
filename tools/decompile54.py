@@ -453,6 +453,10 @@ def decompile(path, outdir, target, *, render_only=False, with_physics=False):
     lines+=export_keyvalues(m)+export_hitboxes(m)+export_ui_panels(m)+export_jiggle_bones(m)
     for a in m.attachments:
         lines+=['$attachment '+qc_quote(a['name'])+' '+qc_quote(m.bones[a['bone']]['name'])+' 0 0 0 matrix '+' '.join(format(x,'.9g') for x in a['matrix'])]
+    # header 0x190 is derived from the __illumPosition attachment; a few retail models
+    # store another (stale) value, kept verbatim
+    derived=next((i+1 for i,a in enumerate(m.attachments) if a['name'].lower()=='__illumposition'),0)
+    if m.get('i',0x190)!=derived: lines+=['$illumpositionattachment '+str(m.get('i',0x190))]
     if not render_only:
         lines+=export_sequences(m,out)
     else:
