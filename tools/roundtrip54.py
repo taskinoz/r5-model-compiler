@@ -59,6 +59,8 @@ def compare_extras(original,rebuilt,target):
                    for i,size,at in fields for k in range(nb))
     if linear(a)!=linear(b): issues.append('linear bone table differs: %r vs %r'%(linear(a),linear(b)))
     if a.get('i',0x9C)!=b.get('i',0x9C): issues.append('header flags differ: 0x%x vs 0x%x'%(a.get('i',0x9C),b.get('i',0x9C)))
+    # -1 is the external-rig sentinel ($externalassets); neither side has include models
+    if a.get('i',0x158)!=b.get('i',0x158): issues.append('include-model count differs: %d vs %d'%(a.get('i',0x158),b.get('i',0x158)))
     def surface(m):
         # the header's surface property and contents, and each bone's
         names=[m.string(m.get('i',0x13C)),m.get('i',0x154)]

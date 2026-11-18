@@ -416,6 +416,9 @@ struct QcModelDef {
     // "$complexweights" (r5): the complex-weight vertex layout (studio flag 0x4000) even
     // when no vertex needs more than three influences, as 78 S3 models store it
     bool forceComplexWeights = false;
+    // "$externalassets" (r5): as --external-assets for this model: the external-rig
+    // sentinel (include-model count -1) plus .rrig/.rseq assets, as most retail models ship
+    bool externalAssets = false;
     // "$materialtype name type" (r5): a texture slot's native shader family (0xCC table)
     std::vector<std::pair<std::string, int>> materialTypes;
     bool hasSkinFamilies = false;

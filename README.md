@@ -311,6 +311,35 @@ its sequences; see VALIDATION.md for the scope and remaining limits.
 Movement samples and screenshots need
 review before claiming geometry or root-motion equivalence.
 
+## Retail fields
+
+The decompiler writes these r5 commands so a retail model rebuilds with the same
+stored fields; authored models can use them too. Measured over all 581 S3 models.
+
+- `$skinfamilies { { "a" "b" ... } "name" { ... } ... }`: the skin table as stored.
+  The first family lists every texture slot once, in order (so it also sets the
+  texture order); each later family is named and gives the material in every slot.
+- `$headerflags 0xN`: studio flag bits ORed in after derivation. Retail's material
+  bits (0x2, 0x4, 0x8, 0x80, 0x800) come from its binary materials, so the decompiler
+  keeps them here. `$complexweights` stores the complex-weight vertex layout (flag
+  0x4000) even when no vertex needs more than three influences.
+- `$materialtype "material" sknp` and `$materialguid "material" 0xGUID`: a slot's
+  shader family and existing material asset (as `--material-type` and
+  `--material-guid`, which override them).
+- `$surfacepropid "name" N`: the game's id for a surface property, stored as the
+  header's and every bone's lookup (0 for unknown names). `--surface-properties
+  <surfaceproperties.rson>` reads the ids from your installed game instead.
+- `$boneflags "bone" 0xN`: a bone's stored flags verbatim. Retail sets usage bits and
+  0x20/0x100000 by rules the stored data does not give; otherwise the compiler derives
+  usage flags, and a static prop's bone gets every usage bit (0xFFFF00) as retail's do.
+- The lighting origin (`$illumposition`), `$fadedistance`, the header `$mass` of a model
+  without physics and `$surfaceprop` are written when retail's differ from the defaults.
+
+Derived without commands: each bone's BVH entry (+0xB4: 0 without a BVH or with only a
+trace mesh, -1 with a rigid hull, else the solid's entry in bone order), empty tables at
+offset 0, flex descriptors at the body parts, the follower table at the end of the file,
+and VG component offsets (VTX -1, VVD after VTX, VVC after both).
+
 ## Import retail animations
 
 `import_anim54.py` turns a standalone rig and its sequence assets (exported from your

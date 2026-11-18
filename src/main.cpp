@@ -235,7 +235,9 @@ int main(int argc, char** argv) {
         if(!model.nodeNames.empty()) Fatal("Apex transition nodes are not implemented yet");
         for (const auto& seq : model.sequences) if (!seq.layers.empty())
             Fatal("Apex asset-GUID animation layers are not implemented yet");
-        if(externalAssets && (model.sequences.empty() || model.sequences.front().label!="ref")) {
+        // the command line or the QC ($externalassets) asks for the rig/sequence assets
+        const bool assets = externalAssets || model.externalAssetRig;
+        if(assets && (model.sequences.empty() || model.sequences.front().label!="ref")) {
             CSequence reference;
             reference.label="ref";
             reference.flags=0x80000;  // STUDIO_SINGLEFRAME, as retail's ref descriptors
@@ -251,7 +253,7 @@ int main(int argc, char** argv) {
             model.animations.push_back(pose);
             model.sequences.insert(model.sequences.begin(),reference);
         }
-        model.externalAssetRig = externalAssets;
+        model.externalAssetRig = assets;
         // Keep embedded playback data while also linking the RPak rig assets.
         std::vector<uint8_t> mdl = WriteMDL(model,target=="s2" || target=="s3");
         auto read32=[&](size_t p) { int32_t v; std::memcpy(&v,mdl.data()+p,4); return v; };
@@ -301,7 +303,7 @@ int main(int argc, char** argv) {
             stream.write(reinterpret_cast<const char*>(data.data()),std::streamsize(data.size()));
             if(!stream) Fatal("failed writing %s",path.u8string().c_str());
         };
-        if (externalAssets) {
+        if (assets) {
             write(".rrig", WriteRig54(model));
             std::string assetSet = "R5AS1\n" + target + "\n" + std::to_string(model.sequences.size()) + "\n";
             write(".assetset", std::vector<uint8_t>(assetSet.begin(), assetSet.end()));

@@ -1896,6 +1896,7 @@ void Parser::Register() {
         m_.extraHeaderFlags |= static_cast<int>(v);
     };
     h["$complexweights"] = [&] { m_.forceComplexWeights = true; };
+    h["$externalassets"] = [&] { m_.externalAssets = true; };
     h["$surfacepropid"] = [&] {
         std::string name = S("surface property");
         int id = I("id");

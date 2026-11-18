@@ -1014,6 +1014,7 @@ CompiledModel Build(QcModelDef& qc) {
     }
     if (qc.staticProp) out.flags |= STUDIOHDR_FLAGS_STATIC_PROP;
     out.forceComplexWeights = qc.forceComplexWeights;
+    out.externalAssetRig = qc.externalAssets;
     out.surfacePropIds = qc.surfacePropIds;
     out.extraHeaderFlags = qc.extraHeaderFlags;
     // $materialtype: the slot's shader family, matched against the final material names

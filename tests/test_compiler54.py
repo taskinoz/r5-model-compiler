@@ -697,14 +697,14 @@ class Compiler54(unittest.TestCase):
         table=self.work/'surfaceproperties.rson'
         table.write_text('// comment\ndefault:\n{\n\tid: 0\n}\nmetal:\n{\n\tid: 7\n\tdensity: 2\n}\n')
         qc=('$modelname "test/compat.rmdl"\n$origin 0 0 0 -90\n'
-            '$skinfamilies\n{\n  { "test/material" "test/other" "test/alt" }\n  "recolor" { "test/alt" "test/other" "test/alt" }\n}\n'
+            '$skinfamilies\n{\n  { "test/material" "test/other" "test/alt" }\n  "re\\color" { "test/alt" "test/other" "test/alt" }\n}\n'
             '$body body "mesh.smd"\n$body second "second.smd"\n$sequence idle "mesh.smd"\n'
             '$surfaceprop "metal"\n$headerflags 0x8a\n$complexweights\n$materialtype "test/other" sknc\n'
             '$materialguid "test/material" 0x1122334455667788\n$boneflags "arm" 0x100520\n')
         out,_=self.run_compiler(qc,target='s3',name='compat',extra=['--surface-properties',str(table)])
         m=Model(out,'s3')
         self.assertEqual([x['name'] for x in m.materials],['test/material','test/other','test/alt'])
-        self.assertEqual(m.skins(),dict(families=[[0,1,2],[2,1,2]],names=['recolor']))
+        self.assertEqual(m.skins(),dict(families=[[0,1,2],[2,1,2]],names=['re\\color']))
         self.assertEqual(m.get('i',0x9C)&0x408a,0x408a)                     # material bits + complex layout
         self.assertEqual(m.materials[0]['guid'],0x1122334455667788)
         self.assertEqual(m.data[m.get('i',0xCC)+1],5)                       # sknc
@@ -719,18 +719,31 @@ class Compiler54(unittest.TestCase):
         text=decompile(out,self.work/'compat_src','s3').read_text()
         for line in ('$surfaceprop "metal"','$surfacepropid "metal" 7','$headerflags 0x8a','$complexweights',
                      '$materialtype "test/other" sknc','$materialguid "test/material" 0x1122334455667788',
-                     '$boneflags "arm" 0x100520','"recolor" {'):
+                     '$boneflags "arm" 0x100520','"re\\color" {'):
             self.assertIn(line,text)
         q=self.work/'compat_src'/'rebuilt.qc'; q.write_text(text); rebuilt=q.with_suffix('.rmdl')
         run=subprocess.run([str(self.compiler),'--target','s3','-quiet','-o',str(rebuilt),str(q)],capture_output=True,text=True,timeout=40)
         self.assertEqual(run.returncode,0,run.stdout+run.stderr)
         self.assertEqual(compare_extras(out,rebuilt,'s3')['issues'],[])
+        self.assertEqual(Model(rebuilt,'s3').get('i',0x158),0)
+        self.assertNotIn('$externalassets',text)
+        # $externalassets: the external-rig sentinel and the rig/sequence assets, from the QC
+        ext,_=self.run_compiler(qc+'$externalassets\n',target='s3',name='compat_ext')
+        self.assertEqual(Model(ext,'s3').get('i',0x158),-1)
+        self.assertTrue(ext.with_suffix('.rrig').exists() and ext.with_suffix('.seq0.rseq').exists())
+        text=decompile(ext,self.work/'compat_ext_src','s3').read_text()
+        self.assertIn('$externalassets',text)
+        q=self.work/'compat_ext_src'/'rebuilt.qc'; q.write_text(text); rebuilt=q.with_suffix('.rmdl')
+        run=subprocess.run([str(self.compiler),'--target','s3','-quiet','-o',str(rebuilt),str(q)],capture_output=True,text=True,timeout=40)
+        self.assertEqual(run.returncode,0,run.stdout+run.stderr)
+        self.assertEqual(Model(rebuilt,'s3').get('i',0x158),-1)
+        self.assertEqual(compare_extras(ext,rebuilt,'s3')['issues'],[])
         # a static prop's bone has every usage bit through 0x800000
         prop,_=self.run_compiler(self.qc+'$staticprop\n',target='s3',name='compat_prop')
         self.assertEqual(Model(prop,'s3').bones[0]['flags']&0xFFFF00,0xFFFF00)
         # the first family lists every texture slot: a mesh material missing from it fails
         self.run_compiler(qc.replace('{ "test/material" "test/other" "test/alt" }','{ "test/material" "test/alt" "test/alt" }')
-                          .replace('"recolor" { "test/alt" "test/other" "test/alt" }','"recolor" { "test/alt" "test/alt" "test/alt" }'),
+                          .replace('"re\\color" { "test/alt" "test/other" "test/alt" }','"re\\color" { "test/alt" "test/alt" "test/alt" }'),
                           target='s3',name='compat_bad',ok=False)
 
     def test_hitboxes_and_keyvalues_round_trip(self):

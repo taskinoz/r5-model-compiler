@@ -1141,7 +1141,7 @@ void BuildCollisionModel(BuildContext& ctx) {
     if (!qc.joints) {
         // single rigid body in entity space, posed by animation 0 frame 0 (studiomdl
         // ConvertToWorldSpace); a reference clip (asset-only) stands for the bind pose:
-        // retail's collision ignores it (bangalore_rockets_projectile's ref is turned 90°)
+        // retail's collision ignores it (bangalore_rockets_projectile's ref is turned 90Â°)
         std::vector<Mat3x4> b2w;
         if (!ctx.anims.empty() && !ctx.anims[0].IsReferenceClip())
             ctx.CalcBoneTransforms(ctx.anims[0], 0, b2w);
@@ -1543,20 +1543,19 @@ void BuildCollisionModel(BuildContext& ctx) {
     ctx.out.physics.phy = phy.Data();
     ctx.out.physics.text = text;
     ctx.out.physics.apexSolids = std::move(apex);
+    auto& stored = ctx.out.physics.apexSolids;
+    auto storedHull = [&](int solid, int hull, const char* command) -> CApexHull& {
+        if (solid < 0 || hull < 0 || solid >= static_cast<int>(stored.size()) ||
+            hull >= static_cast<int>(stored[solid].hulls.size()))
+            Fatal("%s %d %d: no such hull", command, solid, hull);
+        return stored[solid].hulls[hull];
+    };
     for (auto& p : qc.hullPoints) {
-        auto& solids = ctx.out.physics.apexSolids;
-        if (p.solid >= static_cast<int>(solids.size()) || p.hull >= static_cast<int>(solids[p.solid].hulls.size()))
-            Fatal("$hullpoint %d %d: no such hull", p.solid, p.hull);
-        auto& verts = solids[p.solid].hulls[p.hull].verts;
+        auto& verts = storedHull(p.solid, p.hull, "$hullpoint").verts;
         verts.push_back(p.pos);
         if (verts.size() > 255) Fatal("$hullpoint %d %d: more than 255 hull vertices", p.solid, p.hull);
     }
-    for (auto& r : qc.hullRadii) {
-        auto& solids = ctx.out.physics.apexSolids;
-        if (r.solid >= static_cast<int>(solids.size()) || r.hull >= static_cast<int>(solids[r.solid].hulls.size()))
-            Fatal("$hullradius %d %d: no such hull", r.solid, r.hull);
-        solids[r.solid].hulls[r.hull].innerRadius = r.radius;
-    }
+    for (auto& r : qc.hullRadii) storedHull(r.solid, r.hull, "$hullradius").innerRadius = r.radius;
     ctx.out.physics.jointed = qc.joints;
     ctx.out.physics.mass = static_cast<float>(totalMass);
     ctx.out.physics.solidCount = static_cast<int>(solids.size());

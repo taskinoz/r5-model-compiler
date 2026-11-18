@@ -382,6 +382,34 @@ byte. PHY polygon mass properties continue to use their measured first-vertex fa
   the last attachment), else 0, in 1,779 of 1,789 S0-S3 models; ten R-301 models store
   a value 8 past it, apparently stale.
 
+## Fields measured against all 581 S3 models
+
+- Skins (0xE0 slots, 0xE4 families, 0xE8 table): slots always equal the texture count
+  and family 0 is the identity; after the int16 table (4-aligned) come int32 string
+  offsets naming families 1.. (empty strings allowed); keyvalues follow.
+- Studio flags (0x9C): bits retail sets that the model data does not determine are
+  0x2, 0x4, 0x8, 0x80 and 0x800 (material properties; 0x4 and 0x8 occur together in
+  148 models). 0x4000 selects the complex-weight layout; 78 S3 models set it without
+  any vertex needing more than three influences.
+- Material types (0xCC): one byte per texture slot in every S3 model.
+- Surface ids: header 0x180 and bone +0xAC hold the id of the surface property in the
+  game's surfaceproperties table (580 of 581; the other names a property the table
+  lacks and stores 0). Every bone shares the header's property; contents are 1.
+- Bone +0xB4: the bone's BVH entry (0 without a BVH or with only the trace mesh, -1
+  with a rigid physics hull, else the index of the bone's solid entry, numbered in bone
+  order, -1 for bones without one): all 581 models.
+- Bone flags: a static prop's bone has 0xFFFF00. Elsewhere retail sets 0x20 on about
+  a third of bones and 0x100000 on a tenth, and in 129 models (mostly viewmodels) marks
+  bones used by LOD 0 vertices that no vertex weights; no stored data predicts them.
+- Empty tables: local animations (0xBC) and nodes (0x100) store 0; flex descriptors
+  (0x10C) point at the body parts; the bone-follower offset (0x1EC) is the file length.
+- VG component offsets (0x1C0..0x1C8): VTX -1, VVD = the VTX size, VVC = VTX + VVD
+  sizes when there is vertex colour, else 0. The sizes themselves (0x1D0..) follow the
+  legacy VTX/VVD layout and differ from ours where vertex splitting differs (the
+  rebuilt geometry matches; RePak uses them only for allocation).
+- Pose-to-bone matrices are recomputed from the bone chain: they match retail within
+  2.5e-5 (float32 rounding).
+
 ## RUI panels (studiohdr 0x12C count, 0x130 offset)
 
 Measured on all 6,621 panels in 379 S0-S3 models. The table holds 8-byte entries

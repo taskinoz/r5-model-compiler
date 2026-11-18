@@ -312,8 +312,8 @@ struct CompiledModel {
     int flags = 0;
     int extraHeaderFlags = 0;  // $headerflags, ORed in last
     std::map<std::string, int> surfacePropIds;  // lower-case name -> game id (lookups)
-    int SurfacePropId(const std::string& name) const {
-        auto it = surfacePropIds.find(ToLower(name));
+    int SurfacePropId(const std::string& propName) const {
+        auto it = surfacePropIds.find(ToLower(propName));
         return it == surfacePropIds.end() ? 0 : it->second;
     }
     Vec3 eyePosition, illumPosition;

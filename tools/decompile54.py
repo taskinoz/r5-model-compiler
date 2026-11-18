@@ -441,7 +441,11 @@ def decompile(path, outdir, target, *, render_only=False, with_physics=False):
     if skins['families']:
         lines+=['$skinfamilies','{']
         for f,row in enumerate(skins['families']):
-            label='' if not f else qc_quote(skins['names'][f-1])+' '
+            # QC strings are literal (no escapes outside event options): retail names
+            # such as "purple\blue fade" are written as stored
+            name=skins['names'][f-1] if f else ''
+            if '"' in name: raise ValueError('skin family name contains a quote: %r'%name)
+            label='' if not f else '"%s" '%name
             lines+=['  '+label+'{ '+' '.join(qc_quote(material_aliases[t]) for t in row)+' }']
         lines+=['}']
     # the stored hull box (it also sets the BVH box at 0x1F0); collision can widen a
@@ -475,6 +479,10 @@ def decompile(path, outdir, target, *, render_only=False, with_physics=False):
     extra=flags&~DERIVED_FLAGS
     if extra: lines+=['$headerflags 0x%x'%extra]
     if flags&0x4000: lines+=['$complexweights']
+    # include-model count -1: the model ships with an external rig and sequence assets
+    # (386 of 581 S3 models; single-bone models and static props never, otherwise a
+    # build choice the stored data does not predict)
+    if m.get('i',0x158)==-1: lines+=['$externalassets']
     # each texture slot's material asset (so the model packages without bindings)
     lines+=['$materialguid '+material_quote(mat['name'])+' 0x%016x'%mat['guid'] for mat in m.materials if mat['guid']]
     # each texture slot's native shader family (studiohdr 0xCC, one byte per slot)
