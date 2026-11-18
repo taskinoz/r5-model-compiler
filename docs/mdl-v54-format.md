@@ -509,6 +509,48 @@ count, each on a separate line. It prevents stale numbered sequence assets from
 being accidentally linked after recompilation. These facts establish the packaged
 asset structure; live rig resolution and streaming still require a runtime test.
 
+## Sequence assets measured on all 4,249 S3 RSEQs
+
+- Asset GUIDs: an asset path's GUID is RTech's string hash. It reads the path four
+  bytes at a time, folding letters to upper case and `\` to `/`; each word is mixed as
+  `h = h*0x633D5F1 + ((word*0xFB8C4D96501) >> 24)`, then `h ^= h >> 61`. The final
+  partial word is masked below the terminator, and `0xAE502812AA7333 * length` is
+  subtracted. `mdl54.asset_guid` and the compiler's `AssetGuid` implement it. Checks:
+  208 of the 292 GUIDs autolayers reference resolve to extracted sequences (the rest
+  name assets not extracted), and the rigs' sequence lists (RSX `.rson`) resolve 4,158
+  of the 4,249 sequences.
+- IK rules (animation descriptor 0x24 count, 0x28 index): 0x88 bytes. These are v53's
+  mstudioikrule_t with 0x1C bytes inserted at +0x3C and the unused tail dropped:
+  index, type, chain, bone, slot, height, radius, floor, pos, quaternion, then
+  +0x3C..0x57 (unknown, zero), error index +0x58 (rule-relative), iStart +0x5C, +0x60,
+  start/peak/tail/end +0x64..0x70, contact, drop, top, attachment +0x80 and
+  endHeight +0x84. Every one of 3,776 sampled rules is a whole-range release
+  (studiomdl's automatic releases): index k, slot = chain, bone 0, range 0-0-1-1,
+  and an error index pointing past the rule array. Sequence 0x90 holds the largest
+  rule count of its clips.
+- Autolayers (0x94 count, 0x98 index): 32 bytes each: the target sequence asset's
+  GUID, an int16 pose parameter, an int16 that is always 0, int32 flags, then
+  start/peak/tail/end. Flags seen: 0, 0x8000 and 0xC000 (with a pose parameter).
+- Transition nodes: rigs keep node names (0xFC count, 0x104 name offsets) with index
+  0x100 = 0 (no transition table) in all 62 S3 rigs that have nodes. Sequences keep
+  entry/exit nodes (0x70/0x74, 1-based); three have only an exit node.
+- 0xC8 (offset) / 0xCC (count): 24-byte records of a float, a bone index (-1 for
+  none) and four floats, in 181 menu and banner sequences. Meaning unknown.
+- Unused blend axes store start 0, end 1 (in-model descriptors store 0, 0). Eleven
+  axes keep a stale range (e.g. -90..90). Pose keys (0xA0) are optional: 38 of 62 2x1
+  blends have none.
+- Sequence flag 0x20000 does not follow the clips' 0x20000 (set on 217 sequences).
+  Flag 0x40 is set on 206 clips and on their sequences.
+- Animation flag 0x20 (all-zeros): a delta clip that is zero throughout, with no
+  0x20000, no tracks and its data offset at the next 16-byte boundary (231 clips, the
+  centre blends of aim grids). Delta scale is additive: a delta clip stores 0 for an
+  unchanged bone.
+- Position tracks: the step is studiomdl's, with a 128-inch floor: the larger side of
+  the offsets (at least -128..128) divided by 32768 (negative) or 32767 (positive).
+  9,121 of 9,128 sampled tracks store 128/32767. Many tracks use the curve modes
+  (fractional decoded values), so a re-encoded clip differs by up to half a step from
+  retail; imports carry the native sections instead (`animstream`).
+
 ## R5R playback and VG rendering findings
 
 The sequence descriptor base at +0 must be zero for the native int32 relative

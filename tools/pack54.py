@@ -40,7 +40,7 @@ def installed_animrig_path(name):
     return name
 
 
-def package(models, output, name, repak, target, *, installed_animrigs=()):
+def package(models, output, name, repak, target, *, installed_animrigs=(), retail_paths=False):
     if target!='s3': raise ValueError('RPak packaging currently requires the surveyed s3 / R5R profile')
     if not re.fullmatch(r'[a-z][a-z0-9_]{0,63}',name): raise ValueError('invalid pak name')
     installed_animrigs=list(dict.fromkeys(installed_animrig_path(p) for p in installed_animrigs))
@@ -97,7 +97,15 @@ def package(models, output, name, repak, target, *, installed_animrigs=()):
                 raise ValueError('sequence label cannot name an asset: '+seq.name)
             if stem.casefold() in stems: raise ValueError('duplicate sequence asset name: '+stem)
             stems.add(stem.casefold())
-            dest=f'animseq/{base}/{stem}.rseq'; copy(source,dest); sequences.append(dest); labels.append(seq.name)
+            dest=f'animseq/{base}/{stem}.rseq'
+            # with retail_paths an imported retail label stays the asset path: autolayers
+            # name their sequence by the hash of that path (replacing the installed asset)
+            label=seq.name.replace('\\','/')
+            parts=label.split('/')
+            if (retail_paths and label.lower().startswith('animseq/') and label.lower().endswith('.rseq') and len(parts)>2
+                    and all(re.fullmatch(r'[A-Za-z0-9_.-]{1,96}',x) and x not in ('.','..') for x in parts)):
+                dest=label
+            copy(source,dest); sequences.append(dest); labels.append(seq.name)
             # Native ASEQ labels are canonical asset paths, not QC short labels.
             staged=sources/dest; data=bytearray(staged.read_bytes())
             struct.pack_into('<i',data,4,len(data))
@@ -142,9 +150,10 @@ def main():
     p.add_argument('--target',required=True,choices=['s3']); p.add_argument('--repak',required=True)
     p.add_argument('--installed-animrig',action='append',default=[],help='reference an existing animrig/*.rrig in the target game for every model; repeatable, not packaged')
     p.add_argument('--out',required=True); p.add_argument('--name',default='r5c_models')
+    p.add_argument('--retail-paths',action='store_true',help='package imported retail sequences at their own asset paths (needed for autolayers between them; replaces the installed assets)')
     a=p.parse_args()
     try:
-        report=package(a.models,a.out,a.name,a.repak,a.target,installed_animrigs=a.installed_animrig)
+        report=package(a.models,a.out,a.name,a.repak,a.target,installed_animrigs=a.installed_animrig,retail_paths=a.retail_paths)
         print(json.dumps(report,indent=2))
     except (OSError,ValueError,subprocess.SubprocessError) as e: p.exit(1,str(e)+'\n')
 

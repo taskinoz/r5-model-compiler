@@ -365,6 +365,43 @@ standalone sequence gets flag 0x40000 when its clips have frame movement, as all
 assets do. The import writes `import54.report.json` with input and output hashes; it
 leaves existing output untouched when an input is unsupported.
 
+Imports reproduce the retail assets field for field (`importcheck54.py`, below). These
+r5 commands carry what retail stores:
+
+- `animstream "clip.an54"` on an `$animation`: the clip's native sections as retail
+  stored them. Retail tracks use curve modes that re-encoding can't reproduce exactly
+  (up to 0.0016 inches off on long root motion), so the compiler uses these bytes while
+  the SMD, the skeleton and the frame count still match the import (hashes in the
+  stream). Edit the SMD and the clip is re-encoded, with a warning.
+- `ikrule "<chain>" release`: every retail IK rule is a whole-range release (studiomdl's
+  automatic ones). Other rule types are refused for Apex.
+- `autolayer "<asset path>" [pose "<param>"] [flags 0xN] [range s p t e]`: a layer that
+  names a sequence asset; the compiler stores the path's asset GUID (or give `0xGUID`).
+  The importer names layers by path when the target is among the imported sequences.
+  To keep those GUIDs valid in a package, pass `--retail-paths` to `pack54.py`, which
+  then keeps each imported label as its asset path (replacing the installed assets).
+- `$node "<name>"` declares the rig's transition nodes in order; `node`, `transition`,
+  `rtransition`, `entrynode` and `exitnode` set a sequence's. v54 stores no transition
+  table.
+- `blendaxis <0|1> "<param>" start end` blends on a given axis (some retail sequences
+  blend only on axis 1); `noposekeys` stores a blend without pose keys; `axisrange
+  <axis> start end` keeps the stored range of an axis without a parameter.
+- `animflags 0x40` and `seqflags` keep flag bits the compiler does not derive (0x40,
+  and the sequence's 0x20000, which retail sets independently of its clips).
+- `unk_cc "<bone>" value a b c d` keeps a record of the sequence table at 0xC8/0xCC
+  (menu and banner sequences; meaning unknown).
+
+Derived without commands: a delta clip that is zero throughout is stored as all-zeros
+(flag 0x20, no data); delta scale is additive (0 for an unchanged bone); positions on
+retail's 128/32767-inch grid keep that grid exactly; unused blend axes of a sequence
+asset store 0..1.
+
+`tools/importcheck54.py` checks imports against retail offline: for every exported rig
+it imports each supported sequence, compiles them on a stub body with
+`--external-assets` and compares each rebuilt `.rseq` with the original (validate54's
+metadata and full-frame comparison). It pairs sequences with rigs through the rigs'
+`.rson` sequence lists.
+
 `tools/build_r5r_import_test.py` imports four retail crypto-drone sequences onto the
 decompiled drone and packages it; `ingame54.py --pose` then poses the rebuild and the
 installed drone at fixed cycles and compares attachments (see VALIDATION.md).

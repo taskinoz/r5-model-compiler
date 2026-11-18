@@ -304,6 +304,16 @@ class Compiler54(unittest.TestCase):
         self.assertEqual(report['models'][0]['sequences'],['animseq/test/model/ref.rseq','animseq/test/model/idle.rseq'])
         self.assertEqual(report['models'][0]['reference_sequences'],[0])
         self.assertEqual(len(calls),1)
+        # --retail-paths keeps an imported retail label as its asset path (autolayer GUIDs)
+        retail,_=self.run_compiler(self.qc.replace('$sequence idle','$sequence "animseq/humans/Rig/Idle_A.rseq"'),target='s3',name='retailpath',
+                                   extra=['--external-assets','--material-guid','test/material=123456789abcdef0'])
+        with patch('pack54.subprocess.run',side_effect=lambda command,**kw: (calls.append(None),
+                   [(Path(json.loads(Path(command[1]).read_text())['outputDir'])/('r5c_test'+x)).write_bytes(b'new') for x in ('.rpak','.starpak')],
+                   subprocess.CompletedProcess(command,0,'',''))[-1]):
+            plain=package([retail],self.work/'pak-plain','r5c_test',self.compiler,'s3')
+            kept=package([retail],self.work/'pak-retail','r5c_test',self.compiler,'s3',retail_paths=True)
+        self.assertEqual(plain['models'][0]['sequences'][1],'animseq/test/model/Idle_A.rseq')
+        self.assertEqual(kept['models'][0]['sequences'][1],'animseq/humans/Rig/Idle_A.rseq')
         alias,_=self.run_compiler(self.qc.replace('test/model.rmdl','TEST/model.rmdl'),target='s3',name='alias',extra=['--external-assets','--material-guid','test/material=123456789abcdef0'])
         with self.assertRaisesRegex(ValueError,'duplicate model asset path'):
             package([out,alias],self.work/'duplicate','r5c_test',self.compiler,'s3')
