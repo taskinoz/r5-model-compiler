@@ -257,6 +257,8 @@ struct CSequence {
     std::vector<ActMod> activityModifiers;
     int ikResetMask = 0;
     int unkC4 = 0;
+    struct UnkCC { float value = 0; int bone = -1; float ramp[4] = {}; };
+    std::vector<UnkCC> unkCC;  // seqdesc 0xC8/0xCC table ("unk_cc")
 };
 
 // One convex hull of an early-Apex PHY solid (solid space, inches).

@@ -474,6 +474,16 @@ void MdlWriter::WriteSequences() {
             I(0xB0, static_cast<int>(kv.size() + 1));
             b_.Align(4);
         }
+        // the 0xC8/0xCC table (unk_cc)
+        if (!s.unkCC.empty()) {
+            I(0xC8, Rel(p));
+            I(0xCC, static_cast<int>(s.unkCC.size()));
+            for (auto& r : s.unkCC) {
+                b_.F32(r.value);
+                b_.I32(r.bone);
+                for (float x : r.ramp) b_.F32(x);
+            }
+        }
         // activity modifiers
         I(0xB8, Rel(p));
         I(0xBC, static_cast<int>(s.activityModifiers.size()));

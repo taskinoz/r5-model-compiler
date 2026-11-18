@@ -175,6 +175,16 @@ class Model(Reader):
         self.span(p,words*2)
         return mode,total,words
 
+    def unk_cc(self, seq):
+        """The seqdesc 0xC8 (offset) / 0xCC (count) table: 24-byte records of a float, a
+        bone index (-1 for none) and four floats (meaning unknown)."""
+        p=seq['offset']; out=[]
+        for q in self.array(self.get('i',p+0xCC),p+self.get('i',p+0xC8),24):
+            value,bone,*ramp=self.get('fi4f',q)
+            if not -1<=bone<len(self.bones): raise ValueError('unk_cc bone out of range')
+            out.append(dict(value=value,bone=bone,ramp=tuple(ramp)))
+        return out
+
     def autolayers(self, seq):
         """A sequence's v54 autolayers: 32 bytes each (asset GUID, int16 pose parameter,
         int16 always 0 in S3, int32 flags, start/peak/tail/end)."""

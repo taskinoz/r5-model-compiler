@@ -1243,6 +1243,14 @@ void Parser::CmdSequence(bool declare) {
             seq.ikResetMask = I("mask");
             return true;
         }
+        if (Is("unk_cc")) {
+            QcSequence::UnkCC r;
+            r.bone = S("bone");
+            r.value = F("value");
+            for (float& x : r.ramp) x = F("value");
+            seq.unkCC.push_back(r);
+            return true;
+        }
         if (Is("unk_c4")) {
             seq.unkC4 = I("value");
             return true;

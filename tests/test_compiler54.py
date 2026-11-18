@@ -230,7 +230,7 @@ class Compiler54(unittest.TestCase):
         write_smd(self.work/'still.smd',self.bones,self.frames*3)
         qc=self.qc.replace('$sequence idle "mesh.smd"',
             '$sequence idle "mesh.smd"\n$sequence zero { "still.smd" subtract idle 0 }\n'
-            '$sequence marked { "mesh.smd" animflags 0x40 seqflags 64 }\n')
+            '$sequence marked { "mesh.smd" animflags 0x40 seqflags 64 unk_cc "arm" .05 0 0 937.25 937.25 unk_cc "" .5 .125 .25 .5 .75 }\n')
         out,_=self.run_compiler(qc,target='s3',name='zeroflags',extra=['--external-assets'])
         rig=Model(out.with_suffix('.rrig'),'s3')
         zero=SequenceAsset(out.with_suffix('.seq2.rseq'),rig); marked=SequenceAsset(out.with_suffix('.seq3.rseq'),rig)
@@ -239,6 +239,9 @@ class Compiler54(unittest.TestCase):
         self.assertTrue(all(x==0 for pose in zero.animation(d) for bone in pose for ch in bone for x in ch))
         self.assertEqual(marked.get('i',marked.sequences[0]['animations'][0]+12)&0x40,0x40)
         self.assertEqual(marked.sequences[0]['flags']&0x40,0x40)
+        records=marked.unk_cc(marked.sequences[0])
+        self.assertEqual([(r['bone'],r['ramp']) for r in records],[(1,(0.0,0.0,937.25,937.25)),(-1,(.125,.25,.5,.75))])
+        self.assertAlmostEqual(records[0]['value'],.05,places=6)
         sequences=[out.with_suffix(f'.seq{i}.rseq') for i in range(4)]
         qci=import_animations(out.with_suffix('.rrig'),sequences,self.work/'zeroflags-import','s3')
         host=self.qc[:self.qc.index('$sequence')]+'$include "'+str(qci).replace(chr(92),'/')+'"\n'

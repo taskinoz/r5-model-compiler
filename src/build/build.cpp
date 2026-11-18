@@ -501,6 +501,16 @@ void BuildContext::BuildSequences() {
                 s.paramEnd[p] = qs.paramEnd[p];
             }
         }
+        for (const auto& r : qs.unkCC) {
+            CSequence::UnkCC o;
+            o.value = r.value;
+            if (!r.bone.empty()) {
+                o.bone = FindBone(r.bone);
+                if (o.bone < 0) Fatal("sequence %s: unk_cc bone \"%s\" is not defined", qs.name.c_str(), r.bone.c_str());
+            }
+            for (int k = 0; k < 4; ++k) o.ramp[k] = r.ramp[k];
+            s.unkCC.push_back(o);
+        }
         for (const auto& l : qs.assetLayers) {
             CSequence::AssetLayer o;
             o.guid = l.guid;

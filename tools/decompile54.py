@@ -380,7 +380,7 @@ def export_sequences(m, out, *, namespace="", asset_paths=()):
     for si,seq in enumerate(m.sequences):
         p=seq['offset']
         # These fields have no supported source representation in this exporter.
-        if any(m.get('i',p+off) for off in (0x40,0x64,0x88,0x8C,0xA4,0xB0,0xCC)) or any(m.get('f',p+off) for off in (0x7C,0x80,0x84)):
+        if any(m.get('i',p+off) for off in (0x40,0x64,0x88,0x8C,0xA4,0xB0)) or any(m.get('f',p+off) for off in (0x7C,0x80,0x84)):
             raise ValueError('sequence nodes/layers/IK/keyvalues need a richer native export')
         meta=m.sequence_metadata(seq)
         # a 1x1 descriptor without a clip holds the reference pose (retail ref, ragdoll)
@@ -470,6 +470,9 @@ def export_sequences(m, out, *, namespace="", asset_paths=()):
             if layer['flags']: text+=' flags 0x%x'%layer['flags']
             if any(layer['ramp']): text+=' range '+' '.join(format(x,'.9g') for x in layer['ramp'])
             lines+=[text]
+        for record in m.unk_cc(seq):
+            bone=m.bones[record['bone']]['name'] if record['bone']>=0 else ''
+            lines+=['  unk_cc '+qc_quote(bone)+' '+' '.join(format(x,'.9g') for x in (record['value'],*record['ramp']))]
         if meta['activity']: lines+=['  activity '+qc_quote(meta['activity'])+' '+str(meta['activity_weight'])]
         poses=m.pose_parameters()
         for axis,index in enumerate(meta['params']):

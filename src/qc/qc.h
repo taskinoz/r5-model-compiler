@@ -303,6 +303,11 @@ struct QcSequence {
     std::vector<ActivityModifier> activityModifiers;
     int ikResetMask = 0;
     int unkC4 = 0;  // unidentified seqdesc field at 0xC4 (r2c extension "unk_c4")
+    // "unk_cc <bone|""> <value> <a> <b> <c> <d>" (r5): one 24-byte record of the table at
+    // seqdesc 0xC8 (offset) / 0xCC (count): float, bone index (-1 for ""), four floats.
+    // 181 S3 menu and banner sequences have them (bones are often hair); meaning unknown.
+    struct UnkCC { std::string bone; float value = 0; float ramp[4] = {}; };
+    std::vector<UnkCC> unkCC;
     bool bboxSet = false;  // "bbox" (r2c extension): the stored box instead of a computed one
     Vec3 bboxMin, bboxMax;
     bool isOverride = false;  // $declaresequence
