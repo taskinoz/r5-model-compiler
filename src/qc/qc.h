@@ -216,6 +216,10 @@ struct QcAnimation {
     // Validated FM54 sidecar: native movement bytes and expected frame count.
     std::vector<uint8_t> fmStream;
     int fmStreamFrames = 0;
+    // v54 "sectionframes N": frames per native section (0 = one section); -1 = default.
+    // Retail frame movement is laid out by the clip's sections, so an imported stream
+    // needs the clip sectioned as it was.
+    int sectionFrames = -1;
     bool extractFrameMovement = false;
     // Decoded fmtrack samples (XYZ inches/yaw degrees) with their fixed scales.
     bool hasFmTrack = false;

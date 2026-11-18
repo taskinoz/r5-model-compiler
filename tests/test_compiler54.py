@@ -69,9 +69,52 @@ class Compiler54(unittest.TestCase):
                 for i,seq in enumerate(ref.sequences):
                     asset=SequenceAsset(out.with_suffix(f'.seq{i+1}.rseq'),rig)
                     expected=ref.sequences; ref.sequences=[seq]
-                    self.assertEqual(compare_animation_metadata(asset,ref),[])
+                    # a standalone sequence whose clips have frame movement also carries
+                    # 0x40000 (retail assets); the model's own copy does not
+                    moving=all(asset.get('i',d+12)&0x40000 for d in asset.sequences[0]['animations'])
+                    self.assertEqual(asset.sequences[0]['flags'],seq['flags']|(0x40000 if moving else 0))
+                    self.assertEqual(compare_animation_metadata(asset,ref),['sequence 0 flags'] if moving else [])
                     ref.sequences=expected
                     self.assertTrue(all(asset.get('i',d)==0 for d in asset.sequences[0]['animations']))
+
+    def test_standalone_animation_import_all_profiles(self):
+        from import_anim54 import import_animations
+        frames=[[((f*.125,0,0),(0,0,0),(1,1,1)),((0,0,2),(0,f*.002,0),(1,1,1))] for f in range(41)]
+        write_smd(self.work/'move.smd',self.bones,frames)
+        qc=self.qc+'$sequence walk { "move.smd" rm\neventcycle "AE_MARKER" .375 "mark"\n}\n'
+        for target in PROFILES:
+            with self.subTest(target=target):
+                original,_=self.run_compiler(qc,target=target,name=target+'imports',extra=['--external-assets'])
+                model=Model(original,target)
+                sequences=[original.with_suffix(f'.seq{i}.rseq') for i in range(len(model.sequences))]
+                qci=import_animations(original.with_suffix('.rrig'),sequences,self.work/(target+'includes'),target)
+                host=self.qc[:self.qc.index('$sequence')]+'$include "'+str(qci).replace(chr(92),'/')+'"\n'
+                rebuilt,_=self.run_compiler(host,target=target,name=target+'imported',extra=['-path',str(qci.parent)])
+                self.assertEqual(validate(rebuilt,target,original,animation_metadata=True)['differences'],[])
+                self.assertEqual([s['name'] for s in Model(rebuilt,target).sequences],['ref','idle','walk'])
+                report=json.loads(qci.with_name('import54.report.json').read_text())
+                self.assertEqual(report['labels'],['ref','idle','walk'])
+                self.assertEqual(len(report['inputs']),4)
+                self.assertEqual(len(report['outputs']),4)  # include, two poses, frame movement; ref uses bind pose
+
+    def test_standalone_import_rejects_unsupported_and_preserves_existing_output(self):
+        from import_anim54 import import_animations
+        out,_=self.run_compiler(target='s3',extra=['--external-assets'])
+        rig=out.with_suffix('.rrig');seq=out.with_suffix('.seq1.rseq')
+        qci=import_animations(rig,[seq],self.work/'import','s3')
+        before={p.name:p.read_bytes() for p in qci.parent.iterdir()}
+        data=bytearray(seq.read_bytes());struct.pack_into('<i',data,0x88,1);seq.write_bytes(data)
+        with self.assertRaisesRegex(ValueError,'nodes/layers/IK/keyvalues'):
+            import_animations(rig,[seq],qci.parent,'s3')
+        self.assertEqual({p.name:p.read_bytes() for p in qci.parent.iterdir()},before)
+        struct.pack_into('<i',data,0x88,0);seq.write_bytes(data)
+        with self.assertRaisesRegex(ValueError,'duplicate sequence'):
+            import_animations(rig,[seq,seq],self.work/'duplicates','s3')
+        with self.assertRaisesRegex(ValueError,'namespace'):
+            import_animations(rig,[seq],self.work/'badnamespace','s3',namespace='../bad')
+        struct.pack_into('<i',data,0,1);seq.write_bytes(data)
+        with self.assertRaisesRegex(ValueError,'base selector'):
+            import_animations(rig,[seq],self.work/'badbase','s3')
 
     def test_package_embedded_ik_requires_linkage_and_matching_rig(self):
         from pack54 import package
@@ -121,6 +164,9 @@ class Compiler54(unittest.TestCase):
         with patch('pack54.subprocess.run',side_effect=repak):
             report=package([out],self.work/'pak','r5c_test',self.compiler,'s3')
         self.assertEqual(report['models'][0]['labels'],['ref','idle'])
+        # retail's form, animseq/<model path>/<label>.rseq: R5R resolves short labels
+        # (Anim_PlayOnly( "idle" )) by the asset's file name
+        self.assertEqual(report['models'][0]['sequences'],['animseq/test/model/ref.rseq','animseq/test/model/idle.rseq'])
         self.assertEqual(report['models'][0]['reference_sequences'],[0])
         self.assertEqual(len(calls),1)
         alias,_=self.run_compiler(self.qc.replace('test/model.rmdl','TEST/model.rmdl'),target='s3',name='alias',extra=['--external-assets','--material-guid','test/material=123456789abcdef0'])
@@ -544,6 +590,54 @@ class Compiler54(unittest.TestCase):
         run=subprocess.run([str(self.compiler),'--target','s3','-quiet','-o',str(rebuilt),str(q)],capture_output=True,text=True,timeout=40)
         self.assertEqual(run.returncode,0,run.stdout+run.stderr)
         self.assertEqual(compare_extras(out,rebuilt,'s3')['issues'],['body parts differ'])
+
+    def test_track_axes_use_their_own_offset_slots(self):
+        # A position track whose x axis is absent still keeps y at slot +2 and z at +3
+        # (retail drone_EMP's def_c_base); reading them as consecutive streams swapped z
+        # for y and posed the imported drone 6.8 inches off in R5R.
+        frames=[[((0,0,0),(0,0,0),(1,1,1)),((f*.25,2+f*.125,f*-.5),(0,0,0),(1,1,1))] for f in range(5)]
+        write_smd(self.work/'move.smd',self.bones,frames)
+        out,_=self.run_compiler(self.qc.replace('$sequence idle "mesh.smd"','$sequence idle "move.smd"'),target='s3',name='axes')
+        m=Model(out,'s3'); desc=m.sequences[0]['animations'][0]
+        before=m.animation(desc)
+        data=desc+m.get('i',desc+32); size=((len(m.bones)+1)//2+1)&~1; record=data+size
+        record+=m.get('H',record)&8191  # the root's record; the arm's follows
+        self.assertEqual(m.get('H',record)>>13,7)
+        ptr=record+2+4; field=m.get('H',ptr)
+        raw=bytearray(m.data); struct.pack_into('<H',raw,ptr,(field&8191)|(3<<13))  # y and z only
+        out.write_bytes(raw); after=Model(out,'s3').animation(desc)
+        bind=m.bones[1]['pos']
+        for f,(a,b) in enumerate(zip(before,after)):
+            self.assertAlmostEqual(b[1][0][0],bind[0],places=5)
+            self.assertAlmostEqual(b[1][0][1],a[1][0][1],places=5)
+            self.assertAlmostEqual(b[1][0][2],a[1][0][2],places=5)
+        self.assertNotAlmostEqual(after[4][1][0][1],after[4][1][0][2],places=2)
+
+    def test_section_frames_and_standalone_frame_movement_flag(self):
+        from decompile54 import decompile
+        frames=[[((f*.1,0,0),(0,0,0),(1,1,1)),((0,0,2),(0,f*.001,0),(1,1,1))] for f in range(100)]
+        write_smd(self.work/'long.smd',self.bones,frames)
+        base=self.qc+'$animation long "long.smd" %s\n$sequence walk long\n'
+        def sections(option,name):
+            out,_=self.run_compiler(base%option,target='s3',name=name,extra=['--external-assets'])
+            m=Model(out,'s3'); return out,m,m.get('i',m.sequences[-1]['animations'][0]+0x30)
+        self.assertEqual(sections('','sf_default')[2],30)
+        self.assertEqual(sections('sectionframes 0','sf_none')[2],0)
+        self.assertEqual(sections('sectionframes 50','sf_fifty')[2],50)
+        out,m,_=sections('sectionframes 50 rm','sf_moving')
+        frames_back=m.animation(m.sequences[-1]['animations'][0])
+        self.assertAlmostEqual(frames_back[99][1][1][1],.099,places=3)
+        # the exported clip keeps its sections; a standalone sequence whose clips have
+        # frame movement carries 0x40000 (all 4,249 retail assets), the model's does not
+        text=decompile(out,self.work/'sf_src','s3').read_text()
+        self.assertIn('sectionframes 50',text)
+        index=len(m.sequences)-1
+        self.assertEqual(m.sequences[index]['flags']&0x40000,0)
+        rseq=out.with_suffix('.seq%d.rseq'%index).read_bytes()
+        self.assertEqual(struct.unpack_from('<i',rseq,12)[0]&0x40000,0x40000)
+        rseq=out.with_suffix('.seq1.rseq').read_bytes()  # idle: no frame movement
+        self.assertEqual(struct.unpack_from('<i',rseq,12)[0]&0x40000,0)
+        self.run_compiler(base%'sectionframes -1',target='s3',name='sf_bad',ok=False)
 
     def test_hitboxes_and_keyvalues_round_trip(self):
         from decompile54 import decompile

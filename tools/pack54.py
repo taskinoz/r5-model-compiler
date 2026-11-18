@@ -84,11 +84,20 @@ def package(models, output, name, repak, target, *, installed_animrigs=()):
             if len(data)!=m.get('i',0x1DC) or data[12:16]!=path.read_bytes()[8:12]:
                 raise ValueError('PHY size/checksum does not match its model: '+str(phy))
             copy(phy,native[:-5]+'.phy')
-        sequences=[]; labels=[]
+        sequences=[]; labels=[]; stems=set()
         for i in range(count):
             source=path.with_suffix(f'.seq{i}.rseq'); seq=SequenceAsset(source,rig)
             if seq.name!=m.sequences[i]['name']: raise ValueError('model/asset set sequence label mismatch')
-            dest=f'animseq/{base}/seq{i}.rseq'; copy(source,dest); sequences.append(dest); labels.append(seq.name)
+            # retail names a sequence asset animseq/<model path>/<label>.rseq, and the game
+            # resolves a short label (Anim_PlayOnly( "drone_active_idle" )) by that file
+            # name; an imported retail label is itself an asset path, so its base name is used
+            stem=seq.name.replace('\\','/').rsplit('/',1)[-1]
+            if stem.lower().endswith('.rseq'): stem=stem[:-5]
+            if not re.fullmatch(r'[A-Za-z0-9_.-]{1,96}',stem) or stem in ('.','..'):
+                raise ValueError('sequence label cannot name an asset: '+seq.name)
+            if stem.casefold() in stems: raise ValueError('duplicate sequence asset name: '+stem)
+            stems.add(stem.casefold())
+            dest=f'animseq/{base}/{stem}.rseq'; copy(source,dest); sequences.append(dest); labels.append(seq.name)
             # Native ASEQ labels are canonical asset paths, not QC short labels.
             staged=sources/dest; data=bytearray(staged.read_bytes())
             struct.pack_into('<i',data,4,len(data))

@@ -355,7 +355,26 @@ byte. PHY polygon mass properties continue to use their measured first-vertex fa
   2 rotation, 1 scale. A clear bit stores a constant: three absolute half floats for
   position or scale, a 64-bit quaternion for rotation. Retail stores constant positions
   that way (empty_lights' ref clip at 179 inches); the compiler does when the half value
-  is no less accurate than the track.
+  is no less accurate than the track. A track pointer is a uint16 (axis mask in the top
+  three bits, 4 = x, 2 = y, 1 = z; start offset in the rest) followed by one byte per
+  axis slot: x streams from the start, y from the word offset in byte +2, z from byte
+  +3. Each axis keeps its slot when an earlier axis is absent: drone_EMP's def_c_base
+  stores y at word 0 and z at word 25 with x absent. Reading them as consecutive
+  streams returned y's values for z; R5R posed the installed drone 6.8 inches from
+  that reading, and exactly as the per-slot reading gives.
+- Sections: a clip's frames per section (descriptor +0x30; 0 = one section) is chosen
+  by retail as: whole up to 96 frames, otherwise near-equal sections of 49 to 80 frames
+  (no fixed-size rule fits). Its frame-movement stream stores its own section size,
+  equal to the clip's in 4,162 of 4,172 retail S3 clips (the rest: 96-frame whole clips
+  with 48-frame movement sections). Decompiled clips keep their stored value
+  (`sectionframes`).
+- Standalone sequence assets: flag 0x40000 is set exactly when the sequence's clips
+  have frame movement (all 4,249 retail S3 assets: 2,426 with it, 1,823 without). No
+  retail model embeds a counted clip, so in-model sequences give no evidence; the
+  compiler leaves the bit off them. Asset labels are asset paths
+  (`animseq/props/crypto_drone/crypto_drone/drone_EMP.rseq`), and R5R resolves a short
+  label (`Anim_PlayOnly( "drone_EMP" )`) by the asset's file name: a rebuilt drone with
+  assets named `seqN.rseq` found none of the short names.
 
 ## RUI panels (studiohdr 0x12C count, 0x130 offset)
 

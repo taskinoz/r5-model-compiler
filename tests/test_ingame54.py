@@ -97,4 +97,26 @@ class Runtime54(unittest.TestCase):
         self.assertTrue(summarize(log+moving+'R5C_DONE\n',models)['passed'])
         self.assertFalse(summarize(log+moving.replace('2 0 0','nan 0 0')+'R5C_DONE\n',models)['passed'])
 
+    def test_pose_comparison_against_installed_reference(self):
+        from ingame54 import summarize_pose, rotation_difference
+        spec=dict(group='g',sequences=['walk'],attachments=['tip'],cycles=[0,1])
+        models=[{'path':'mdl/rebuilt.rmdl','pose_compare':dict(spec)},
+                {'path':'mdl/retail.rmdl','pose_compare':dict(spec,reference=True)}]
+        log=('R5C_POSE 1 walk 0.0000 tip 0 0 0 0 0 0\nR5C_POSE 1 walk 1.0000 tip 5 0 0 89.9 10 0\n'
+             'R5C_POSE 0 walk 0.0000 tip 0 0 0.004 0 0 0\nR5C_POSE 0 walk 1.0000 tip 5 0 0 89.9 12 2\nR5C_POSE_DONE\n')
+        report=summarize_pose(log,models)
+        # near a 90-degree pitch, yaw and roll trade off: the orientations nearly agree
+        self.assertLess(rotation_difference((89.9,10,0),(89.9,12,2)),.01)
+        self.assertEqual(report['failures'],[])
+        self.assertEqual(report['pairs']['mdl/rebuilt.rmdl']['compared'],2)
+        self.assertAlmostEqual(report['pairs']['mdl/rebuilt.rmdl']['reference_motion'],5)
+        # a moved origin, a turned attachment, a missing sample and an unfinished probe fail
+        self.assertTrue(summarize_pose(log.replace('0 walk 1.0000 tip 5 0 0','0 walk 1.0000 tip 5.1 0 0'),models)['failures'])
+        self.assertTrue(summarize_pose(log.replace('89.9 12 2','80 12 2'),models)['failures'])
+        self.assertTrue(summarize_pose(log.replace('R5C_POSE 0 walk 0.0000 tip 0 0 0.004 0 0 0\n',''),models)['failures'])
+        self.assertTrue(summarize_pose(log.replace('R5C_POSE_DONE\n',''),models)['failures'])
+        # a reference that does not move cannot show a difference
+        still=log.replace('1 walk 1.0000 tip 5 0 0','1 walk 1.0000 tip 0 0 0').replace('0 walk 1.0000 tip 5 0 0','0 walk 1.0000 tip 0 0 0')
+        self.assertIn('not sensitive',' '.join(summarize_pose(still,models)['failures']))
+
 if __name__=='__main__': unittest.main()

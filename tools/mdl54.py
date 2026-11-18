@@ -524,11 +524,13 @@ class Model(Reader):
                             if bit==1: step=self.get('f',cur); cur+=4
                             ptr=cur; cur+=4
                             field=self.get('H',ptr); axes=field>>13; start=ptr+(field&8191)
+                            # each axis has its own word-offset slot (x at 0, y +2, z +3),
+                            # also when an earlier axis is absent: drone_EMP's def_c_base
+                            # stores y at slot 0 and z at slot 25 with x absent
                             offsets=(0,self.get('B',ptr+2),self.get('B',ptr+3))
-                            active=0
                             for axis in range(3):
                                 if axes&(4>>axis):
-                                    value=self._track(start+offsets[active]*2,local)*step; active+=1
+                                    value=self._track(start+offsets[axis]*2,local)*step
                                     values[axis]=value if bit==2 else values[axis]+value
                         elif bit==2:
                             from decompile53 import unpack_q64, matrix_angles, quat_matrix
@@ -571,16 +573,20 @@ class SequenceAsset(Model):
     def __init__(self,path,rig):
         self.path=Path(path); self.target=rig.target; self.rig=rig
         Reader.__init__(self,self.path.read_bytes()); self.span(0,0xD0)
+        if self.get('i',0): raise ValueError('unsupported standalone sequence base selector')
         self.bones=rig.bones; self.meshes=[]; self.materials=[]
         indices=[self.get('i',p) for p in self.array(self.get('i',0x38),self.get('i',0x3C),4)]
         for p in indices: self.span(p,0x34)
-        self.sequences=[dict(name=self.string(self.get('i',4)),flags=self.get('i',12),animations=indices,offset=0)]
+        self.sequences=[dict(name=self.string(self.get('i',4)),flags=self.get('i',12),animations=indices,offset=0,
+                             reference_clip=self._reference_clip(0,indices))]
         self.name=self.sequences[0]['name']
         self.sequence_metadata(self.sequences[0])
         for p in indices:
             self.frame_movement(p); self.movements(p)
             # a clip without tracks (flag 0x20000 clear: a bind-pose reference clip) has no data
             if self.get('i',p+12)&0x20000: self.animation(p)
+        if self.sequences[0]['reference_clip'] is not None:
+            self.reference_frames(self.sequences[0])
 
     def pose_parameters(self): return self.rig.pose_parameters()
     def ik_chains(self): return self.rig.ik_chains()

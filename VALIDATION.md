@@ -10,12 +10,12 @@ This is not a stable release or proof of full Apex model equivalence.
 Retail and later self-hostable seasons remain future targets.
 
 Windows x64 MSVC Release: build/r5studiomdl.exe
-SHA-256: `04c2882da112dcb1a6099690d96b73665216d503e155c0ade33acfaf2644d9c6` (15 November 2026; the build of the full corpus run under "Reference clips").
-Independent reader SHA-256: `8d03d43c4f659c0ca1207de179a7c8a46fc08a15b4208b61460ea1607029aff5`.
+SHA-256: `9b71dbacedaa98b80cee8064323a6a750f713c05817cf7a8b1bee76b5509276f` (18 November 2026; the build of the full corpus run under "Retail animation import").
+Independent reader SHA-256: `03897508469135bd6b1475b6e10f87bf42e29afee46c665c3dbeafb57c5728f1`.
 
 ## Automated checks
 
-- All 75 native compiler/packaging/runtime-harness regressions pass on ordinary Python 3.10 and locked uv/Python 3.14.
+- All 84 native compiler/packaging/runtime-harness regressions pass on ordinary Python 3.10 and locked uv/Python 3.14.
 - Both CTest groups pass: convex-hull math and native compiler regressions. The
   inherited hull tests are not Apex physics emission evidence.
 - Complex-skinning tests exercise mixed 1/2/3/4/8/16-influence vertices across all
@@ -757,11 +757,72 @@ supporting planes. None establishes the stored radius consistently. The compiler
 radius rule and validation limits remain unchanged. Evidence:
 `test-output/radius-candidates.json` and the ignored radius probe scripts.
 
+## Retail animation import, partial-axis tracks and sequence assets (18 November 2026)
+
+`tools/import_anim54.py` turns a standalone rig and its sequence assets into a QC
+include (README). Its in-game test, `tools/build_r5r_import_test.py`, imports four
+retail crypto-drone sequences (drone_activate, drone_active_idle, drone_EMP,
+drone_recall, 63 to 126 frames, all with frame movement) from the retail drone rig onto
+the decompiled drone, compiles and packages it. `ingame54.py --pose` then plays each
+sequence on the rebuild and on the installed retail drone as client props, paused at
+cycles 0, 0.2, 0.4, 0.6, 0.8 and 1, and compares five attachments (eye lens, both
+wings, handle, bottom frame) relative to each prop.
+
+The first comparison failed by up to 6.87 inches, and finding why changed four things:
+
+- Decoder (mdl54): a track pointer stores each axis's start in its own slot (x at the
+  start, y in byte +2, z in byte +3), also when an earlier axis is absent. The reader
+  took the second present axis from byte +2, so drone_EMP's def_c_base (x absent, y at
+  word 0, z at word 25) decoded z as a copy of y. Our rebuild re-encoded those values
+  faithfully: in game it matched forward kinematics of the misread clip within 0.003,
+  while the installed drone matched the correctly read clip (4.568, 5.443 and 5.291 at
+  cycles 0.2, 0.4 and 0.6, against 4.568, 5.443 and 5.293 in game). Our encoder writes
+  all three axes, so authored round trips never exercised this; every retail clip with
+  a partial axis mask (including the `@ref` clips exported since 15 November) was
+  affected. A regression patches an authored track to y and z only and fails with the
+  old reading.
+- Sequence asset names: R5R found none of the short labels (`drone_EMP`) on a rebuild
+  whose assets were named `seqN.rseq`; retail names them
+  `animseq/<model path>/<label>.rseq` and the game matches the short label to that file
+  name. pack54 now does the same; scripts use both forms.
+- Standalone sequence flag 0x40000: set exactly when the clips have frame movement in
+  all 4,249 retail S3 assets; the compiler now derives it for sequence assets, and the
+  exporter accepts it as derived.
+- `sectionframes`: retail sections clips differently from the compiler's fixed 30
+  frames, and a clip's frame-movement stream records the clip's section size (4,162 of
+  4,172 clips). Decompiled and imported clips now keep their stored sections. This did
+  not change the drone result, but makes imported clips byte-for-byte in layout.
+
+Ruled out on the way (each tried as a package variant, no change in game): retail header
+flags (0x4082), cleared rig bone flags, sequences only as rig-linked assets, a rig-only
+model entry, no pose parameter, and retail's posed `@ref` clip. R5R's own common.rpak
+(decompressed with RePak's `-decompress` on a copy, exported with RSX and its starpaks)
+holds byte-identical drone model, rig and sequences to the S3 install used here.
+
+Final run (compiler `9b71dbac...`; mdl54 `03897508...`, import_anim54 `dc0551a5...`, ingame54 `a3ad7027...`,
+pack54 `17ce901e...`, builder `60e24017...`): the four imported sequences resolve by short name with
+retail's durations (3.0, 2.5, 4.167 and 2.067 s), and all 120 samples compare: origins
+within 0.0028 inches, rotations within 0.014 degrees, against 8.74 inches of retail motion
+(limits 0.01 inches and 0.05 degrees; exit 0). The rotation check measures the angle
+between orientations: comparing Euler components gave 0.053 for a sample whose
+orientations differ by under 0.01 degrees near a 90-degree pitch. The limit is unchanged.
+
+Corpus (`test-output/full54-v7-import`, compiler and tools frozen and hash-checked):
+full mode S0 359 pass / 1 differ, S1 419 / 1, S2 427 / 1, S3 579 / 1 / 1 error
+(1,784 of 1,789); render + PHY 228 / 1, 271 / 1, 272 / 1, 352 / 1 / 1 (1,123 of
+1,128). The remaining cases are tablet_mini (S0-S2), wood_gib01d (S3) and the refused
+w_bloodhound_axe hull. wood_gib01c now passes in full mode too (the bent-face
+triangulation above); no model newly fails. All 84 regressions and both CTest groups
+pass.
+
+Not established: other rigs' imports in game, retail's section-size rule (decompiled
+clips store it), and in-model sequences with frame-movement clips (no retail example).
+
 ## Remaining limitations
 
 - Measuring client-side ragdoll motion in game (not reachable from R5R scripts),
-  non-jiggle procedural bones (none in S0-S3), importing arbitrary
-  existing rig dependencies, native asset-GUID layers, IK rules, transition
+  non-jiggle procedural bones (none in S0-S3), importing rigs with procedural bones,
+  transitions, IK locks, weight fixups or followers, native asset-GUID layers, IK rules, transition
   nodes and followers. Export also rejects sequence keyvalues, transitions and
   procedural weight fixups, and unknown animation/sequence flags or event types.
 - S3 RPak loading and limited embedded playback/rendering have live evidence.

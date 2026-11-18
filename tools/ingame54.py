@@ -388,6 +388,7 @@ def write_probe(runtime,models,controls=()):
             'global function R5C_VisualSelect',
             'global function R5C_ClientRagdolls',
             'global function R5C_Jiggle',
+            'global function R5C_Pose',
             'struct { array<entity> props } file',
             'void function CodeCallback_RFiveCompiler_Test_ModInit() {}',
             'void function R5C_Visual()', '{',
@@ -478,6 +479,44 @@ def write_probe(runtime,models,controls=()):
              '    WaitFrame()','  }',
              '  foreach ( entity prop in props ) prop.Destroy()',
              '  print( "R5C_JIG_DONE\\n" )','}']
+    # pose comparison: client props of the flagged models (and installed controls) play
+    # each named sequence paused at fixed cycles; attachment origins and angles relative
+    # to the prop are printed, so a rebuild can be compared with an installed model
+    pose=[(i,m) for i,m in enumerate(list(models)+list(controls)) if m.get('pose_compare')]
+    visual+=['void function R5C_PoseOne( entity prop, int index, string label, array<float> cycles, array<string> names )','{',
+             '  if ( prop.LookupSequence( label ) < 0 ) { print( format( "R5C_POSE_MISSING %d %s\\n", index, label ) ); return }',
+             '  prop.Anim_Play( label )',
+             '  foreach ( float c in cycles )','  {',
+             '    prop.SetCycle( c )',
+             '    prop.Anim_SetPaused( true )',
+             '    WaitFrame()',
+             '    WaitFrame()',
+             '    foreach ( string n in names )','    {',
+             '      int a = prop.LookupAttachment( n )',
+             '      if ( a <= 0 ) { print( format( "R5C_POSE_NOATT %d %s\\n", index, n ) ); continue }',
+             '      vector o = prop.GetAttachmentOrigin( a ) - prop.GetOrigin()',
+             '      vector g = prop.GetAttachmentAngles( a )',
+             '      print( format( "R5C_POSE %d %s %.4f %s %.5f %.5f %.5f %.4f %.4f %.4f\\n", index, label, c, n, o.x, o.y, o.z, g.x, g.y, g.z ) )',
+             '    }',
+             '    prop.Anim_SetPaused( false )','  }','}',
+             'void function R5C_Pose() { thread R5C_PoseSamples() }',
+             'void function R5C_PoseSamples()','{',
+             '  entity player = GetLocalViewPlayer()',
+             '  vector angles = <0, player.CameraAngles().y, 0>',
+             '  vector center = player.CameraPosition() + AnglesToForward( angles ) * 200 - <0,0,12>',
+             '  vector right = AnglesToRight( angles )',
+             '  entity prop']
+    for k,(i,m) in enumerate(pose):
+        spec=m['pose_compare']
+        cycles=[float(c) for c in spec.get('cycles',[0,.25,.5,.75,1])]
+        if not all(0<=c<=1 for c in cycles): raise ValueError('pose cycles must be between zero and one')
+        visual+=[f'  prop = CreateClientSidePropDynamic( center + right * {(k-(len(pose)-1)/2)*80:.3f}, <0,0,0>, ${literal(m["path"])} )',
+                 '  {',
+                 '    array<float> cycles = [ '+', '.join(format(c,'.6f') for c in cycles)+' ]',
+                 '    array<string> names = [ '+', '.join(literal(n) for n in spec['attachments'])+' ]']
+        visual+=[f'    R5C_PoseOne( prop, {i}, {literal(label)}, cycles, names )' for label in spec['sequences']]
+        visual+=['  }','  prop.Destroy()']
+    visual+=['  print( "R5C_POSE_DONE\\n" )','}']
     (scripts/'r5c_visual.nut').write_text('\n'.join(visual)+'\n')
     (scripts/'scripts.rson').write_text('When: "SERVER"\nScripts:\n[\n r5c_probe.nut\n]\nWhen: "CLIENT"\nScripts:\n[\n r5c_visual.nut\n]\n')
 
@@ -513,6 +552,62 @@ def summarize_jiggle(log,models):
             if peak<=0.05: out['failures'].append(m['path']+': probe did not move after the step (%.4f)'%peak)
             if end>0.05: out['failures'].append(m['path']+': probe did not settle (%.4f)'%end)
         elif peak>0.001: out['failures'].append(m['path']+': control probe moved (%.4f)'%peak)
+    return out
+
+
+def rotation_difference(a,b):
+    """Degrees of rotation between two QAngles (pitch, yaw, roll), as the game builds
+    attachment matrices from them."""
+    import math
+    def matrix(p,y,r):
+        p,y,r=map(math.radians,(p,y,r))
+        sp,cp,sy,cy,sr,cr=math.sin(p),math.cos(p),math.sin(y),math.cos(y),math.sin(r),math.cos(r)
+        return [[cp*cy,sp*sr*cy-cr*sy,sp*cr*cy+sr*sy],[cp*sy,sp*sr*sy+cr*cy,sp*cr*sy-sr*cy],[-sp,sr*cp,cr*cp]]
+    A,B=matrix(*a),matrix(*b)
+    trace=sum(A[k][i]*B[k][i] for i in range(3) for k in range(3))
+    return math.degrees(math.acos(max(-1.,min(1.,(trace-1)/2))))
+
+
+def summarize_pose(log,models):
+    """Compare paused attachment samples of each pose_compare model with its group's
+    reference (an installed model): origins within `tolerance` inches (default 0.01),
+    rotations within `angle_tolerance` degrees (default 0.05)."""
+    import re,math
+    samples={}
+    for i,label,c,name,x,y,z,ax,ay,az in re.findall(r'R5C_POSE (\d+) (\S+) (\S+) (\S+) (\S+) (\S+) (\S+) (\S+) (\S+) (\S+)',log):
+        samples[(int(i),label,round(float(c),4),name)]=([float(x),float(y),float(z)],[float(ax),float(ay),float(az)])
+    out={'pairs':{},'failures':[]}
+    if 'R5C_POSE_DONE' not in log: out['failures'].append('pose probe did not finish')
+    for i,label in re.findall(r'R5C_POSE_MISSING (\d+) (\S+)',log):
+        out['failures'].append(models[int(i)]['path']+': sequence not found: '+label)
+    for i,name in set(re.findall(r'R5C_POSE_NOATT (\d+) (\S+)',log)):
+        out['failures'].append(models[int(i)]['path']+': attachment not found: '+name)
+    indexed=[(i,m) for i,m in enumerate(models) if m.get('pose_compare')]
+    for i,m in indexed:
+        spec=m['pose_compare']
+        if spec.get('reference'): continue
+        refs=[j for j,r in indexed if r['pose_compare'].get('reference') and r['pose_compare'].get('group')==spec.get('group')]
+        if len(refs)!=1: out['failures'].append(m['path']+': no single pose reference'); continue
+        j=refs[0]; tol=float(spec.get('tolerance',.01)); atol=float(spec.get('angle_tolerance',.05))
+        worst=0.; worst_angle=0.; compared=0; moved=0.
+        for (k,label,c,name),(o,g) in samples.items():
+            if k!=i: continue
+            ref=samples.get((j,label,c,name))
+            if ref is None: out['failures'].append(f'{m["path"]}: no reference sample for {label} {c} {name}'); continue
+            compared+=1
+            d=math.dist(o,ref[0]); worst=max(worst,d)
+            # the angle between the two orientations (Euler component differences
+            # overstate rotations near a 90-degree pitch)
+            a=rotation_difference(g,ref[1]); worst_angle=max(worst_angle,a)
+            first=samples.get((j,label,0.0,name))
+            if first: moved=max(moved,math.dist(ref[0],first[0]))
+        expected=len(spec['sequences'])*len(spec.get('cycles',[0,.25,.5,.75,1]))*len(spec['attachments'])
+        out['pairs'][m['path']]=dict(reference=models[j]['path'],compared=compared,expected=compared==expected,
+                                     max_origin_error=worst,max_angle_error=worst_angle,reference_motion=moved)
+        if compared!=expected: out['failures'].append(f'{m["path"]}: {compared} of {expected} pose samples compared')
+        if worst>tol: out['failures'].append(f'{m["path"]}: attachment origin differs by {worst:.4f}')
+        if worst_angle>atol: out['failures'].append(f'{m["path"]}: attachment angle differs by {worst_angle:.4f}')
+        if moved<=tol: out['failures'].append(f'{m["path"]}: reference attachments did not move (comparison not sensitive)')
     return out
 
 
@@ -597,6 +692,7 @@ def main():
     p.add_argument('--keep-open',action='store_true',help='leave the isolated game open for manual inspection')
     p.add_argument('--jiggle',action='store_true',help='also step the jiggle_probe models declared in the package report sideways and sample their probe attachment on the client')
     p.add_argument('--collision',action='store_true',help='also run traces and physics drops declared in the package report')
+    p.add_argument('--pose',action='store_true',help='also compare the paused attachment poses of the pose_compare models with their installed reference')
     p.add_argument('--weapon',help='finally give the player this weapon (a script name such as mp_weapon_vinson) and take screenshots of its view')
     p.add_argument('--viewmodel',help='with --weapon: the viewmodel path its script uses in the isolated runtime (e.g. a packaged model)')
     a=p.parse_args()
@@ -704,6 +800,13 @@ def main():
                             connection.command('script_client R5C_VisualSelect(-1)')
                             connection.command('script_client R5C_Jiggle()'); time.sleep(3.5)
                             connection.command('screenshot'); time.sleep(4)
+                        if a.pose:
+                            connection.command('script_client R5C_VisualSelect(-1)')
+                            connection.command('script_client R5C_Pose()')
+                            entries=[m for m in package['models']+package.get('collision_controls',[]) if m.get('pose_compare')]
+                            steps=sum(len(m['pose_compare']['sequences'])*len(m['pose_compare'].get('cycles',[0,.25,.5,.75,1])) for m in entries)
+                            time.sleep(3+steps*0.1)
+                            connection.command('screenshot'); time.sleep(1)
                         if a.weapon:
                             # out of the way of the view: client props hidden, server props removed
                             connection.command('script_client R5C_VisualSelect(-1)')
@@ -732,12 +835,14 @@ def main():
                     for name in ('script.log','error.log'):
                         path=directory/name
                         if path.exists(): native_log+=path.read_text(errors='replace')+'\n'
-            if (not summarize_visual(native_log,len(package['models']),int(a.jiggle)+int(bool(a.weapon)))['failures']
-                    and (not a.jiggle or 'R5C_JIG_DONE' in native_log)) or process.poll() is not None:
+            extra=int(a.jiggle)+int(bool(a.weapon))+int(a.pose)
+            if (not summarize_visual(native_log,len(package['models']),extra)['failures']
+                    and (not a.jiggle or 'R5C_JIG_DONE' in native_log)
+                    and (not a.pose or 'R5C_POSE_DONE' in native_log)) or process.poll() is not None:
                 break
             if attempt<12: time.sleep(0.5)
         (runtime/'r5c-script.log').write_text(native_log,encoding='utf-8')
-        report['visual']=summarize_visual(native_log,len(package['models']),int(a.jiggle)+int(bool(a.weapon)))
+        report['visual']=summarize_visual(native_log,len(package['models']),int(a.jiggle)+int(bool(a.weapon))+int(a.pose))
         if a.collision:
             import re
             samples={}
@@ -748,6 +853,9 @@ def main():
         if a.jiggle:
             report['jiggle']=summarize_jiggle(native_log,package['models']+package.get('collision_controls',[]))
             report['failures']+=report['jiggle']['failures']
+        if a.pose:
+            report['pose']=summarize_pose(native_log,package['models']+package.get('collision_controls',[]))
+            report['failures']+=report['pose']['failures']
         if process.poll() not in (None,0):
             report['failures'].append('R5R exited with code '+str(process.poll()))
         report['passed']=not report['failures']

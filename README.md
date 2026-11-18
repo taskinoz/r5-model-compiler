@@ -163,7 +163,12 @@ must already be in place. Authored streams use native raw scalar packets and
 and the native payload. It preserves compressed polynomial packets without
 re-quantizing them. Imported tracks must match the animation frame count and
 cannot be combined with motion extraction or movement records. Raw stream
-preservation does not imply a polynomial encoder or runtime playback validation.
+preservation does not imply a polynomial encoder.
+
+`sectionframes N` on an `$animation` sets its frames per native section (0 for one
+section; the default is 30). The decompiler writes each clip's stored value, so a
+retail clip keeps its layout (retail leaves clips of up to 96 frames whole and splits
+longer ones into near-equal sections).
 
 `$ikchain leg foot links hip knee foot knee 1 0 0 angle_unknown 0.8660254` names
 three explicit links, permitting intervening twist bones to be skipped. Omit
@@ -294,6 +299,29 @@ must be handled manually. R5R v2.6.52 has loaded the authored package and played
 its sequences; see VALIDATION.md for the scope and remaining limits.
 Movement samples and screenshots need
 review before claiming geometry or root-motion equivalence.
+
+## Import retail animations
+
+`import_anim54.py` turns a standalone rig and its sequence assets (exported from your
+own installation) into an editable QC include: the skeleton, pose parameters, IK
+chains, each sequence's metadata, SMD clips, reference clips and native frame movement.
+
+```powershell
+python -I tools\import_anim54.py --target s3 --out work\anims --namespace drone rig.rrig a.rseq b.rseq
+```
+
+Put `$include "work/anims/animations.qci"` after your `$body` lines and pass
+`-path work\anims` to the compiler. Your mesh's bones must match the rig's. Imported
+labels keep retail's form, the asset path (`animseq/props/.../drone_EMP.rseq`).
+`pack54.py` names each packaged sequence `animseq/<model path>/<label base name>.rseq`,
+as retail does, so scripts can also play it by its short name (`drone_EMP`). A
+standalone sequence gets flag 0x40000 when its clips have frame movement, as all retail
+assets do. The import writes `import54.report.json` with input and output hashes; it
+leaves existing output untouched when an input is unsupported.
+
+`tools/build_r5r_import_test.py` imports four retail crypto-drone sequences onto the
+decompiled drone and packages it; `ingame54.py --pose` then poses the rebuild and the
+installed drone at fixed cycles and compares attachments (see VALIDATION.md).
 
 ## Inspect, export and validate
 

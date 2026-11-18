@@ -24,7 +24,10 @@ Read README.md, VALIDATION.md and docs/mdl-v54-format.md before changing writers
   Corpora: complex-native-s0/s1 (corrected VVC exports) and s2-raw/s3-raw. Keep only
   active corpora, the runtime and final reports in test-output; delete regenerated work.
   Corpus runs: `roundtrip54.py --discard-work` keeps only results.json (a full run is
-  otherwise gigabytes); shard lists need LF line endings.
+  otherwise gigabytes); shard lists need LF line endings. Give each run a new folder and
+  check it does not exist first: another session's evidence may already use a name
+  (full54-v6 did). To stop a sharded run, stop its shell scripts before the workers,
+  or the script starts the next season.
 - BVH: tools/bvh54.py (reader), tools/compare_bvh54.py (run by roundtrip54 for every
   model with a BVH). In-game collision: tools/build_r5r_collision_test.py, then
   `ingame54.py --collision`. Lessons: R5R traces a SOLID_VPHYSICS prop_dynamic against
@@ -47,6 +50,12 @@ Read README.md, VALIDATION.md and docs/mdl-v54-format.md before changing writers
   and samples an attachment on a jiggle bone (the charm's MENU_CAMERA_FOCUS) relative to
   the prop. Retail rigs (.rrig, exported with the patched RSX in test-output/bin/rsx from
   the S3 install at F:\Games\Apex Detours\Apex s3) were the reference for the rig rules.
+  Animation in game: `ingame54.py --pose` compares paused client poses with an
+  installed reference (tools/build_r5r_import_test.py). Check a mismatch against
+  forward kinematics of the decoded clip before blaming the model: the retail drone
+  disagreed because our reader misread partial-axis tracks, which our own all-axis
+  encoder never writes. R5R paks are ZSTD-compressed; decompress a copy with
+  `repak -decompress` and give RSX the starpaks (hard links) to export from them.
   A crashed game's crashmsg.exe (the runtime's bin/crashmsg.exe) keeps its netconsole
   port bound; closing those dialogs frees the ports. Weapon views: `ingame54.py --weapon`
   (tools/build_r5r_rui_test.py); a rebuilt viewmodel is drawn only when its RePak entry

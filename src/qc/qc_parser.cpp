@@ -847,6 +847,9 @@ bool Parser::ParseAnimationToken(QcAnimation& a) {
         f.read(reinterpret_cast<char*>(a.fmStream.data()),size-8);
         if (!f) Fatal("truncated native frame-movement file");
         a.flags |= STUDIO_FRAMEMOVEMENT;
+    } else if (Is("sectionframes")) {
+        a.sectionFrames = I("frames per section");
+        if (a.sectionFrames < 0 || a.sectionFrames > 65535) Fatal("%s: sectionframes must be 0 to 65535", tk_.Where().c_str());
     } else if (Is("fmtrack")) {
         if (a.hasFmTrack || !a.fmStream.empty()) Fatal("duplicate frame-movement import");
         std::string name = S("frame movement track file");

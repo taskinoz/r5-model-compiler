@@ -1502,7 +1502,8 @@ void EncodeAnimations(BuildContext& ctx) {
         if (!sectioned) {
             ca.sections.push_back(EncodeChain(ctx, a, posScales, 0, a.numFrames - 1));
         } else {
-            ca.sectionFrames = sf;
+            // the native v54 sections (EncodeNative54) keep their own frames per section
+            if (ca.nativeSections.empty()) ca.sectionFrames = sf;
             int nsec = (a.numFrames - 1) / sf + 1;
             for (int s = 0; s < nsec; s++) {
                 int f0 = s * sf;

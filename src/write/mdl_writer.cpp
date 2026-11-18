@@ -804,6 +804,12 @@ std::vector<uint8_t> WriteSequence54(const CompiledModel& model, size_t index) {
             ai = static_cast<int16_t>(mapped);
         } else ai = static_cast<int16_t>(found->second);
     }
+    // A standalone sequence carries 0x40000 exactly when its clips have frame movement
+    // (all 4,249 retail S3 sequence assets); sequences inside models never do.
+    bool movement = !subset.animations.empty();
+    for (const auto& a : subset.animations)
+        if (!(a.flags & 0x40000)) movement = false;
+    if (movement) subset.sequences[0].flags |= 0x40000;
     return MdlWriter(subset, false).RunSequence();
 }
 

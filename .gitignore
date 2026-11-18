@@ -18,3 +18,4 @@ __pycache__/
 /rsx_cache_db.bin
 /rsx_logs/
 /exported_files/
+/latest_crash/

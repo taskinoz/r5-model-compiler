@@ -110,8 +110,9 @@ std::vector<uint8_t> Section(const BuildContext& ctx, const WAnim& a, int first,
 }
 }
 void EncodeNative54(const BuildContext& ctx, const WAnim& a, CAnimation& out) {
-    constexpr int sectionFrames = 30;
-    if (a.numFrames <= sectionFrames) {
+    // frames per section: the animation's `sectionframes` (0 = one section), else 30
+    const int sectionFrames = a.qc && a.qc->sectionFrames >= 0 ? a.qc->sectionFrames : 30;
+    if (sectionFrames == 0 || a.numFrames <= sectionFrames) {
         out.nativeSections.push_back(Section(ctx, a, 0, a.numFrames-1));
     } else {
         out.sectionFrames = sectionFrames;
