@@ -97,7 +97,17 @@ class Compiler54(unittest.TestCase):
                 report=json.loads(qci.with_name('import54.report.json').read_text())
                 self.assertEqual(report['labels'],['ref','idle','walk'])
                 self.assertEqual(len(report['inputs']),4)
-                self.assertEqual(len(report['outputs']),4)  # include, two poses, frame movement; ref uses bind pose
+                # include, two poses and their native streams, frame movement; ref uses bind pose
+                self.assertEqual(len(report['outputs']),6)
+                # the rebuild used the imported sections verbatim
+                imported=Model(rebuilt,target); orig=Model(original,target)
+                for s1,s2 in zip(imported.sequences[1:],orig.sequences[1:]):
+                    self.assertEqual(imported.native_sections(s1['animations'][0]),orig.native_sections(s2['animations'][0]))
+                # an edited SMD no longer matches its stream: re-encoded, with a warning
+                smd=qci.parent/'imported_2_anim0_0.smd'
+                smd.write_text(smd.read_text().replace('time 1\n','time 1\n',1)+'\n')
+                _,log=self.run_compiler(host,target=target,name=target+'edited',extra=['-path',str(qci.parent)])
+                self.assertIn('changed since its import',log.stdout+log.stderr)
 
     def test_standalone_import_rejects_unsupported_and_preserves_existing_output(self):
         from import_anim54 import import_animations
@@ -340,6 +350,23 @@ class Compiler54(unittest.TestCase):
                     for x,y in zip(eb[0],ab[0]): self.assertAlmostEqual(x,y,delta=.001,msg=str(i))
                     for x,y in zip(eb[1],ab[1]): self.assertAlmostEqual(x,y,delta=.0002,msg=str(i))
                     for x,y in zip(eb[2],ab[2]): self.assertAlmostEqual(x,y,delta=.0016,msg=str(i))
+
+    def test_retail_position_grid_is_kept_exactly(self):
+        # Retail position tracks use studiomdl's 128-inch floor: step 128/32767. Offsets
+        # already on that grid (imported retail clips) keep it and decode exactly; authored
+        # offsets (the test above) keep the finer step.
+        step=struct.unpack('<f',struct.pack('<f',128/32767))[0]
+        frames=[[((0,0,0),(0,0,0),(1,1,1)),((k*7*step,-k*3*step,2+k*step),(0,0,0),(1,1,1))] for k in range(20)]
+        write_smd(self.work/'grid.smd',self.bones,frames)
+        out,_=self.run_compiler(self.qc.replace('$sequence idle "mesh.smd"','$sequence grid "grid.smd"'),target='s3',name='grid')
+        m=Model(out,'s3'); desc=m.sequences[0]['animations'][0]
+        decoded=m.animation(desc)
+        for expected,actual in zip(frames,decoded):
+            for x,y in zip(expected[1][0],actual[1][0]): self.assertAlmostEqual(x,y,delta=1e-5)
+        data=desc+m.get('i',desc+32); record=data+((len(m.bones)+1)//2+1&~1)
+        record+=m.get('H',record)&8191                                 # bone 0
+        self.assertEqual(m.get('H',record)>>13&4,4)                     # bone 1: a position track
+        self.assertEqual(m.get('f',record+2),step)
 
     def test_geometry_decompile_recompile(self):
         for target in PROFILES:

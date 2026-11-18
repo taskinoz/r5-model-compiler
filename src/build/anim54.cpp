@@ -4,6 +4,7 @@
 #include "build/frame54.h"
 #include "core/buffer.h"
 #include "core/log.h"
+#include "core/strings.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -44,17 +45,34 @@ std::vector<uint8_t> Section(const BuildContext& ctx, const WAnim& a, int first,
         // Explicit channels avoid ambiguities about absent channels in deltas.
         b.Data()[j/2] |= uint8_t(7 << (4*(j%2)));
         size_t record = b.Reserve(2);
-        float positionStep = 1.f / 32768.f;
+        // studiomdl's position scale with a 128-inch floor: the larger side of the section's
+        // offsets (at least -128..128) over 32768 (negative) or 32767 (positive). 9,121 of
+        // 9,128 sampled S3 tracks store 128/32767; the rest exceed 128 inches.
+        // Retail-derived clips (imports, decompiles) lie on that grid and keep it exactly;
+        // other clips use the finest step their range allows, as before.
+        float minOffset = -128.f, maxOffset = 128.f, maxAbs = 0.f;
         for (int f = first; f <= last; ++f)
             for (int axis = 0; axis < 3; ++axis) {
                 float v = a.sanim[f][j].pos[axis] - (delta ? 0.f : ctx.bones[j].pos[axis]);
-                positionStep = std::max(positionStep, std::fabs(v) / 32767.f);
+                minOffset = std::min(minOffset, v);
+                maxOffset = std::max(maxOffset, v);
+                maxAbs = std::max(maxAbs, std::fabs(v));
             }
+        const float retailStep = -minOffset > maxOffset ? -minOffset / 32768.f : maxOffset / 32767.f;
+        bool onRetailGrid = true;
+        for (int f = first; f <= last && onRetailGrid; ++f)
+            for (int axis = 0; axis < 3; ++axis) {
+                float v = a.sanim[f][j].pos[axis] - (delta ? 0.f : ctx.bones[j].pos[axis]);
+                // 1% of a step: float32 transforms of values near 128 inches move them by
+                // up to ~1e-5, and authored values rarely all land this close to the grid
+                if (std::fabs(v - std::round(v / retailStep) * retailStep) > retailStep * 1e-2f) { onRetailGrid = false; break; }
+            }
+        const float positionStep = onRetailGrid ? retailStep : std::max(1.f / 32768.f, maxAbs / 32767.f);
         // A constant position may instead be stored as three absolute half floats (mode bit
         // 4 clear), as retail stores them: used when no less accurate than the track (exact
-        // for retail-derived values, e.g. empty_lights' ref clip at 179 inches).
+        // for retail-derived values on either grid, e.g. empty_lights' ref clip at 179 inches).
         bool constant = true;
-        float halfError = 0;
+        float halfError = 0, trackError = 0;
         uint16_t halves[3] = {};
         for (int axis = 0; axis < 3; ++axis) {
             float v0 = a.sanim[first][j].pos[axis];
@@ -62,9 +80,12 @@ std::vector<uint8_t> Section(const BuildContext& ctx, const WAnim& a, int first,
                 if (a.sanim[f][j].pos[axis] != v0) constant = false;
             halves[axis] = FloatToHalf(v0);
             halfError = std::max(halfError, std::fabs(HalfToFloat(halves[axis]) - v0));
+            float offset = v0 - (delta ? 0.f : ctx.bones[j].pos[axis]);
+            float stored = (delta ? 0.f : ctx.bones[j].pos[axis]) + std::round(offset / positionStep) * positionStep;
+            trackError = std::max(trackError, std::fabs(stored - v0));
         }
         size_t pos = SIZE_MAX;
-        if (constant && halfError <= positionStep / 2) {
+        if (constant && (onRetailGrid ? halfError <= trackError : halfError <= positionStep / 2)) {
             for (uint16_t h : halves) b.U16(h);
         } else {
             if (positionStep / 2 > .01f) Fatal("v54 animation position exceeds 0.01-inch quantization budget");
@@ -112,6 +133,24 @@ std::vector<uint8_t> Section(const BuildContext& ctx, const WAnim& a, int first,
 }
 }
 void EncodeNative54(const BuildContext& ctx, const WAnim& a, CAnimation& out) {
+    // an imported clip's retail sections, while the import still describes this clip
+    if (a.qc && !a.qc->nativeStream.empty() && a.qc->nativeStreamCurrent) {
+        uint64_t bones = 0xcbf29ce484222325ull;
+        for (size_t j = 0; j < ctx.bones.size(); ++j) {
+            if (j) bones = Fnv1a64("\n", 1, bones);
+            bones = Fnv1a64(ctx.bones[j].name.data(), ctx.bones[j].name.size(), bones);
+        }
+        const int sf = a.qc->nativeStreamSectionFrames;
+        const size_t expected = sf ? static_cast<size_t>((a.numFrames - 1) / sf + 2) : 1;
+        if (a.qc->nativeStreamFrames == a.numFrames && a.qc->nativeStreamBones == static_cast<int>(ctx.bones.size()) &&
+            a.qc->nativeStreamBoneHash == bones && a.qc->nativeStream.size() == expected &&
+            (a.qc->sectionFrames < 0 || a.qc->sectionFrames == sf)) {
+            out.nativeSections = a.qc->nativeStream;
+            if (sf) out.sectionFrames = sf;
+            return;
+        }
+        Warn("%s: its native stream does not match this model's bones or frames; re-encoding it", a.name.c_str());
+    }
     // frames per section: the animation's `sectionframes` (0 = one section), else retail's rule
     const int sectionFrames = a.qc && a.qc->sectionFrames >= 0 ? a.qc->sectionFrames : RetailSectionFrames54(a.numFrames, true);
     if (sectionFrames == 0 || a.numFrames <= sectionFrames) {

@@ -4,7 +4,9 @@
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <cstring>
 #include <fstream>
+#include <iterator>
 #include <functional>
 #include <map>
 #include <unordered_map>
@@ -877,6 +879,41 @@ bool Parser::ParseAnimationToken(QcAnimation& a) {
         f.read(reinterpret_cast<char*>(a.fmStream.data()),size-8);
         if (!f) Fatal("truncated native frame-movement file");
         a.flags |= STUDIO_FRAMEMOVEMENT;
+    } else if (Is("animstream")) {
+        if (!a.nativeStream.empty()) Fatal("duplicate native animation stream");
+        std::string name = S("native animation stream file");
+        std::string path = ResolveSource(name, "an54");
+        std::ifstream f(path, std::ios::binary);
+        if (!f) Fatal("%s: could not open native animation stream \"%s\"", tk_.Where().c_str(), name.c_str());
+        std::vector<uint8_t> d((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        size_t at = 0;
+        auto u32 = [&]() -> uint32_t {
+            if (at + 4 > d.size()) Fatal("truncated native animation stream %s", path.c_str());
+            uint32_t v; std::memcpy(&v, d.data() + at, 4); at += 4; return v;
+        };
+        auto u64 = [&]() -> uint64_t { uint64_t lo = u32(); return lo | (uint64_t(u32()) << 32); };
+        if (d.size() < 4 || std::memcmp(d.data(), "AN54", 4)) Fatal("invalid native animation stream magic in %s", path.c_str());
+        at = 4;
+        a.nativeStreamFrames = static_cast<int>(u32());
+        a.nativeStreamSectionFrames = static_cast<int>(u32());
+        a.nativeStreamBones = static_cast<int>(u32());
+        a.nativeStreamBoneHash = u64();
+        uint64_t sourceHash = u64();
+        uint32_t sections = u32();
+        if (!sections || sections > 65536) Fatal("invalid native animation stream %s", path.c_str());
+        for (uint32_t k = 0; k < sections; ++k) {
+            uint32_t size = u32();
+            if (at + size > d.size() || size % 2) Fatal("invalid native animation section in %s", path.c_str());
+            a.nativeStream.emplace_back(d.begin() + at, d.begin() + at + size);
+            at += size;
+        }
+        if (at != d.size()) Fatal("trailing bytes in native animation stream %s", path.c_str());
+        std::string source = ResolveSource(a.file, nullptr);
+        std::ifstream s(source, std::ios::binary);
+        std::vector<uint8_t> text((std::istreambuf_iterator<char>(s)), std::istreambuf_iterator<char>());
+        a.nativeStreamCurrent = !source.empty() && Fnv1a64(text.data(), text.size()) == sourceHash;
+        if (!a.nativeStreamCurrent)
+            Warn("%s: %s changed since its import; re-encoding it (its native stream is ignored)", tk_.Where().c_str(), a.file.c_str());
     } else if (Is("sectionframes")) {
         a.sectionFrames = I("frames per section");
         if (a.sectionFrames < 0 || a.sectionFrames > 65535) Fatal("%s: sectionframes must be 0 to 65535", tk_.Where().c_str());
@@ -1039,6 +1076,7 @@ void Parser::CmdSequence(bool declare) {
         }
         if (Is("seqflags")) {
             seq.flags = I("sequence flags");
+            seq.flagsExplicit = true;
             return true;
         }
         if (Is("blendwidth")) {
@@ -1076,6 +1114,14 @@ void Parser::CmdSequence(bool declare) {
                 pp.min = std::min(pp.min, std::min(seq.paramStart[i], seq.paramEnd[i]));
                 pp.max = std::max(pp.max, std::max(seq.paramStart[i], seq.paramEnd[i]));
             }
+            return true;
+        }
+        if (Is("axisrange")) {
+            int axis = I("axis");
+            if (axis < 0 || axis > 1) Fatal("%s: axisrange axis must be 0 or 1", tk_.Where().c_str());
+            seq.axisRange[axis] = true;
+            seq.paramStart[axis] = F("start");
+            seq.paramEnd[axis] = F("end");
             return true;
         }
         if (Is("calcblend")) {

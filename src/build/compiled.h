@@ -230,6 +230,7 @@ struct CSequence {
     std::vector<int16_t> animIndices;  // groupSize[0]*groupSize[1]
     int paramIndex[2] = {-1, -1};
     float paramStart[2] = {0, 0}, paramEnd[2] = {0, 0};
+    bool axisRange[2] = {false, false};  // $sequence axisrange: stored as given
     float fadeIn = 0.2f, fadeOut = 0.2f;
     int entryNode = 0, exitNode = 0, nodeFlags = 0;
     float entryPhase = 0, exitPhase = 0;

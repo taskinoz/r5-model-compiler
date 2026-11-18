@@ -383,7 +383,7 @@ void MdlWriter::WriteSequences() {
         // a standalone sequence asset stores end 1 on an axis without a pose parameter
         // (every unused axis of the 4,249 S3 assets; in-model descriptors store 0)
         for (int axis = 0; axis < 2; ++axis)
-            F(0x5C + 4 * axis, standaloneSequence_ && s.paramIndex[axis] < 0 ? 1.f : s.paramEnd[axis]);
+            F(0x5C + 4 * axis, standaloneSequence_ && s.paramIndex[axis] < 0 && !s.axisRange[axis] ? 1.f : s.paramEnd[axis]);
         F(0x68, s.fadeIn);
         F(0x6C, s.fadeOut);
         I(0x70, s.entryNode);

@@ -575,6 +575,24 @@ class Model(Reader):
             output.append(pose)
         return output
 
+    def native_sections(self, descriptor):
+        """The clip's native sections as stored: (frames per section or 0, [bytes]). Each
+        section's length is its bone mask plus its bone records, padded to 4 bytes."""
+        p=descriptor; self.span(p,52)
+        frames=self.get('i',p+16); table,sf=self.get('2i',p+44)
+        starts=[p+self.get('i',p+table+4*k) for k in range((frames-1)//sf+2)] if sf else [p+self.get('i',p+32)]
+        size=((len(self.bones)+1)//2+1)&~1; sections=[]
+        for data in starts:
+            self.span(data,size); end=data+size
+            for j in range(len(self.bones)):
+                if (self.data[data+j//2]>>(4*(j%2)))&7:
+                    length=self.get('H',end)&8191
+                    if length<2: raise ValueError('zero-sized animation record')
+                    end+=length
+            self.span(data,end-data)
+            sections.append(self.data[data:end]+b'\0'*(-(end-data)%4))
+        return sf,sections
+
     def _track(self,p,frame):
         # General native mode-0 raw, mode-1 byte deltas and polynomial modes.
         while True:

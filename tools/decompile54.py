@@ -4,7 +4,7 @@ import sys
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 import argparse
 import math
-from mdl54 import Model, PROFILES
+from mdl54 import Model, SequenceAsset, PROFILES
 from decompile53 import write_dmx, matrix_angles, qc_quote
 
 
@@ -320,6 +320,25 @@ def export_skeleton(m, *, metadata=True):
 IK_RULE_SIZE=0x88
 
 
+def fnv1a64(data, h=0xcbf29ce484222325):
+    for b in data: h=((h^b)*0x100000001b3)&0xFFFFFFFFFFFFFFFF
+    return h
+
+
+def write_native_stream(path, m, desc, smd):
+    """AN54: frames, frames per section, bone count, FNV-1a 64 of the bone names (joined
+    by newlines) and of the SMD file, then each native section (u32 size, bytes)."""
+    import struct
+    sf,sections=m.native_sections(desc)
+    names=chr(10).join(b['name'] for b in m.bones).encode()
+    data=b'AN54'+struct.pack('<3I',m.get('i',desc+16),sf,len(m.bones))
+    data+=struct.pack('<QQI',fnv1a64(names),fnv1a64(Path(smd).read_bytes()),len(sections))
+    for section in sections: data+=struct.pack('<I',len(section))+section
+    Path(path).write_bytes(data)
+
+
+
+
 def release_rules(m, desc):
     """Chains of an animation's IK rules when every rule is a whole-range release, the
     only kind retail sequence assets store (studiomdl's automatic releases: index k,
@@ -373,6 +392,11 @@ def export_sequences(m, out, *, namespace=""):
             name=f'{prefix}r5c_anim_{si}_{ai}'; names.append(name)
             # the clip's native sections as stored (its frame movement is laid out by them)
             options=' fps '+format(m.get('f',desc+8),'.9g')+' noautoik sectionframes '+str(m.get('i',desc+0x30))
+            # retail's sections verbatim: its curve-mode tracks cannot be re-encoded exactly;
+            # the compiler uses them while the SMD and skeleton are unchanged
+            stream=f'{prefix}anim{si}_{ai}.an54'
+            write_native_stream(out/stream,m,desc,out/filename)
+            options+=' animstream '+qc_quote(stream)
             for bit,word in ((1,'loop'),(2,'snap'),(4,'delta'),(0x10,'post'),(0x8000,'noforceloop')):
                 if flags&bit: options+=' '+word
             movement=m.frame_movement(desc)
@@ -406,8 +430,9 @@ def export_sequences(m, out, *, namespace=""):
                 filename=f'{prefix}ref{si}.smd'
                 write_smd(out/filename,m.bones,m.reference_frames(seq)); pose=' '+qc_quote(filename)
         lines+=['}', '$sequence '+literal_quote(seq['name'],'sequence name')+' {','  referencepose'+pose if reference else '  '+' '.join(qc_quote(n) for n in names),
-                # a clip-less descriptor keeps its single-frame bit (retail has both)
-                '  seqflags '+str(seq['flags']&~(0x20000 if reference else 0xE0000)),'  seqweights '+qc_quote(weightname),
+                # a clip-less descriptor keeps its single-frame bit (retail has both); 0x20000
+                # is stored data (not its clips' bit), so it is kept too
+                '  seqflags '+str(seq['flags']&~(0 if reference else 0xC0000)),'  seqweights '+qc_quote(weightname),
                 '  blendwidth '+str(meta['grid'][0]),
                 '  fadein '+format(meta['fade'][0],'.9g')+' fadeout '+format(meta['fade'][1],'.9g'),
                 '  bbox '+' '.join(format(x,'.9g') for x in meta['bounds']),
@@ -418,6 +443,13 @@ def export_sequences(m, out, *, namespace=""):
             if index>=0:
                 lines+=['  blend '+qc_quote(poses[index]['name'])+' '+format(meta['start'][axis],'.9g')+' '+format(meta['end'][axis],'.9g')]
             elif axis==0 and meta['params'][1]>=0: raise ValueError('unsupported second-axis-only blend')
+            else:
+                # an axis without a pose parameter stores 0..1 in sequence assets and 0..0 in
+                # models; keep any other stored range (11 S3 assets)
+                default=(0.,1.) if isinstance(m,SequenceAsset) else (0.,0.)
+                stored=(meta['start'][axis],meta['end'][axis])
+                if stored!=default:
+                    lines+=['  axisrange '+str(axis)+' '+' '.join(format(x,'.9g') for x in stored)]
         if meta['posekeys']: lines+=['  posekeys '+str(len(meta['posekeys']))+' '+' '.join(format(x,'.9g') for x in meta['posekeys'])]
         if seq['flags']&0x80:
             index=meta['cycle_pose']

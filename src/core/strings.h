@@ -1,6 +1,8 @@
 // Small string and path helpers.
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -19,5 +21,11 @@ bool FileExists(const std::string& p);
 bool StartsWithI(const std::string& s, const std::string& prefix);
 bool EndsWithI(const std::string& s, const std::string& suffix);
 std::vector<std::string> Split(const std::string& s, char c);
+// 64-bit FNV-1a: identifies a source file or bone list (not a security hash)
+inline uint64_t Fnv1a64(const void* data, size_t size, uint64_t h = 0xcbf29ce484222325ull) {
+    const auto* p = static_cast<const unsigned char*>(data);
+    for (size_t i = 0; i < size; ++i) { h ^= p[i]; h *= 0x100000001b3ull; }
+    return h;
+}
 
 }  // namespace r2c

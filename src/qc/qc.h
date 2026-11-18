@@ -216,6 +216,14 @@ struct QcAnimation {
     // Validated FM54 sidecar: native movement bytes and expected frame count.
     std::vector<uint8_t> fmStream;
     int fmStreamFrames = 0;
+    // "animstream file" (r5): an imported clip's native sections as retail stored them
+    // (AN54). Retail tracks use curve modes that re-encoding cannot reproduce, so the
+    // compiler uses these bytes while the SMD, bones, frames and sections still match
+    // the import; an edited SMD (its hash differs) is re-encoded instead.
+    std::vector<std::vector<uint8_t>> nativeStream;
+    int nativeStreamFrames = 0, nativeStreamSectionFrames = 0, nativeStreamBones = 0;
+    uint64_t nativeStreamBoneHash = 0;
+    bool nativeStreamCurrent = false;  // the SMD is unchanged since the import
     // v54 "sectionframes N": frames per native section (0 = one section); -1 = default.
     // Retail frame movement is laid out by the clip's sections, so an imported stream
     // needs the clip sectioned as it was.
@@ -251,11 +259,17 @@ struct QcSequence {
     std::vector<std::string> animations;  // names of QcAnimation (blend order)
     int groupSize[2] = {0, 0};
     int flags = 0;
+    // "seqflags" given: its 0x20000 is stored as is rather than derived from the clips
+    // (S3 assets set it on 217 of 4,249 sequences, independent of their clips' bit)
+    bool flagsExplicit = false;
     std::string activity;
     int actWeight = 0;
     std::vector<QcEvent> events;
     std::string paramName[2];
     float paramStart[2] = {0, 0}, paramEnd[2] = {0, 0};
+    // "axisrange <axis> <start> <end>" (r5): the stored range of an axis without a pose
+    // parameter (11 S3 sequence assets keep a stale one, e.g. -90..90)
+    bool axisRange[2] = {false, false};
     std::vector<float> poseKeys;  // explicit blend positions ("posekeys"); empty = evenly spaced
     std::string seqWeights;       // "seqweights": the sequence's own weight list (else max of its animations)
     std::string entryNode, exitNode;

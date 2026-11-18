@@ -486,13 +486,17 @@ void BuildContext::BuildSequences() {
             if (a < 0) Fatal("sequence %s: missing animation %s", qs.name.c_str(), qs.animations[i].c_str());
             int j = i % s.groupSize[0], k = i / s.groupSize[0];
             s.animIndices[k * s.groupSize[0] + j] = static_cast<int16_t>(a);
-            if (anims[a].flags & STUDIO_HAS_SCALE) s.flags |= STUDIO_HAS_SCALE;  // as retail sequences do
+            if ((anims[a].flags & STUDIO_HAS_SCALE) && !qs.flagsExplicit) s.flags |= STUDIO_HAS_SCALE;  // as retail sequences do
         }
         const WAnim& first = anims[s.animIndices[0]];
         // blends / pose keys
         for (int p = 0; p < 2; p++) {
             if (!qs.paramName[p].empty()) {
                 s.paramIndex[p] = qc.FindPoseParam(qs.paramName[p]);
+                s.paramStart[p] = qs.paramStart[p];
+                s.paramEnd[p] = qs.paramEnd[p];
+            } else if (qs.axisRange[p]) {
+                s.axisRange[p] = true;
                 s.paramStart[p] = qs.paramStart[p];
                 s.paramEnd[p] = qs.paramEnd[p];
             }
