@@ -489,9 +489,31 @@ base) with two such rebuilt models in view while the table was missing.
 
 ## Standalone rigs and sequences
 
-`--external-assets` writes a render model retaining embedded clips with an empty
-`ref` sequence at index zero, a full native studio-header `.rrig` containing the shared skeleton,
-attachments, hitboxes, IK chains and pose parameters, and one `.rseq` per sequence.
+`--external-assets` writes a render model, a full native studio-header `.rrig` and
+one `.rseq` per sequence, in retail's layout (measured on every S0-S3 model with a rig
+and every S3 rig):
+- The model keeps only its reference-pose descriptors: `ref` at index zero, and
+  `ragdoll` where there is one (all 1,155 models with rigs: 1,005 `ref` only, 150 `ref`
+  and `ragdoll`). It has no clips, pose parameters, IK chains or nodes.
+- The rig (all 138 S3 rigs) has the skeleton, hitboxes, pose parameters, IK chains,
+  node names and transitions, and no attachments. Its checksum is 0, its bones follow
+  the header at 0x224, its pose parameters come before its IK chains, and the offsets
+  of tables a rig never has are 0 (0xC4, 0xD4, 0xDC, 0xE8, 0xF0, 0x118, 0x120, 0x130,
+  0x140, 0x14C, 0x15C, 0x178, 0x184, 0x18C, 0x1BC, 0x1EC).
+- In a rig, 0x10C (a model's empty flex-descriptor table) indexes the node
+  transitions: one absolute offset per node, then for each node an int32 count and
+  (int16 exit node, int16 sequence index) pairs, sorted. Each sequence entering at one
+  node and leaving at another is that transition; the index is the sequence's place in
+  the rig's sorted sequence list (every transition of the 62 rigs with nodes; the 19
+  whose sequences were all exported match exactly). The compiler writes asset-set
+  indices and `pack54.py` maps them to the packaged order.
+
+R5R depends on that layout. It maps a sequence's pose parameters and IK rules through
+per-rig remap tables (virtual-model group +0x90 and +0xD0) and leaves them null when the
+model has its own: a model that also carried pose parameters crashed at
+r5apex.exe+0x1D450F playing a blend, and one with IK chains at +0x1CD1AA playing a
+sequence with IK rules. Packaged as retail does, with the rig listing the sequences
+and the model listing none, imported blend and IK sequences play and pose as retail's.
 Each RSEQ starts with its 0xD0 sequence descriptor at byte zero. Its animation
 reference table contains int32 offsets relative to that descriptor. Each referenced
 0x34 animation descriptor has a zero base-pointer field; the other pointers remain
@@ -503,7 +525,11 @@ frame across all four profiles, including a 3x2 blend grid and pose keys.
 
 The local S3 RePak integration uses RPak version 8, model asset version 10, rig
 version 4 and sequence version 7. The model lists the rig dependency; the rig lists
-its sequences. VG bytes go to a mandatory streaming file. The `.assetset` file is
+its sequences, in the engine's name order: byte order with A-Z folded to lower case
+(all 78 S3 rigs with three or more exported sequences). R5R finds a sequence by name
+with a binary search of that list (r5apex.exe+0x1EE220), for example an autolayer's
+target: unsorted, a layer whose target the search missed played the model's `ref` in
+its place. VG bytes go to a mandatory streaming file. The `.assetset` file is
 a compiler packaging manifest, not an engine asset: ASCII `R5AS1`, target, sequence
 count, each on a separate line. It prevents stale numbered sequence assets from
 being accidentally linked after recompilation. These facts establish the packaged
@@ -531,9 +557,15 @@ asset structure; live rig resolution and streaming still require a runtime test.
 - Autolayers (0x94 count, 0x98 index): 32 bytes each: the target sequence asset's
   GUID, an int16 pose parameter, an int16 that is always 0, int32 flags, then
   start/peak/tail/end. Flags seen: 0, 0x8000 and 0xC000 (with a pose parameter).
+  R5R's layer loop (r5apex.exe+0x1D973E): equal start and end give full weight; 0x4000
+  scales the weight by the pose parameter's ramp and the layer follows the base
+  cycle; 0x8000 runs the layer on its own clock (its cycle from time). The pak loader
+  turns the GUID into a pointer to the target asset, and the virtual model resolves it
+  by that asset's name (r5apex.exe+0x1ECD40, through the sorted search above).
 - Transition nodes: rigs keep node names (0xFC count, 0x104 name offsets) with index
-  0x100 = 0 (no transition table) in all 62 S3 rigs that have nodes. Sequences keep
-  entry/exit nodes (0x70/0x74, 1-based); three have only an exit node.
+  0x100 = 0 in all 62 S3 rigs that have nodes; their transitions are at 0x10C (see
+  "Standalone rigs and sequences"). Sequences keep entry/exit nodes (0x70/0x74,
+  1-based); three have only an exit node.
 - 0xC8 (offset) / 0xCC (count): 24-byte records of a float, a bone index (-1 for
   none) and four floats, in 181 menu and banner sequences. Meaning unknown.
 - Unused blend axes store start 0, end 1 (in-model descriptors store 0, 0). Eleven
@@ -556,8 +588,9 @@ asset structure; live rig resolution and streaming still require a runtime test.
 The sequence descriptor base at +0 must be zero for the native int32 relative
 animation-reference table. A nonzero base selects legacy int16 animation indices
 in R5R (`r5apex.exe+0x1C8AD0`). GetSequenceDuration rejects sequence indices <=0;
-authored external sets therefore reserve `ref` at zero. Embedded native clips
-play in R5R; external-rig-only playback remains unverified.
+authored external sets therefore reserve `ref` at zero. Sequences play from the rig's
+sequence assets alone, as retail's do (the drone and Mastiff import tests); scripts
+name them by the asset's file name.
 
 Animation descriptor base +0 is also zero, including embedded clips. All 25,405
 surveyed S0-S3 descriptors use zero. Descriptor flag 0x20000 means usable bone
@@ -569,7 +602,8 @@ Studio field 0x158 uses -1 to request a virtual rig from RPak dependencies; zero
 leaves the mapping absent. The surveyed S0-S3 models contain only zero or -1
 (634 and 1,155 models respectively). The authored IK-chain model crashed with
 zero and completed playback with -1. External-asset render models now write -1;
-standalone rigs retain zero. The package verifies matching bones and IK chains.
+standalone rigs retain zero. The package verifies matching bones, and requires -1 when
+the rig has IK chains.
 
 Studio offset 0xCC points to an optional byte-per-material shader-type table:
 RGDU/RGDP/RGDC/SKNU/SKNP/SKNC/WLDU/WLDC/PTCU/PTCS are values 0..9.

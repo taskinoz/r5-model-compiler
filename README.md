@@ -220,9 +220,12 @@ VALIDATION.md, `ingame54.py --jiggle`).
 
 Default output contains model components. `--external-assets` additionally writes a
 `.rrig` skeleton, numbered `.seqN.rseq` sequence assets and a `.assetset` manifest.
-The render model retains embedded playback clips and reserves index zero for the
-native `ref` reference-pose sequence. The native external-rig sentinel enables the runtime
-virtual-rig mapping, including IK chains. Separate rig/sequence-only playback is not yet proved.
+The files follow retail's layout: the render model keeps only its reference poses
+(`ref` at index zero, and `ragdoll` if declared) and no clips, pose parameters, IK
+chains or nodes; the rig carries those, with the node transitions; the sequence assets
+carry the clips. R5R plays the sequences from the rig (see VALIDATION.md); a model that
+also kept pose parameters or IK chains crashed R5R playing blends or IK sequences. The
+native external-rig sentinel enables the runtime virtual-rig mapping.
 The manifest records the target and sequence count so
 stale sequence files cannot enter the package. This output is available for all
 four profiles. Importing arbitrary existing rig dependencies through QC is still
@@ -287,9 +290,12 @@ the rig. The model must use compatible bones and the dependency must exist in th
 target game. The Flatline RUI fixture uses this reference for weapon playback.
 A successful bake alone does not establish runtime compatibility. S0/S1/S2 RPak
 packaging is not implemented by this wrapper.
-Embedded IK chains require the native external-rig sentinel written by
-`--external-assets`; recompile older outputs. The packager checks that the model
-and rig contain matching chain descriptions. IK rules and locks remain unsupported.
+The rig lists the sequences in the engine's name order (its sequence search needs it)
+and the model lists none, as retail packages them; the rig's node transitions are
+remapped to that order. Autolayers between a model's own imported sequences follow
+them to their packaged paths. A rig with IK chains requires the native external-rig
+sentinel written by `--external-assets`; recompile older outputs. Apex IK rules other
+than whole-range releases, and IK locks, remain unsupported.
 
 The experimental Windows harness prepares a separate R5R directory and records
 spawns, every sequence lookup, playback/movement samples, optional `probe`
@@ -354,8 +360,15 @@ chains, each sequence's metadata, SMD clips, reference clips and native frame mo
 python -I tools\import_anim54.py --target s3 --out work\anims --namespace drone rig.rrig a.rseq b.rseq
 ```
 
+The skeleton source is the `.rrig` whose `.rson` lists the sequences, or the `.rmdl`
+that lists them when a model plays sequence assets on its own skeleton (90 S3
+sequences, e.g. `w_defender.rmdl`'s `charge_seq`).
+
 Put `$include "work/anims/animations.qci"` after your `$body` lines and pass
-`-path work\anims` to the compiler. Your mesh's bones must match the rig's, and the host
+`-path work\anims` to the compiler. Your mesh's bones must match the rig's (or keep
+your model's own `$definebone` lines, drop the include's, and remove weight-list
+entries for bones the model lacks; the clips are then re-encoded, as
+`build_r5r_import_test.py --case mastiff` does), and the host
 QC needs retail's orientation, `$origin 0 0 0 -90` (decompiled QCs have it): without it
 the root bone's clips are turned 90 degrees. Imported
 labels keep retail's form, the asset path (`animseq/props/.../drone_EMP.rseq`).
@@ -378,8 +391,10 @@ r5 commands carry what retail stores:
 - `autolayer "<asset path>" [pose "<param>"] [flags 0xN] [range s p t e]`: a layer that
   names a sequence asset; the compiler stores the path's asset GUID (or give `0xGUID`).
   The importer names layers by path when the target is among the imported sequences.
-  To keep those GUIDs valid in a package, pass `--retail-paths` to `pack54.py`, which
-  then keeps each imported label as its asset path (replacing the installed assets).
+  `pack54.py` moves imported sequences under the model's own path and re-points layers
+  between them to the moved assets; layers naming other assets keep the installed GUID.
+  `--retail-paths` instead keeps each imported label as its asset path (replacing the
+  installed assets).
 - `$node "<name>"` declares the rig's transition nodes in order; `node`, `transition`,
   `rtransition`, `entrynode` and `exitnode` set a sequence's. v54 stores no transition
   table.
@@ -400,11 +415,16 @@ asset store 0..1.
 it imports each supported sequence, compiles them on a stub body with
 `--external-assets` and compares each rebuilt `.rseq` with the original (validate54's
 metadata and full-frame comparison). It pairs sequences with rigs through the rigs'
-`.rson` sequence lists.
+`.rson` sequence lists, and with `--models <exported models>` pairs the rest with the
+model whose `.rson` lists them. It also compares each rebuilt rig with retail's:
+header counts, node names and transitions.
 
-`tools/build_r5r_import_test.py` imports four retail crypto-drone sequences onto the
-decompiled drone and packages it; `ingame54.py --pose` then poses the rebuild and the
-installed drone at fixed cycles and compares attachments (see VALIDATION.md).
+`tools/build_r5r_import_test.py` builds the in-game import tests: `--case drone`
+imports four retail crypto-drone sequences onto the decompiled drone, and `--case
+mastiff` imports all 57 sequences of the Mastiff viewmodel's rig (autolayers,
+transition nodes, additive clips) onto the decompiled viewmodel. `ingame54.py --pose`
+then poses each rebuild and the installed retail model at fixed cycles (and pose
+parameter settings, `pose_sets`) and compares attachments (see VALIDATION.md).
 
 ## Inspect, export and validate
 

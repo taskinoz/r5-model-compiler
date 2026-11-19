@@ -1,5 +1,8 @@
 """Import a matching early-Apex RRIG/RSEQ set into an editable QC animation include.
 
+The skeleton comes from the .rrig that lists the sequences, or from the .rmdl that
+lists them when a model plays sequence assets on its own skeleton.
+
 Place $include after your $body declarations and add the output directory with
 the compiler's -path option. This exports skeleton/pose/IK definitions and supported
 sequence metadata, SMD poses and native frame movement. It does not retarget a mesh
@@ -24,14 +27,21 @@ def import_animations(rig_path, sequence_paths, output, target, *, namespace='im
     if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,31}',namespace):
         raise ValueError('namespace must be a short QC identifier')
     rig_path=Path(rig_path).resolve()
-    if rig_path.suffix.lower()!='.rrig': raise ValueError('expected a standalone .rrig')
+    suffix=rig_path.suffix.lower()
+    if suffix not in ('.rrig','.rmdl'): raise ValueError('expected a standalone .rrig or an .rmdl')
     rig=Model(rig_path,target)
-    if not rig.bones or rig.meshes or rig.materials or rig.sequences:
-        raise ValueError('expected a skeleton-only standalone rig')
+    if not rig.bones: raise ValueError('skeleton has no bones')
     if len(rig.bones)>256: raise ValueError('early-profile skeleton exceeds 256 bones')
-    if any(b['proctype'] for b in rig.bones): raise ValueError('rig procedural bones are unsupported')
-    if any(rig.get('i',off) for off in (0x148,0x158,0x1A4,0x1E8)):
-        raise ValueError('rig IK locks, dependencies, weight fixups or followers are unsupported')
+    if suffix=='.rrig':
+        if rig.meshes or rig.materials or rig.sequences:
+            raise ValueError('expected a skeleton-only standalone rig')
+        if any(b['proctype'] for b in rig.bones): raise ValueError('rig procedural bones are unsupported')
+        if any(rig.get('i',off) for off in (0x148,0x158,0x1A4,0x1E8)):
+            raise ValueError('rig IK locks, dependencies, weight fixups or followers are unsupported')
+    # An .rmdl's own .rson lists the sequence assets that play on the model's
+    # skeleton directly (no separate rig); only its bones, pose parameters, nodes
+    # and IK chains are exported here. Its procedural bones, meshes and inline
+    # sequences belong to the model's own decompiled QC.
     if any(not math.isfinite(x) for b in rig.bones for k in ('pos','rot','quat','scale','pose_to_bone') for x in b[k]):
         raise ValueError('non-finite rig skeleton')
     assets=[SequenceAsset(p,rig) for p in sequence_paths]

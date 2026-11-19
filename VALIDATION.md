@@ -7,13 +7,15 @@ walking IK chain retained. All six client screenshots show the expected shapes;
 the float-position prop also shows its bent pose. This fixes the preceding
 checkpoint's IK-linkage crash and invalid float-material visual control.
 S3 v1 (19 November 2026): every installed S3 model rebuilds with the fields retail
-stores ("S3 v1 retail compatibility" below), and every retail S3 sequence asset that
-a rig lists imports and rebuilds identical to retail in every compared field and frame.
-Later seasons remain future targets.
+stores, every retail S3 sequence asset with an exported rig or model (4,248 of 4,249)
+imports and rebuilds identical to retail in every compared field and frame, every
+rebuilt rig matches retail's, and imported sequences with autolayers, transition nodes,
+additive clips, blends and IK rules pose in R5R as retail's do ("Full S3 support"
+below). Later seasons remain future targets.
 
 Windows x64 MSVC Release: build/r5studiomdl.exe
-SHA-256: `eaa58a420fd6aaa3ac9a18b845da3c17f9c015fb2f00d627aac04077a388c1ae` (19 November 2026, source `fe5c663`; the build of the S3 v1 corpus and import runs).
-Independent reader (mdl54.py) SHA-256 prefix: `6e2908c1`.
+SHA-256: `537608027fd8c106796d0dba3c07b685672b3dbba117d499004c1f0f8fad3786` (19 November 2026; the build of the final corpus, import and in-game runs, from the v1.0.0 source).
+Independent reader (mdl54.py) SHA-256 prefix: `cb9eca45`.
 
 ## Automated checks
 
@@ -875,9 +877,76 @@ equal: retail's 0xC8 table stores them, and `abs(a-b) <= 1e-6` is false for them
 
 All 92 regressions pass on Python 3.10.7 and uv/Python 3.14.7; both CTest groups pass.
 
-Not established in game for this release: imported autolayers and transition nodes,
-the additive delta scale of authored `subtract` clips (retail encoding only), and the
-runtime meaning of flag 0x40 and the 0xC8 table (kept as stored).
+These runs used compiler `eaa58a42...`; "Full S3 support" below repeats them with the
+release compiler.
+
+## Full S3 support (19 November 2026)
+
+Compiler `53760802...`; tools mdl54 `cb9eca45`, decompile54 `39badb96`, import_anim54
+`05399127`, importcheck54 `33bd5504`, validate54 `ece17a95`, roundtrip54 `c570a6f7`,
+pack54 `2901b749`, ingame54 `35b3c68c`, build_r5r_import_test `d1a44ece`, headerdiff54
+`f353e224`.
+
+**In game (R5R v2.6.52), `test-output/ingame-s3v1-final`.** Each package was built with
+this compiler and run with `ingame54.py`; no run logged a script error.
+- Mastiff (`build_r5r_import_test.py --case mastiff`, `--pose`): the 57 sequences of the
+  Mastiff viewmodel's rig imported onto the decompiled viewmodel (its own 119-bone
+  skeleton; the rig has 108), played paused at five cycles on the rebuild and on the
+  installed retail viewmodel, at `sprintfrac` 0 and 1. Six attachments (muzzle, shell,
+  both hands, camera, release lever): **3,420 samples, largest difference 0.0071 in and
+  0.019 deg**; retail's own motion over the samples is 46 in. The set covers the eight
+  autolayers (six pose-driven 0xC000 reload layers, which move retail's pose by 2.7 in
+  between the two `sprintfrac` values, and two 0x8000 own-clock layers), 19 sequences
+  with transition nodes, 14 additive clips, blends and the hand IK rules.
+- Drone (`--case drone`, `--pose`): 120 samples, largest difference 0.0 in and
+  1.7e-6 deg.
+- Jiggle (`build_r5r_jiggle_test.py`, `--jiggle`), collision
+  (`build_r5r_collision_test.py`, `--collision`: traces, drops and both ragdoll
+  switches) and the Flatline weapon view (`build_r5r_rui_test.py`, `--weapon`) pass as
+  before; the rebuilt viewmodel is drawn and animated and its ammo screen shows "00".
+  The three builders now drop the decompiled `$materialtype`/`$materialguid` lines of
+  the slots they rename to installed materials.
+
+Found by the Mastiff test, each now matching retail:
+- Models with a rig keep only their reference poses (`ref`, and `ragdoll` in 150 of
+  the 1,155 S0-S3 models with rigs), no pose parameters, IK chains or nodes. Ours also
+  kept them: R5R crashed playing a blend (null pose remap, r5apex.exe+0x1D450F) and then
+  a sequence with IK rules (null IK-chain remap, +0x1CD1AA).
+- The model lists no sequences; the rig lists them sorted by name, case-insensitively
+  (all 78 S3 rigs with three or more exported sequences). R5R resolves autolayer
+  targets with a binary search of that list (+0x1ECD40, +0x1EE220): in our unsorted
+  list the two layers naming `animseq_derived/` sequences resolved to `ref`, which froze
+  their sequences in the reference pose.
+- Rig layout (all 138 S3 rigs): checksum 0, no attachments, bones at 0x224, pose
+  parameters before IK chains, and 0 for the offsets of tables a rig never has.
+- Node transitions: a rig's 0x10C table lists, per node, (exit node, sequence) for
+  every sequence that enters there and leaves elsewhere (all 62 rigs with nodes). Ours
+  had none.
+- Sequences play from the rig's sequence assets alone (scripts name them by the asset's
+  file name), which the README had listed as unproved.
+
+**Models (`test-output/full54-v12-release`, `--discard-sources`).** Full mode S0 359
+pass / 1 error, S1 419 / 1, S2 427 / 1, S3 581 / 0; render + PHY S0 228 / 1, S1 271 /
+1, S2 272 / 1, S3 354 / 0: the same as v11 (tablet_mini only). `headerdiff54.py` over
+the S3 rebuilds: every header field matches; only pose-to-bone matrices differ (float32
+rounding, as in v11).
+
+**Sequence imports (`test-output/importcheck-s3-v5`, `--models test-output/s3-raw`).**
+Rigs' `.rson` lists pair 4,158 sequences and models' lists another 90: the seven that
+v4 refused belong to models that play sequence assets on their own skeleton
+(`w_defender`, `ptpov_baton_lifeline_gladcard`, `m20_f_grenade`...), and
+`import_anim54.py` now accepts the `.rmdl` as the skeleton. **4,248 pass, 0 differ, 0
+refused.** Each rebuilt rig is compared with retail as well (header counts, node names
+and the transitions by sequence name): **100 rigs pass**; the 19 model skeletons are
+not rigs. One sequence remains, `humans/pete/ai_grunt_core/mp_pt_wattson_base_execution_medium_victim`:
+no S3 rig or model lists it and its grunt rig is not in S3.
+
+All 92 regressions pass on Python 3.10 and uv/Python 3.14.7; both CTest groups pass.
+
+Not established in game: the transition graph's runtime use (weapon one/two-handed
+switches pick transitions through it; the pose test plays sequences directly), the
+additive scale of authored `subtract` clips (retail clips only), and the meaning of
+flag 0x40 and the 0xC8 table (kept as stored).
 
 ## Remaining limitations
 
@@ -887,9 +956,9 @@ runtime meaning of flag 0x40 and the 0xC8 table (kept as stored).
   releases and local-index layers (addlayer/blendlayer) are refused: retail S3 has no
   examples. Export rejects sequence keyvalues, procedural weight fixups and unknown
   event types.
-- S3 RPak loading and limited embedded playback/rendering have live evidence.
-  Other profiles require a matching-season packager. External-rig-only playback,
-  arbitrary external dependencies and general shader compatibility remain unverified.
+- S3 RPak loading, rig playback and rendering have live evidence. Other profiles
+  require a matching-season packager. Arbitrary external dependencies and general
+  shader compatibility remain unverified.
   Exact per-vertex runtime geometry equivalence is not established.
 - Early profiles retain the 256-bone and 16-influence limits. Unshareable VG
   extra-weight lists with starting indices above 65535 fail explicitly. Extreme
@@ -898,4 +967,4 @@ runtime meaning of flag 0x40 and the 0xC8 table (kept as stored).
   arbitrary sequence metadata, procedural or collision equivalence. Compact retail
   animation decoding still needs broader external-rig validation.
 - Historical TF2 corpus reports/tests are reference material, not Apex evidence.
-  S3 v1 is tagged locally as r5/v1.0.0-s3; it has not been published.
+  S3 v1 is released as v1.0.0.

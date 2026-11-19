@@ -125,6 +125,8 @@ void MdlWriter::WriteHeader() {
 }
 
 void MdlWriter::WriteSourceFiles() {
+    // rigs have no source name: their bones follow the header (0x224 in all 138 S3 rigs)
+    if (m_.rigAsset) return;
     HdrHere(H_SOURCEFILENAMEOFFSET);
     std::string s;
     for (auto& f : m_.sourceFiles) s += f + ";";
@@ -511,6 +513,23 @@ void MdlWriter::WriteNodes() {
 void MdlWriter::WriteBodyParts() {
     HdrHere(H_BODYPARTINDEX);
     HdrHere(H_FLEXDESCINDEX);  // the empty flex-descriptor table sits here in retail
+    // In a v54 rig this field indexes the node transitions instead: one absolute offset
+    // per node, then per node an int32 count and (int16 exit node, int16 sequence) pairs
+    // (all 62 S3 rigs with nodes). The packager maps the sequence indices to the rig's
+    // final sequence order.
+    if (m_.rigAsset && !m_.nodeNames.empty()) {
+        size_t table = b_.Reserve(4 * m_.nodeNames.size());
+        for (size_t n = 0; n < m_.nodeNames.size(); n++) {
+            b_.PatchI32(table + 4 * n, static_cast<int32_t>(b_.Tell()));
+            const auto empty = std::vector<std::pair<int16_t, int16_t>>();
+            const auto& list = n < m_.nodeTransitions.size() ? m_.nodeTransitions[n] : empty;
+            b_.I32(static_cast<int32_t>(list.size()));
+            for (const auto& [node, sequence] : list) {
+                b_.PatchAt<int16_t>(b_.Reserve(2), node);
+                b_.PatchAt<int16_t>(b_.Reserve(2), sequence);
+            }
+        }
+    }
     Hdr(H_NUMBODYPARTS, static_cast<int>(m_.bodyParts.size()));
     size_t base = b_.Reserve(kBodyPartSize * m_.bodyParts.size());
     for (size_t i = 0; i < m_.bodyParts.size(); i++) {
@@ -786,8 +805,9 @@ std::vector<uint8_t> MdlWriter::Run() {
     WriteSequences();
     WriteNodes();
     WriteBodyParts();
-    WriteIK();
-    WritePoseParams();
+    // retail rigs place the pose parameters before the IK chains (all 138 S3 rigs)
+    if (m_.rigAsset) { WritePoseParams(); WriteIK(); }
+    else { WriteIK(); WritePoseParams(); }
     WriteIncludeModels();
     WriteTextures();
     WriteKeyValues();
@@ -854,6 +874,17 @@ std::vector<uint8_t> MdlWriter::Run() {
     }
     // no bone followers: retail points their (empty) table at the end of the file
     Hdr(H_BONEFOLLOWEROFFSET, static_cast<int>(b_.Size()));
+    if (m_.rigAsset) {
+        // all 138 retail S3 rigs: checksum 0, and the offsets of the tables a rig never
+        // has (sequences, textures, skins, body parts, flex, UI panels, key values, IK
+        // locks, include models, source name, bone followers...) left 0
+        Hdr(H_CHECKSUM, 0);
+        for (int field : {H_LOCALSEQINDEX, H_TEXTUREINDEX, H_CDTEXTUREINDEX, H_SKININDEX, H_BODYPARTINDEX,
+                          H_FLEXCONTROLLERINDEX, H_FLEXRULEINDEX, H_UIPANELOFFSET, H_KEYVALUEINDEX,
+                          H_LOCALIKAUTOPLAYLOCKINDEX, H_INCLUDEMODELINDEX, H_FLEXCONTROLLERUIINDEX,
+                          H_SOURCEFILENAMEOFFSET, H_SRCBONETRANSFORMINDEX, H_UNKSTRINGOFFSET, H_BONEFOLLOWEROFFSET})
+            Hdr(field, 0);
+    }
     Hdr(H_LENGTH, static_cast<int>(b_.Size()));
     return b_.Data();
 }
@@ -901,16 +932,25 @@ std::vector<uint8_t> WriteRig54(const CompiledModel& model) {
         bone.proctype = 0;
         bone.jiggle = -1;
     }
-    rig.attachments = model.attachments;
+    // retail rigs carry no attachments (all 138 S3 rigs); the model keeps them
     rig.hitboxSets = model.hitboxSets;
     rig.ikChains = model.ikChains;
     rig.poseParams = model.poseParams;
     // the rig owns the transition node names its sequence assets refer to (62 S3 rigs)
     rig.nodeNames = model.nodeNames;
     rig.localNodeUnk = model.localNodeUnk;
+    // each sequence entering at one node and leaving at another is that transition,
+    // listed by (exit node, sequence index) (all 62 S3 rigs with nodes)
+    rig.nodeTransitions.assign(model.nodeNames.size(), {});
+    for (size_t i = 0; i < model.sequences.size(); i++) {
+        const CSequence& s = model.sequences[i];
+        if (s.entryNode > 0 && s.exitNode > 0 && s.entryNode != s.exitNode &&
+            s.entryNode <= static_cast<int>(model.nodeNames.size()))
+            rig.nodeTransitions[s.entryNode - 1].push_back({static_cast<int16_t>(s.exitNode), static_cast<int16_t>(i)});
+    }
+    for (auto& list : rig.nodeTransitions) std::sort(list.begin(), list.end());
     rig.surfaceProp = model.surfaceProp;
-    rig.sourceFiles = model.sourceFiles;
-    return WriteMDL(rig, true);
+    return WriteMDL(rig, true);  // no source file name (0 in all 138 retail rigs)
 }
 
 }  // namespace r2c

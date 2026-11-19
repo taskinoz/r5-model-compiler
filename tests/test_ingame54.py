@@ -52,8 +52,10 @@ class Runtime54(unittest.TestCase):
             write_probe(tmp,[{'path':'mdl/test.rmdl','labels':['idle','walk'],'sequences':['animseq/test/idle.rseq','animseq/test/walk.rseq']}])
             script=(Path(tmp)/'mods/r5c_compiler_test/scripts/vscripts/r5c_probe.nut').read_text()
             self.assertIn('asset model = $"mdl/test.rmdl"',script)
-            self.assertIn('string label = "walk"',script)
-            self.assertEqual(script.count('prop.LookupSequence'),2)
+            # one helper call per sequence (Squirrel limits a function's locals)
+            self.assertIn('R5C_ProbeSequence( prop, 0, 1, "walk", origin, false )',script)
+            self.assertEqual(script.count('R5C_ProbeSequence( prop,'),2)
+            self.assertEqual(script.count('prop.LookupSequence'),1)
             self.assertNotIn('continue',script)
             self.assertIn('R5C_DONE\\n',script)
             with self.assertRaises(ValueError):

@@ -12,7 +12,7 @@ import unittest
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'tools'))
-from mdl54 import Model, Reader, PROFILES, SequenceAsset
+from mdl54 import Model, Reader, PROFILES, SequenceAsset, asset_guid
 from decompile54 import decompile, write_smd
 from validate54 import validate, compare_animation_metadata
 
@@ -54,18 +54,19 @@ class Compiler54(unittest.TestCase):
                 out,_=self.run_compiler(qc,target=target,name=target+'external',extra=['--external-assets'])
                 model,ref=Model(out,target),Model(original,target)
                 rig=Model(out.with_suffix('.rrig'),target)
-                self.assertEqual(model.sequences[0]['name'],'ref')
+                # retail's layout (all 369 S3 models with rigs): the model keeps only the
+                # "ref" descriptor, no clips, pose parameters or nodes; the rig and the
+                # sequence assets carry them
+                self.assertEqual([s['name'] for s in model.sequences],['ref'])
                 self.assertFalse(model.sequences[0]['animations'])
-                self.assertEqual([s['name'] for s in model.sequences[1:]],[s['name'] for s in ref.sequences])
+                self.assertEqual((model.get('i',0x134),model.get('i',0xFC)),(0,0))
                 self.assertEqual(rig.bones,ref.bones);self.assertEqual(rig.sequences,[])
                 self.assertEqual(model.get('i',0x158),-1)
                 self.assertEqual(rig.get('i',0x158),0)
-                self.assertTrue(all(model.get('i',s['offset'])==0 for s in model.sequences))
-                self.assertTrue(all(s['animations'] for s in model.sequences[1:]))
-                self.assertTrue(all(model.get('i',a)==0 for s in model.sequences for a in s['animations']))
+                self.assertEqual(model.get('i',model.sequences[0]['offset']),0)
                 self.assertTrue(all(ref.get('i',a)==0 for s in ref.sequences for a in s['animations']))
-                self.assertTrue(all(model.get('i',a+12)&0x20000 for s in model.sequences for a in s['animations']))
-                self.assertEqual(validate(out,target,original)['differences'],[])
+                self.assertEqual(Path(str(out.with_suffix('.assetset'))).read_text().split(),['R5AS1',target,str(len(ref.sequences)+1)])
+                self.assertEqual(SequenceAsset(out.with_suffix('.seq0.rseq'),rig).name,'ref')
                 for i,seq in enumerate(ref.sequences):
                     asset=SequenceAsset(out.with_suffix(f'.seq{i+1}.rseq'),rig)
                     expected=ref.sequences; ref.sequences=[seq]
@@ -87,22 +88,26 @@ class Compiler54(unittest.TestCase):
         for target in PROFILES:
             with self.subTest(target=target):
                 original,_=self.run_compiler(qc,target=target,name=target+'imports',extra=['--external-assets'])
-                model=Model(original,target)
-                sequences=[original.with_suffix(f'.seq{i}.rseq') for i in range(len(model.sequences))]
+                count=int(original.with_suffix('.assetset').read_text().split()[2])
+                sequences=[original.with_suffix(f'.seq{i}.rseq') for i in range(count)]
                 qci=import_animations(original.with_suffix('.rrig'),sequences,self.work/(target+'includes'),target)
                 host=self.qc[:self.qc.index('$sequence')]+'$include "'+str(qci).replace(chr(92),'/')+'"\n'
-                rebuilt,_=self.run_compiler(host,target=target,name=target+'imported',extra=['-path',str(qci.parent)])
+                rebuilt,_=self.run_compiler(host,target=target,name=target+'imported',extra=['-path',str(qci.parent),'--external-assets'])
                 self.assertEqual(validate(rebuilt,target,original,animation_metadata=True)['differences'],[])
-                self.assertEqual([s['name'] for s in Model(rebuilt,target).sequences],['ref','idle','walk'])
+                # the models keep only "ref"; each rebuilt sequence asset matches its original
+                rig,orig_rig=Model(rebuilt.with_suffix('.rrig'),target),Model(original.with_suffix('.rrig'),target)
+                assets=[SequenceAsset(rebuilt.with_suffix(f'.seq{i}.rseq'),rig) for i in range(count)]
+                originals=[SequenceAsset(p,orig_rig) for p in sequences]
+                self.assertEqual([a.name for a in assets],['ref','idle','walk'])
+                for a,o in zip(assets,originals): self.assertEqual(compare_animation_metadata(a,o),[])
                 report=json.loads(qci.with_name('import54.report.json').read_text())
                 self.assertEqual(report['labels'],['ref','idle','walk'])
                 self.assertEqual(len(report['inputs']),4)
                 # include, two poses and their native streams, frame movement; ref uses bind pose
                 self.assertEqual(len(report['outputs']),6)
                 # the rebuild used the imported sections verbatim
-                imported=Model(rebuilt,target); orig=Model(original,target)
-                for s1,s2 in zip(imported.sequences[1:],orig.sequences[1:]):
-                    self.assertEqual(imported.native_sections(s1['animations'][0]),orig.native_sections(s2['animations'][0]))
+                for a,o in zip(assets[1:],originals[1:]):
+                    self.assertEqual(a.native_sections(a.sequences[0]['animations'][0]),o.native_sections(o.sequences[0]['animations'][0]))
                 # an edited SMD no longer matches its stream: re-encoded, with a warning
                 smd=qci.parent/'imported_2_anim0_0.smd'
                 smd.write_text(smd.read_text().replace('time 1\n','time 1\n',1)+'\n')
@@ -176,6 +181,21 @@ class Compiler54(unittest.TestCase):
         rig=Model(out.with_suffix('.rrig'),'s3')
         self.assertEqual(rig.node_names(),['spare','stand','run'])
         self.assertEqual(rig.get('i',0x100),0)
+        # header 0x10C: per node, (exit node, sequence) for each sequence entering there and
+        # leaving elsewhere (all 62 retail rigs with nodes); the compiler counts asset-set
+        # indices (ref 0, idle, go, back, mantle) ...
+        self.assertEqual(rig.node_transitions(),[[],[(3,2)],[(2,3)]])
+        # ... which the packager maps to the rig's sorted list (back, go, idle, mantle, ref)
+        from pack54 import package
+        packed,_=self.run_compiler(qc,target='s3',name='nodes_pack',extra=['--external-assets','--material-guid','test/material=123456789abcdef0'])
+        def repak(command,**kwargs):
+            build=json.loads(Path(command[1]).read_text())
+            for suffix in ('.rpak','.starpak'): (Path(build['outputDir'])/(build['name']+suffix)).write_bytes(b'x')
+            return subprocess.CompletedProcess(command,0,'','')
+        with patch('pack54.subprocess.run',side_effect=repak):
+            package([packed],self.work/'nodes-pak','r5c_test',self.compiler,'s3')
+        staged=Model(self.work/'nodes-pak/sources/animrig/test/model.rrig','s3')
+        self.assertEqual(staged.node_transitions(),[[],[(3,1)],[(2,0)]])
         assets=[SequenceAsset(out.with_suffix(f'.seq{i}.rseq'),rig) for i in range(5)]
         self.assertEqual([tuple(a.get('i',a.sequences[0]['offset']+o) for o in (0x70,0x74,0x78)) for a in assets],
                          [(0,0,0),(2,2,0),(2,3,0),(3,2,1),(0,3,0)])
@@ -272,16 +292,13 @@ class Compiler54(unittest.TestCase):
             return subprocess.CompletedProcess(command,0,'packed','')
         with patch('pack54.subprocess.run',side_effect=repak):
             report=package([out],self.work/'good-pak','r5c_test',self.compiler,'s3')
+        # the rig owns the chain; the model keeps none (as all 369 retail S3 models with rigs)
         self.assertEqual(report['models'][0]['ik_chains'],1)
+        self.assertEqual((Model(out,'s3').ik_chains(),len(Model(out.with_suffix('.rrig'),'s3').ik_chains())),([],1))
         self.assertTrue(report['models'][0]['external_rig'])
         data=bytearray(out.read_bytes());struct.pack_into('<i',data,0x158,0);out.write_bytes(data)
         with self.assertRaisesRegex(ValueError,'external-rig sentinel'):
             package([out],self.work/'pak','r5c_test',self.compiler,'s3')
-        struct.pack_into('<i',data,0x158,-1);out.write_bytes(data)
-        rig=out.with_suffix('.rrig');data=bytearray(rig.read_bytes())
-        struct.pack_into('<i',data,0x124,0);rig.write_bytes(data)
-        with self.assertRaisesRegex(ValueError,'IK chain layout mismatch'):
-            package([out],self.work/'stale-pak','r5c_test',self.compiler,'s3')
 
     def test_package_native_asset_dependencies_and_stale_sequences(self):
         from pack54 import package
@@ -294,7 +311,10 @@ class Compiler54(unittest.TestCase):
             self.assertEqual([f['_type'] for f in build['files']],['arig','mdl_'])
             rig,model=build['files']
             self.assertEqual(model['$animrigs'],[rig['_path']])
-            self.assertEqual(model['$sequences'],rig['$sequences'])
+            # retail's form: the rig lists the sequences (in the engine's case-insensitive
+            # name order, which its binary search needs); the model lists none
+            self.assertNotIn('$sequences',model)
+            self.assertEqual(rig['$sequences'],sorted(rig['$sequences'],key=lambda s: s.lower()))
             self.assertEqual(len(rig['$sequences']),2)
             source=Path(build['assetsDir'])
             asset=SequenceAsset(source/rig['$sequences'][0],Model(source/rig['_path'],'s3'))
@@ -310,16 +330,37 @@ class Compiler54(unittest.TestCase):
         self.assertEqual(report['models'][0]['sequences'],['animseq/test/model/ref.rseq','animseq/test/model/idle.rseq'])
         self.assertEqual(report['models'][0]['reference_sequences'],[0])
         self.assertEqual(len(calls),1)
+        # a reference pose whose clip has tracks (a decompiled retail ref) is still one:
+        # the model embeds only its reference poses, and R5R cannot play "ref" by name
+        posed=self.qc.replace('$sequence idle "mesh.smd"','$sequence ref { referencepose "pose.smd" }\n$sequence idle "mesh.smd"')
+        write_smd(self.work/'pose.smd',self.bones,[[((0,0,0),(0,0,0),(1,1,1)),((0,2,0),(0,0,1.5),(1,1,1))]])
+        posed_out,_=self.run_compiler(posed,target='s3',name='posedref',extra=['--external-assets','--material-guid','test/material=123456789abcdef0'])
+        with patch('pack54.subprocess.run',side_effect=repak):
+            report=package([posed_out],self.work/'pak-posed','r5c_test',self.compiler,'s3')
+        self.assertEqual(report['models'][0]['labels'],['ref','idle'])
+        self.assertEqual(report['models'][0]['reference_sequences'],[0])
         # --retail-paths keeps an imported retail label as its asset path (autolayer GUIDs)
-        retail,_=self.run_compiler(self.qc.replace('$sequence idle','$sequence "animseq/humans/Rig/Idle_A.rseq"'),target='s3',name='retailpath',
+        # By default an imported label moves under the model, and an autolayer naming
+        # another of the model's sequences follows it; one naming an installed asset stays.
+        retail,_=self.run_compiler(self.qc.replace('$sequence idle "mesh.smd"','$sequence "animseq/humans/Rig/Idle_A.rseq" "mesh.smd"\n'
+                                   '$sequence "animseq/humans/Rig/Top_B.rseq" { "mesh.smd" autolayer "animseq/humans/Rig/Idle_A.rseq"\n'
+                                   '  autolayer "animseq/humans/Other/Elsewhere.rseq" }'),target='s3',name='retailpath',
                                    extra=['--external-assets','--material-guid','test/material=123456789abcdef0'])
         with patch('pack54.subprocess.run',side_effect=lambda command,**kw: (calls.append(None),
                    [(Path(json.loads(Path(command[1]).read_text())['outputDir'])/('r5c_test'+x)).write_bytes(b'new') for x in ('.rpak','.starpak')],
                    subprocess.CompletedProcess(command,0,'',''))[-1]):
             plain=package([retail],self.work/'pak-plain','r5c_test',self.compiler,'s3')
             kept=package([retail],self.work/'pak-retail','r5c_test',self.compiler,'s3',retail_paths=True)
-        self.assertEqual(plain['models'][0]['sequences'][1],'animseq/test/model/Idle_A.rseq')
-        self.assertEqual(kept['models'][0]['sequences'][1],'animseq/humans/Rig/Idle_A.rseq')
+        self.assertEqual(plain['models'][0]['sequences'][1:],['animseq/test/model/Idle_A.rseq','animseq/test/model/Top_B.rseq'])
+        self.assertEqual(kept['models'][0]['sequences'][1:],['animseq/humans/Rig/Idle_A.rseq','animseq/humans/Rig/Top_B.rseq'])
+        def layers(pak,dest):
+            source=self.work/pak/'sources'
+            asset=SequenceAsset(source/dest,Model(source/'animrig/test/model.rrig','s3'))
+            return [layer['guid'] for layer in asset.autolayers(asset.sequences[0])]
+        self.assertEqual(layers('pak-plain','animseq/test/model/Top_B.rseq'),
+                         [asset_guid('animseq/test/model/Idle_A.rseq'),asset_guid('animseq/humans/Other/Elsewhere.rseq')])
+        self.assertEqual(layers('pak-retail','animseq/humans/Rig/Top_B.rseq'),
+                         [asset_guid('animseq/humans/Rig/Idle_A.rseq'),asset_guid('animseq/humans/Other/Elsewhere.rseq')])
         alias,_=self.run_compiler(self.qc.replace('test/model.rmdl','TEST/model.rmdl'),target='s3',name='alias',extra=['--external-assets','--material-guid','test/material=123456789abcdef0'])
         with self.assertRaisesRegex(ValueError,'duplicate model asset path'):
             package([out,alias],self.work/'duplicate','r5c_test',self.compiler,'s3')
@@ -341,7 +382,7 @@ class Compiler54(unittest.TestCase):
             rig,model=build['files']
             self.assertEqual(model['$animrigs'],[rig['_path'],dependency])
             self.assertFalse((Path(build['assetsDir'])/dependency).exists())
-            self.assertEqual(rig['$sequences'],model['$sequences'])
+            self.assertNotIn('$sequences',model)  # the rig lists them (retail's form)
             for suffix in ('.rpak','.starpak'):
                 (Path(build['outputDir'])/(build['name']+suffix)).write_bytes(b'new artifact')
             return subprocess.CompletedProcess(command,0,'packed','')
@@ -749,13 +790,16 @@ class Compiler54(unittest.TestCase):
         # too; the sequence asset carries the clip as a counted blend
         out,_=self.run_compiler(qc,target='s3',name='refpose_ext',extra=['--external-assets'])
         model=Model(out,'s3'); rig=Model(out.with_suffix('.rrig'),'s3')
-        names=[s['name'] for s in model.sequences]
-        self.assertEqual(names[0],'ref'); self.assertEqual(model.sequences[0]['animations'],[])
+        # the model keeps only its reference poses (as all 1,155 retail S0-S3 models with
+        # rigs: ref, and ragdoll where present); the assets carry every sequence
+        self.assertEqual([s['name'] for s in model.sequences],['ref','ragdoll']); self.assertEqual(model.sequences[0]['animations'],[])
+        self.assertIsNotNone(model.sequences[1]['reference_clip'])
         ref=model.sequences[0]
         self.assertEqual(model.string(ref['reference_clip']+model.get('i',ref['reference_clip']+4)),'@ref')
+        count=int(out.with_suffix('.assetset').read_text().split()[2])
+        names=[SequenceAsset(out.with_suffix('.seq%d.rseq'%i),rig).name for i in range(count)]
+        self.assertEqual(names[0],'ref')
         index=names.index('ragdoll')
-        self.assertEqual(model.sequences[index]['animations'],[])
-        self.assertIsNotNone(model.sequences[index]['reference_clip'])
         asset=SequenceAsset(out.with_suffix('.seq%d.rseq'%index),rig)
         (seq,)=asset.sequences
         self.assertEqual([asset.get('i',d+16) for d in seq['animations']],[1])
@@ -814,7 +858,10 @@ class Compiler54(unittest.TestCase):
         write_smd(self.work/'long.smd',self.bones,frames)
         base=self.qc+'$animation long "long.smd" %s\n$sequence walk long\n'
         def sections(option,name):
-            out,_=self.run_compiler(base%option,target='s3',name=name,extra=['--external-assets'])
+            # the embedded build for the model's clip; the asset build for its sequences
+            # (a model with a rig keeps only "ref", as retail's)
+            out,_=self.run_compiler(base%option,target='s3',name=name)
+            self.run_compiler(base%option,target='s3',name=name+'_assets',extra=['--external-assets'])
             m=Model(out,'s3'); return out,m,m.get('i',m.sequences[-1]['animations'][0]+0x30)
         # retail's rule: (frames + 32) // 64 equal sections, whole up to 96 frames
         self.assertEqual(sections('','sf_default')[2],50)
@@ -833,11 +880,12 @@ class Compiler54(unittest.TestCase):
         # frame movement carries 0x40000 (all 4,249 retail assets), the model's does not
         text=decompile(out,self.work/'sf_src','s3').read_text()
         self.assertIn('sectionframes 50',text)
-        index=len(m.sequences)-1
-        self.assertEqual(m.sequences[index]['flags']&0x40000,0)
-        rseq=out.with_suffix('.seq%d.rseq'%index).read_bytes()
+        index=len(m.sequences)  # the asset build inserts "ref" at zero
+        self.assertEqual(m.sequences[-1]['flags']&0x40000,0)
+        assets=out.with_name(out.stem+'_assets.rmdl')
+        rseq=assets.with_suffix('.seq%d.rseq'%index).read_bytes()
         self.assertEqual(struct.unpack_from('<i',rseq,12)[0]&0x40000,0x40000)
-        rseq=out.with_suffix('.seq1.rseq').read_bytes()  # idle: no frame movement
+        rseq=assets.with_suffix('.seq1.rseq').read_bytes()  # idle: no frame movement
         self.assertEqual(struct.unpack_from('<i',rseq,12)[0]&0x40000,0)
         self.run_compiler(base%'sectionframes -1',target='s3',name='sf_bad',ok=False)
 

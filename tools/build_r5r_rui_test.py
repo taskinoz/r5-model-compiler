@@ -26,6 +26,12 @@ from decompile54 import decompile  # noqa: E402
 from mdl54 import Model  # noqa: E402
 from pack54 import package  # noqa: E402
 
+
+def without_types(text):
+    # every slot is renamed to an installed material below: drop the decompiled
+    # per-slot $materialtype and $materialguid lines (the original names no longer exist)
+    return ''.join(l for l in text.splitlines(True) if not l.startswith(('$materialtype ', '$materialguid ')))
+
 out = root / 'test-output/r5r-rui'
 src = out / 'sources'
 compiled = out / 'compiled'
@@ -48,7 +54,7 @@ def compile_qc(name, qc_path, bindings, kind='sknp'):
 vinson = next(corpus.rglob('ptpov_vinson.rmdl'))
 retail = Model(vinson, 's3')
 qc = decompile(vinson, src / 'vinson_rebuilt', 's3')
-text = qc.read_text()
+text = without_types(qc.read_text())
 old = '$modelname "' + retail.name.replace(chr(92), '/')[4:] + '"'
 assert old in text, old
 text = text.replace(old, '$modelname "r5c_rui/vinson_rebuilt.rmdl"')

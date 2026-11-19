@@ -52,7 +52,18 @@ Read README.md, VALIDATION.md and docs/mdl-v54-format.md before changing writers
   compiler and a copy of tools/ in the run folder (both runs import tools at start).
   Lessons: a field retail sets with no predictor is stored data — find the rule over the
   whole corpus, else keep it with a QC command; asset GUIDs are `mdl54.asset_guid` of
-  the path; compare identical NaN/inf as equal, not by subtraction.
+  the path; compare identical NaN/inf as equal, not by subtraction. Pass `--models
+  <exported models>` too: 90 S3 sequences belong to a model, not a rig. A survey rule is
+  only as good as its predicate: "every model with a rig has one sequence" was really
+  "at least one" (150 also embed `ragdoll`), and the S0 corpus caught it.
+- Retail rig layout matters at runtime: a model with a rig keeps only reference poses
+  and no pose parameters/IK chains/nodes (R5R crashes on blends or IK rules otherwise),
+  and the rig lists sequences in case-insensitive name order (R5R binary-searches it,
+  e.g. for autolayer targets). In-game imports: `build_r5r_import_test.py --case
+  mastiff` (`pose_sets` sets client pose parameters by name; the CLIENT VM has no
+  LookupPoseParameterIndex). When a crash names an r5apex.exe offset, disassemble it
+  (pefile + capstone, function bounds from .pdata) before guessing; both crashes and
+  the autolayer bug were found that way.
 - Jiggle bones in game: tools/build_r5r_jiggle_test.py, then `ingame54.py --jiggle`.
   Jiggle bones are simulated on the client only; the harness steps client props sideways
   and samples an attachment on a jiggle bone (the charm's MENU_CAMERA_FOCUS) relative to

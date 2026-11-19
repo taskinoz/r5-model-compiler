@@ -199,6 +199,18 @@ class Model(Reader):
         count=self.get('i',0xFC); base=self.get('i',0x104)
         return [self.string(self.get('i',base+4*k)) for k in range(count)]
 
+    def node_transitions(self):
+        """A rig's transitions per node: (exit node, sequence index in the rig's list)
+        pairs. Header 0x10C holds one absolute offset per node; each record is an int32
+        count and int16 pairs (all 62 S3 rigs with nodes)."""
+        count=self.get('i',0xFC); table=self.get('i',0x10C)
+        if not count or not table or self.get('i',0x100): return []
+        result=[]
+        for k in range(count):
+            r=self.get('i',table+4*k); n=self.get('i',r)
+            result.append([self.get('2h',r+4+4*j) for j in range(n)])
+        return result
+
     def ik_rules(self, descriptor):
         """An animation's IK rules (0x88 bytes each: v53's mstudioikrule_t with 0x1C bytes
         inserted at +0x3C, whose meaning is unknown, and the trailing unused block dropped).

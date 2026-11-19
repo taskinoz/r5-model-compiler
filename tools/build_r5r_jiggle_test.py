@@ -26,6 +26,12 @@ from decompile54 import decompile  # noqa: E402
 from mdl54 import Model  # noqa: E402
 from pack54 import package  # noqa: E402
 
+
+def without_types(text):
+    # every slot is renamed to an installed material below: drop the decompiled
+    # per-slot $materialtype and $materialguid lines (the original names no longer exist)
+    return ''.join(l for l in text.splitlines(True) if not l.startswith(('$materialtype ', '$materialguid ')))
+
 out = root / 'test-output/r5r-jiggle'
 src = out / 'sources'
 compiled = out / 'compiled'
@@ -47,7 +53,7 @@ def compile_qc(name, qc_path, bindings, kind='sknp'):
 
 def export(retail, name):
     qc = decompile(retail, src / name, 's3')
-    text = qc.read_text()
+    text = without_types(qc.read_text())
     old = '$modelname "' + Model(retail, 's3').name.replace(chr(92), '/')[4:] + '"'
     assert old in text, old
     return qc, text.replace(old, '$modelname "r5c_jiggle/%s.rmdl"' % name)

@@ -6,7 +6,9 @@ scripts and mods are copied. Never point --runtime at an installed game director
 import argparse
 import hashlib
 import json
+import math
 import os
+import re
 from pathlib import Path
 import secrets
 import shutil
@@ -115,6 +117,21 @@ def prepare(game,runtime):
         else:
             subprocess.run(['cmd','/c','mklink','/J',str(dest),str(source)],check=True,capture_output=True)
     return runtime
+
+
+def play_label(model,j):
+    """The name a script plays sequence j by: the game resolves a short label by the
+    packaged asset's file name (retail scripts play "drone_active_idle"), and a model
+    with a rig keeps only "ref" itself."""
+    if 'sequences' not in model: return model['labels'][j]
+    label=model['sequences'][j].replace('\\','/').rsplit('/',1)[-1]
+    return label[:-5] if label.lower().endswith('.rseq') else label
+
+
+def pose_sets(spec):
+    """A pose_compare spec's pose parameter settings: 'pose_sets' (a list of name -> value
+    tables), else one set with the defaults."""
+    return [dict(s) for s in spec.get('pose_sets',[{}])]
 
 
 def collision_probe(models,literal):
@@ -344,28 +361,32 @@ def write_probe(runtime,models,controls=()):
                   '    file.props.append( prop )',
                   f'    prop.SetModelScale( {float(model.get("scale",1)):.6f} )',
                   f'    print( "R5C_SPAWN {i}\\n" )']
+        # one call per sequence: Squirrel limits a function's locals ("Too many locals")
         for j,label in enumerate(model['labels']):
             if j in model.get('reference_sequences',[]): continue
-            lines += ['    {',f'      string label = {literal(label)}',
-                      f'      int id = prop.LookupSequence( {literal(label)} )',
-                      '      float duration = id < 0 ? 0.0 : prop.GetSequenceDuration( label )',
-                      f'      print( format( "R5C_SEQUENCE {i} {j} %d %.6f\\n", id, duration ) )',
-                      '      if ( id < 0 ) { print( "R5C_FAIL missing sequence\\n" ); return }',
-                      '      prop.Anim_PlayWithRefPoint( label, origin, <0,0,0>, 0.0 )' if model.get('has_ref') else '      prop.Anim_Play( label )',
-                      '      float started = Time()',
-                      '      for ( int sample = 0; sample < 5; sample++ )',
-                      '      {',
-                      '        if ( sample > 0 ) wait max( 0.01, duration * (sample == 4 ? 0.20 : 0.25) )',
-                      '        vector p = prop.GetOrigin()',
-                      f'        print( format( "R5C_SAMPLE {i} {j} %.6f %.6f %.6f %.6f %.6f %.6f\\n", Time()-started, prop.GetCycle(), p.x, p.y, p.z, prop.GetAngles().y ) )',
-                      '        int probe = prop.LookupAttachment( "probe" )',
-                      '        if ( probe > 0 )',
-                      '        {',
-                      '          vector a = prop.GetAttachmentOrigin( probe )',
-                      f'          print( format( "R5C_ATTACHMENT {i} {j} %.6f %.6f %.6f\\n", a.x, a.y, a.z ) )',
-                      '        }','      }','    }']
+            label=play_label(model,j)
+            lines += [f'    if ( !R5C_ProbeSequence( prop, {i}, {j}, {literal(label)}, origin, {"true" if model.get("has_ref") else "false"} ) ) return']
         lines += ['  }']
     lines += ['  print( "R5C_DONE\\n" )','}',
+              'bool function R5C_ProbeSequence( entity prop, int i, int j, string label, vector origin, bool withRef )','{',
+              '  int id = prop.LookupSequence( label )',
+              '  float duration = id < 0 ? 0.0 : prop.GetSequenceDuration( label )',
+              '  print( format( "R5C_SEQUENCE %d %d %d %.6f\\n", i, j, id, duration ) )',
+              '  if ( id < 0 ) { print( "R5C_FAIL missing sequence\\n" ); return false }',
+              '  if ( withRef ) prop.Anim_PlayWithRefPoint( label, origin, <0,0,0>, 0.0 )',
+              '  else prop.Anim_Play( label )',
+              '  float started = Time()',
+              '  for ( int sample = 0; sample < 5; sample++ )',
+              '  {',
+              '    if ( sample > 0 ) wait max( 0.01, duration * (sample == 4 ? 0.20 : 0.25) )',
+              '    vector p = prop.GetOrigin()',
+              '    print( format( "R5C_SAMPLE %d %d %.6f %.6f %.6f %.6f %.6f %.6f\\n", i, j, Time()-started, prop.GetCycle(), p.x, p.y, p.z, prop.GetAngles().y ) )',
+              '    int probe = prop.LookupAttachment( "probe" )',
+              '    if ( probe > 0 )',
+              '    {',
+              '      vector a = prop.GetAttachmentOrigin( probe )',
+              '      print( format( "R5C_ATTACHMENT %d %d %.6f %.6f %.6f\\n", i, j, a.x, a.y, a.z ) )',
+              '    }','  }','  return true','}',
               'void function R5C_Cleanup() { foreach ( entity prop in file.props ) { if ( IsValid(prop) ) prop.Destroy() } file.props.clear() }']
     # --weapon: the player's main weapons replaced by the named one, held in the main hand
     lines += ['void function R5C_Weapon( string name )','{',
@@ -414,7 +435,7 @@ def write_probe(runtime,models,controls=()):
         visual+=[f'  file.props[{i}].SetModelScale( selected == {i} ? {float(model.get("visual_scale",model.get("scale",1))):.6f} : 0.001 )',
                  f'  file.props[{i}].SetOrigin( center + right * (selected == {i} ? 0.0 : 10000.0) )']
         if model.get('animated_sequences'):
-            label=model['labels'][model['animated_sequences'][0]]
+            label=play_label(model,model['animated_sequences'][0])
             visual+=[f'  if ( selected == {i} ) file.props[{i}].Anim_Play( {literal(label)} )']
             if 'visual_cycle' in model:
                 cycle=float(model['visual_cycle'])
@@ -483,9 +504,14 @@ def write_probe(runtime,models,controls=()):
     # each named sequence paused at fixed cycles; attachment origins and angles relative
     # to the prop are printed, so a rebuild can be compared with an installed model
     pose=[(i,m) for i,m in enumerate(list(models)+list(controls)) if m.get('pose_compare')]
-    visual+=['void function R5C_PoseOne( entity prop, int index, string label, array<float> cycles, array<string> names )','{',
+    # each pose set (pose parameter name -> value) samples the sequences again; its
+    # samples are labelled <sequence>@<set index>. Autolayers driven by a pose parameter
+    # only contribute when it is set. The CLIENT VM's SetPoseParameter takes the name
+    # (it has no LookupPoseParameterIndex).
+    visual+=['void function R5C_PoseOne( entity prop, int index, string label, string tag, array<float> cycles, array<string> names, table<string,float> poses )','{',
              '  if ( prop.LookupSequence( label ) < 0 ) { print( format( "R5C_POSE_MISSING %d %s\\n", index, label ) ); return }',
              '  prop.Anim_Play( label )',
+             '  foreach ( string p, float v in poses ) prop.SetPoseParameter( p, v )',
              '  foreach ( float c in cycles )','  {',
              '    prop.SetCycle( c )',
              '    prop.Anim_SetPaused( true )',
@@ -496,7 +522,7 @@ def write_probe(runtime,models,controls=()):
              '      if ( a <= 0 ) { print( format( "R5C_POSE_NOATT %d %s\\n", index, n ) ); continue }',
              '      vector o = prop.GetAttachmentOrigin( a ) - prop.GetOrigin()',
              '      vector g = prop.GetAttachmentAngles( a )',
-             '      print( format( "R5C_POSE %d %s %.4f %s %.5f %.5f %.5f %.4f %.4f %.4f\\n", index, label, c, n, o.x, o.y, o.z, g.x, g.y, g.z ) )',
+             '      print( format( "R5C_POSE %d %s%s %.4f %s %.5f %.5f %.5f %.4f %.4f %.4f\\n", index, label, tag, c, n, o.x, o.y, o.z, g.x, g.y, g.z ) )',
              '    }',
              '    prop.Anim_SetPaused( false )','  }','}',
              'void function R5C_Pose() { thread R5C_PoseSamples() }',
@@ -514,7 +540,13 @@ def write_probe(runtime,models,controls=()):
                  '  {',
                  '    array<float> cycles = [ '+', '.join(format(c,'.6f') for c in cycles)+' ]',
                  '    array<string> names = [ '+', '.join(literal(n) for n in spec['attachments'])+' ]']
-        visual+=[f'    R5C_PoseOne( prop, {i}, {literal(label)}, cycles, names )' for label in spec['sequences']]
+        for s,poses in enumerate(pose_sets(spec)):
+            if not all(re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,63}',p) and math.isfinite(v) for p,v in poses.items()):
+                raise ValueError('invalid pose set')
+            tag=f'@{s}' if 'pose_sets' in spec else ''
+            visual+=['    {','      table<string,float> poses = {'+', '.join(f'[{literal(p)}] = {float(v):.6f}' for p,v in poses.items())+'}']
+            visual+=[f'      R5C_PoseOne( prop, {i}, {literal(label)}, {json.dumps(tag)}, cycles, names, poses )' for label in spec['sequences']]
+            visual+=['    }']
         visual+=['  }','  prop.Destroy()']
     visual+=['  print( "R5C_POSE_DONE\\n" )','}']
     (scripts/'r5c_visual.nut').write_text('\n'.join(visual)+'\n')
@@ -601,7 +633,7 @@ def summarize_pose(log,models):
             a=rotation_difference(g,ref[1]); worst_angle=max(worst_angle,a)
             first=samples.get((j,label,0.0,name))
             if first: moved=max(moved,math.dist(ref[0],first[0]))
-        expected=len(spec['sequences'])*len(spec.get('cycles',[0,.25,.5,.75,1]))*len(spec['attachments'])
+        expected=len(spec['sequences'])*len(pose_sets(spec))*len(spec.get('cycles',[0,.25,.5,.75,1]))*len(spec['attachments'])
         out['pairs'][m['path']]=dict(reference=models[j]['path'],compared=compared,expected=compared==expected,
                                      max_origin_error=worst,max_angle_error=worst_angle,reference_motion=moved)
         if compared!=expected: out['failures'].append(f'{m["path"]}: {compared} of {expected} pose samples compared')
@@ -804,8 +836,17 @@ def main():
                             connection.command('script_client R5C_VisualSelect(-1)')
                             connection.command('script_client R5C_Pose()')
                             entries=[m for m in package['models']+package.get('collision_controls',[]) if m.get('pose_compare')]
-                            steps=sum(len(m['pose_compare']['sequences'])*len(m['pose_compare'].get('cycles',[0,.25,.5,.75,1])) for m in entries)
+                            steps=sum(len(m['pose_compare']['sequences'])*len(pose_sets(m['pose_compare']))*len(m['pose_compare'].get('cycles',[0,.25,.5,.75,1])) for m in entries)
+                            # each step takes two frames; a busy machine needs longer, so
+                            # wait (up to half a second a step) for the end marker the
+                            # client writes to the native script log (buffered on disk)
                             time.sleep(3+steps*0.1)
+                            until=min(deadline,time.monotonic()+steps*0.4)
+                            while time.monotonic()<until and process.poll() is None and not any(
+                                    'R5C_POSE_DONE' in (d/'script.log').read_text(errors='replace')
+                                    for d in logs_root.iterdir()
+                                    if d.is_dir() and d.name not in previous_logs and (d/'script.log').exists()):
+                                time.sleep(2)
                             connection.command('screenshot'); time.sleep(1)
                         if a.weapon:
                             # out of the way of the view: client props hidden, server props removed

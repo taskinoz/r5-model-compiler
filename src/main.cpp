@@ -256,8 +256,25 @@ int main(int argc, char** argv) {
             model.sequences.insert(model.sequences.begin(),reference);
         }
         model.externalAssetRig = assets;
-        // Keep embedded playback data while also linking the RPak rig assets.
-        std::vector<uint8_t> mdl = WriteMDL(model,target=="s2" || target=="s3");
+        // With a rig, retail render models keep only their reference-pose descriptors
+        // ("ref", and "ragdoll" where there is one); the rig owns the pose parameters, IK
+        // chains and transition nodes and the sequence assets the clips (all 1,155 S0-S3
+        // models with rigs). R5R maps a sequence's pose parameters and IK rules through the
+        // rig and leaves that mapping null when the model has its own: a model that also
+        // carried them crashed at r5apex.exe+0x1D450F (pose remap, playing a blend) and
+        // +0x1CD1AA (IK chain remap, playing a sequence with IK rules).
+        CompiledModel render = model;
+        if (assets && model.sequences.front().animIndices.empty()) {
+            render.sequences.clear();
+            for (const auto& s : model.sequences)
+                if (s.animIndices.empty()) render.sequences.push_back(s);
+            render.modelAnimations = 0;
+            render.poseParams.clear();
+            render.ikChains.clear();
+            render.nodeNames.clear();
+            render.localNodeUnk = 0;
+        }
+        std::vector<uint8_t> mdl = WriteMDL(render,target=="s2" || target=="s3");
         auto read32=[&](size_t p) { int32_t v; std::memcpy(&v,mdl.data()+p,4); return v; };
         int checksum=read32(8);
         int textures=read32(0xD4);

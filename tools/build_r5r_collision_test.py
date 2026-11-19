@@ -23,6 +23,12 @@ from decompile54 import write_smd  # noqa: E402
 from mdl54 import Model  # noqa: E402
 from pack54 import package  # noqa: E402
 
+
+def without_types(text):
+    # every slot is renamed to an installed material below: drop the decompiled
+    # per-slot $materialtype and $materialguid lines (the original names no longer exist)
+    return ''.join(l for l in text.splitlines(True) if not l.startswith(('$materialtype ', '$materialguid ')))
+
 out = root / 'test-output/r5r-collision'
 src = out / 'sources'
 src.mkdir(parents=True, exist_ok=True)
@@ -112,7 +118,7 @@ for name, body in qcs.items():
 from decompile54 import decompile  # noqa: E402
 retail = next((root / 'test-output/s3-raw').rglob('bangalore_rockets_projectile.rmdl'))
 qc = decompile(retail, src / 'bangalore', 's3', render_only=True, with_physics=True)
-text = qc.read_text().replace('$modelname "weapons_r5/misc_bangalore_rockets/bangalore_rockets_projectile.rmdl"',
+text = without_types(qc.read_text()).replace('$modelname "weapons_r5/misc_bangalore_rockets/bangalore_rockets_projectile.rmdl"',
                               '$modelname "r5c_collision/bangalore_rebuilt.rmdl"')
 assert 'r5c_collision/bangalore_rebuilt' in text, text[:300]
 slots = [m['name'] for m in Model(retail, 's3').materials]
@@ -121,7 +127,7 @@ qc.write_text(text)
 compile_qc('bangalore_rebuilt', qc)
 # the authored physics box after a decompile/recompile cycle
 qc2 = decompile(compiled / 'phys_box.rmdl', src / 'phys_box_rt', 's3', render_only=True, with_physics=True)
-t2 = qc2.read_text().replace('$modelname "r5c_collision/phys_box.rmdl"', '$modelname "r5c_collision/pbox64_rt.rmdl"')
+t2 = without_types(qc2.read_text()).replace('$modelname "r5c_collision/phys_box.rmdl"', '$modelname "r5c_collision/pbox64_rt.rmdl"')
 assert 'pbox64_rt' in t2
 qc2.write_text(t2 + '\n$keyvalues { prop_data { "base" "Metal.Medium" } }\n')
 compile_qc('pbox64_rt', qc2)
@@ -130,7 +136,7 @@ compile_qc('pbox64_rt', qc2)
 # skinned material bound as the earlier runtime package did for multi-bone models
 bird = next((root / 'test-output/s3-raw').rglob('bird.rmdl'))
 qc3 = decompile(bird, src / 'bird', 's3')
-t3 = qc3.read_text()
+t3 = without_types(qc3.read_text())
 old_name = '$modelname "' + Model(bird, 's3').name.replace(chr(92), '/')[4:] + '"'
 assert old_name in t3, old_name
 skin = Model(next((root / 'test-output/s3-raw').rglob('pilot_light_wraith.rmdl')), 's3').materials[0]

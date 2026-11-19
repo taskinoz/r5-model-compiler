@@ -369,6 +369,9 @@ struct CompiledModel {
     std::vector<std::string> nodeNames;
     int localNodeUnk = 0;
     std::vector<uint8_t> transitions;  // numnodes * numnodes
+    // a v54 rig's transition lists, per node: (exit node, sequence index) of each sequence
+    // entering at that node and leaving at another
+    std::vector<std::vector<std::pair<int16_t, int16_t>>> nodeTransitions;
     std::vector<CIKChain> ikChains;
     std::vector<CUIPanel> uiPanels;
     std::vector<CPoseParam> poseParams;
