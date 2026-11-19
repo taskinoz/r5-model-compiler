@@ -488,6 +488,12 @@ void BuildContext::BuildSequences() {
             s.animIndices[k * s.groupSize[0] + j] = static_cast<int16_t>(a);
             if ((anims[a].flags & STUDIO_HAS_SCALE) && !qs.flagsExplicit) s.flags |= STUDIO_HAS_SCALE;  // as retail sequences do
         }
+        // A sequence of delta clips is itself delta and post-blended (0x4 | 0x10 on all
+        // 416 such S3 sequence assets; on none of the other 3,833). Without it R5R plays
+        // an authored subtract clip as a whole pose: as a layer it replaced the base.
+        bool allDelta = !s.animIndices.empty();
+        for (int16_t ai : s.animIndices) if (!(anims[ai].flags & STUDIO_DELTA)) allDelta = false;
+        if (allDelta && !qs.flagsExplicit) s.flags |= STUDIO_DELTA | STUDIO_POST;
         const WAnim& first = anims[s.animIndices[0]];
         // blends / pose keys
         for (int p = 0; p < 2; p++) {

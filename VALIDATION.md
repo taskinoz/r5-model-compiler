@@ -14,7 +14,7 @@ additive clips, blends and IK rules pose in R5R as retail's do ("Full S3 support
 below). Later seasons remain future targets.
 
 Windows x64 MSVC Release: build/r5studiomdl.exe
-SHA-256: `537608027fd8c106796d0dba3c07b685672b3dbba117d499004c1f0f8fad3786` (19 November 2026; the build of the final corpus, import and in-game runs, from the v1.0.0 source).
+SHA-256: `99bffdab94b75d57c0200762350f51e5287e3e4ecca95d1897afde0bfcd68061` (20 November 2026; v1.0.1 source, the build of the v13 corpus, v6 import, transition and authored-delta runs). v1.0.0's runs used `53760802...`.
 Independent reader (mdl54.py) SHA-256 prefix: `cb9eca45`.
 
 ## Automated checks
@@ -943,10 +943,41 @@ no S3 rig or model lists it and its grunt rig is not in S3.
 
 All 92 regressions pass on Python 3.10 and uv/Python 3.14.7; both CTest groups pass.
 
-Not established in game: the transition graph's runtime use (weapon one/two-handed
-switches pick transitions through it; the pose test plays sequences directly), the
-additive scale of authored `subtract` clips (retail clips only), and the meaning of
-flag 0x40 and the 0xC8 table (kept as stored).
+Not established in game here: the meaning of flag 0x40 and the 0xC8 table (kept as
+stored). Node transitions and authored `subtract` clips are covered below.
+
+## Node transitions and authored additive clips in game (v1.0.1, 20 November 2026)
+
+Compiler `99bffdab...` (adds the delta-sequence flags below; the Mastiff build is
+byte-identical to v1.0.0's, all 62 files). `test-output/ingame-s3v1-final`, R5R v2.6.52.
+
+**Node transitions.** `ingame54.py --weapon mp_weapon_mastiff --weapon-actions ...` gave
+the player the Mastiff, once with the retail viewmodel and once with the rebuilt one
+(`--viewmodel mdl/r5c_import/ptpov_mastiff.rmdl`, its 57 imported sequences, rig and
+transition table), started seven weapon activities on the server and logged the
+viewmodel's sequence every frame on the client. Both played the same 14 sequences at
+the same times (within 0.05 s), including the transitions the rig's table supplies:
+each return from a one-handed sequence (`draw_onehanded`, `reload_segEnd_onehanded`,
+`sprintraise_onehanded`; node 2) to `ads_out` (node 1) played `switch_to_twohanded`
+first. The one difference, `ACT_VM_RAISE_FROM_SPRINT`, is a weighted random choice:
+over eight more raises each, retail played `sprintraise_regrip` 4 times and
+`sprintraise` 4 times, the rebuild 2 and 6. Aiming (`+zoom`) also matched.
+
+**Authored additive clips.** `tools/build_r5r_delta_test.py` packages two skinned
+three-bone models: one plays a moving clip, the other a still base pose with that clip
+made additive (`subtract` against the base) as an autolayer. The first run failed: the
+layered model's bones collapsed to the origin (differences up to 14 in), because R5R
+played the delta sequence as a whole pose. Retail flags every sequence of delta clips
+0x4 | 0x10 (all 416 such S3 assets, none of the other 3,833); the compiler now sets
+both for authored sequences whose clips are all deltas (imported and decompiled
+sequences keep their stored flags). Rerun: **15 samples, largest difference 0.0035 in
+and 0.018 deg**, against 12.9 in of motion.
+
+These runs found no script errors. With this compiler the corpus
+(`test-output/full54-v13-release`) and the import check (`test-output/importcheck-s3-v6`)
+repeat v1.0.0's results exactly: full mode S0 359 / 1, S1 419 / 1, S2 427 / 1, S3 581 /
+0; render + PHY 228 / 1, 271 / 1, 272 / 1, 354 / 0; headerdiff pose-to-bone rounding
+only; 4,248 sequences pass, 0 differ; 100 rigs pass.
 
 ## Remaining limitations
 
@@ -967,4 +998,4 @@ flag 0x40 and the 0xC8 table (kept as stored).
   arbitrary sequence metadata, procedural or collision equivalence. Compact retail
   animation decoding still needs broader external-rig validation.
 - Historical TF2 corpus reports/tests are reference material, not Apex evidence.
-  S3 v1 is released as v1.0.0.
+  S3 v1 is released as v1.0.0, with the authored-delta fix in v1.0.1.

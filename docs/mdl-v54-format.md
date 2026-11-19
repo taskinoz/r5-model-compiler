@@ -506,7 +506,10 @@ and every S3 rig):
   node and leaving at another is that transition; the index is the sequence's place in
   the rig's sorted sequence list (every transition of the 62 rigs with nodes; the 19
   whose sequences were all exported match exactly). The compiler writes asset-set
-  indices and `pack54.py` maps them to the packaged order.
+  indices and `pack54.py` maps them to the packaged order. R5R's player and viewmodel
+  animation code looks transitions up there (r5apex.exe+0xB41910: the current node's
+  list, searched for the goal node): returning from a one-handed Mastiff sequence
+  (node 2) to a two-handed one (node 1) plays `switch_to_twohanded` first.
 
 R5R depends on that layout. It maps a sequence's pose parameters and IK rules through
 per-rig remap tables (virtual-model group +0x90 and +0xD0) and leaves them null when the
@@ -571,6 +574,9 @@ asset structure; live rig resolution and streaming still require a runtime test.
 - Unused blend axes store start 0, end 1 (in-model descriptors store 0, 0). Eleven
   axes keep a stale range (e.g. -90..90). Pose keys (0xA0) are optional: 38 of 62 2x1
   blends have none.
+- A sequence whose clips are all deltas has flags 0x4 | 0x10 (delta, post): all 416
+  such assets; no other sequence has either. R5R plays a sequence without them as a
+  whole pose: an authored `subtract` clip layered on a base pose replaced it.
 - Sequence flag 0x20000 does not follow the clips' 0x20000 (set on 217 sequences).
   Flag 0x40 is set on 206 clips and on their sequences.
 - Animation flag 0x20 (all-zeros): a delta clip that is zero throughout, with no

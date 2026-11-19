@@ -257,6 +257,10 @@ class Compiler54(unittest.TestCase):
         zero=SequenceAsset(out.with_suffix('.seq2.rseq'),rig); marked=SequenceAsset(out.with_suffix('.seq3.rseq'),rig)
         d=zero.sequences[0]['animations'][0]
         self.assertEqual(zero.get('i',d+12)&0x20024,0x24)
+        # a sequence of delta clips is delta and post-blended (all 416 retail S3 ones);
+        # R5R otherwise plays it as a whole pose
+        self.assertEqual(zero.sequences[0]['flags']&0x14,0x14)
+        self.assertEqual(marked.sequences[0]['flags']&0x14,0)
         self.assertTrue(all(x==0 for pose in zero.animation(d) for bone in pose for ch in bone for x in ch))
         self.assertEqual(marked.get('i',marked.sequences[0]['animations'][0]+12)&0x40,0x40)
         self.assertEqual(marked.sequences[0]['flags']&0x40,0x40)

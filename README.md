@@ -425,6 +425,12 @@ mastiff` imports all 57 sequences of the Mastiff viewmodel's rig (autolayers,
 transition nodes, additive clips) onto the decompiled viewmodel. `ingame54.py --pose`
 then poses each rebuild and the installed retail model at fixed cycles (and pose
 parameter settings, `pose_sets`) and compares attachments (see VALIDATION.md).
+`ingame54.py --weapon mp_weapon_mastiff --weapon-actions ACT_VM_ONEHANDED_DRAW:3,...`
+gives the player the weapon (loaded), starts each weapon activity (or sends player
+input such as `+zoom`) and logs the viewmodel's sequence every frame, so a rebuilt
+viewmodel (`--viewmodel`) can be compared with retail, node transitions included.
+`tools/build_r5r_delta_test.py` checks authored `subtract` clips: a base pose with
+the additive clip as an autolayer must pose like the full clip.
 
 ## Inspect, export and validate
 

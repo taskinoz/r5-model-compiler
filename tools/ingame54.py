@@ -394,6 +394,9 @@ def write_probe(runtime,models,controls=()):
               '  for ( int slot = WEAPON_INVENTORY_SLOT_PRIMARY_0; slot <= WEAPON_INVENTORY_SLOT_PRIMARY_1; slot++ )',
               '    if ( IsValid( player.GetNormalWeapon( slot ) ) ) player.TakeNormalWeaponByIndexNow( slot )',
               '  entity weapon = player.GiveWeapon( name, WEAPON_INVENTORY_SLOT_PRIMARY_0, [] )',
+              # loaded, so --weapon-actions can fire (a given weapon starts empty); one
+              # round short of full leaves the reload something to do
+              '  if ( IsValid( weapon ) ) weapon.SetWeaponPrimaryClipCount( maxint( 1, weapon.GetWeaponPrimaryClipCountMax() - 1 ) )',
               '  player.SetActiveWeaponBySlot( eActiveInventorySlot.mainHand, WEAPON_INVENTORY_SLOT_PRIMARY_0 )',
               '  print( format( "R5C_WEAPON %s %d\\n", name, IsValid( weapon ) ? 1 : 0 ) )',
               '}']
@@ -410,6 +413,7 @@ def write_probe(runtime,models,controls=()):
             'global function R5C_ClientRagdolls',
             'global function R5C_Jiggle',
             'global function R5C_Pose',
+            'global function R5C_ViewmodelLog',
             'struct { array<entity> props } file',
             'void function CodeCallback_RFiveCompiler_Test_ModInit() {}',
             'void function R5C_Visual()', '{',
@@ -549,6 +553,24 @@ def write_probe(runtime,models,controls=()):
             visual+=['    }']
         visual+=['  }','  prop.Destroy()']
     visual+=['  print( "R5C_POSE_DONE\\n" )','}']
+    # --weapon-actions: the active weapon's viewmodel sequence each frame (a change is
+    # printed once), so a rebuilt viewmodel's sequence choices, including node
+    # transitions, can be compared with retail's
+    visual+=['void function R5C_ViewmodelLog( float seconds ) { thread R5C_ViewmodelLogThread( seconds ) }',
+             'void function R5C_ViewmodelLogThread( float seconds )','{',
+             '  float started = Time()',
+             '  string last = ""',
+             '  while ( Time() - started < seconds )','  {',
+             '    entity player = GetLocalViewPlayer()',
+             '    entity weapon = player.GetActiveWeapon( eActiveInventorySlot.mainHand )',
+             '    if ( IsValid( weapon ) )','    {',
+             '      entity vm = weapon.GetWeaponViewmodel()',
+             '      if ( IsValid( vm ) )','      {',
+             '        string name = vm.GetCurrentSequenceName()',
+             '        if ( name != last ) print( format( "R5C_VM %.3f %s\\n", Time() - started, name ) )',
+             '        last = name','      }','    }',
+             '    WaitFrame()','  }',
+             '  print( "R5C_VM_DONE\\n" )','}']
     (scripts/'r5c_visual.nut').write_text('\n'.join(visual)+'\n')
     (scripts/'scripts.rson').write_text('When: "SERVER"\nScripts:\n[\n r5c_probe.nut\n]\nWhen: "CLIENT"\nScripts:\n[\n r5c_visual.nut\n]\n')
 
@@ -727,10 +749,17 @@ def main():
     p.add_argument('--pose',action='store_true',help='also compare the paused attachment poses of the pose_compare models with their installed reference')
     p.add_argument('--weapon',help='finally give the player this weapon (a script name such as mp_weapon_vinson) and take screenshots of its view')
     p.add_argument('--viewmodel',help='with --weapon: the viewmodel path its script uses in the isolated runtime (e.g. a packaged model)')
+    p.add_argument('--weapon-actions',help='with --weapon: console commands and the seconds after each (e.g. "+attack:0.2,-attack:2,+duck:1.5,-duck:1.5"); the client logs the viewmodel sequence every frame meanwhile')
     a=p.parse_args()
     import re
     if a.weapon and not re.fullmatch(r'mp_weapon_[a-z0-9_]+',a.weapon): p.error('invalid weapon script name')
     if a.viewmodel and (not a.weapon or not re.fullmatch(r'mdl/[A-Za-z0-9_/]+\.rmdl',a.viewmodel)): p.error('--viewmodel needs --weapon and an mdl/....rmdl path')
+    actions=[]
+    for item in (a.weapon_actions or '').split(','):
+        if not item: continue
+        command,_,seconds=item.rpartition(':')
+        if not a.weapon or not re.fullmatch(r'[+-]?[a-z_]+( [0-9]+)?|ACT_[A-Z0-9_]+',command): p.error('invalid --weapon-actions item: '+item)
+        actions.append((command,float(seconds)))
     pak=Path(a.pak).resolve()
     package=json.loads(pak.with_suffix('.report.json').read_text())
     if package.get('target')!='s3': p.error('R5R test requires an s3 package report')
@@ -854,6 +883,21 @@ def main():
                             connection.command('script R5C_Weapon("'+a.weapon+'")'); time.sleep(4)
                             connection.command('screenshot'); time.sleep(2)
                             connection.command('screenshot'); time.sleep(1)
+                            if actions:
+                                # the client logs the viewmodel's sequence every frame while
+                                # the console drives the player (fire, crouch, aim...)
+                                total=sum(t for _,t in actions)+2
+                                connection.command(f'script_client R5C_ViewmodelLog( {total:.1f} )'); time.sleep(1)
+                                for command,seconds in actions:
+                                    if command.startswith('ACT_'):
+                                        # a weapon activity, as game scripts start them
+                                        connection.command('script GetPlayerArray()[0].GetActiveWeapon( eActiveInventorySlot.mainHand )'
+                                                           f'.StartCustomActivity( "{command}", 0 )')
+                                    else:
+                                        # player input through the client (as cl_player does +jump)
+                                        connection.command(f'script_client GetLocalClientPlayer().ClientCommand( "{command}" )')
+                                    time.sleep(seconds)
+                                time.sleep(2)
                             log+=drain(connection)
                         break
                 except socket.timeout: continue
@@ -879,11 +923,15 @@ def main():
             extra=int(a.jiggle)+int(bool(a.weapon))+int(a.pose)
             if (not summarize_visual(native_log,len(package['models']),extra)['failures']
                     and (not a.jiggle or 'R5C_JIG_DONE' in native_log)
-                    and (not a.pose or 'R5C_POSE_DONE' in native_log)) or process.poll() is not None:
+                    and (not a.pose or 'R5C_POSE_DONE' in native_log)
+                    and (not actions or 'R5C_VM_DONE' in native_log)) or process.poll() is not None:
                 break
             if attempt<12: time.sleep(0.5)
         (runtime/'r5c-script.log').write_text(native_log,encoding='utf-8')
         report['visual']=summarize_visual(native_log,len(package['models']),int(a.jiggle)+int(bool(a.weapon))+int(a.pose))
+        if actions:
+            report['viewmodel_sequences']=[dict(time=float(t),sequence=s) for t,s in re.findall(r'R5C_VM (\S+) (\S+)',native_log)]
+            if 'R5C_VM_DONE' not in native_log: report['failures'].append('viewmodel log did not finish')
         if a.collision:
             import re
             samples={}
