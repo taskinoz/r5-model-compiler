@@ -14,8 +14,8 @@ additive clips, blends and IK rules pose in R5R as retail's do ("Full S3 support
 below). Later seasons remain future targets.
 
 Windows x64 MSVC Release: build/r5studiomdl.exe
-SHA-256: `99bffdab94b75d57c0200762350f51e5287e3e4ecca95d1897afde0bfcd68061` (20 November 2026; v1.0.1 source, the build of the v13 corpus, v6 import, transition and authored-delta runs). v1.0.0's runs used `53760802...`.
-Independent reader (mdl54.py) SHA-256 prefix: `cb9eca45`.
+SHA-256: `c986b519afa847a3d6dd6b84c770f72a41b9a4547129ae5f960aa138f2156238` (20 November 2026; v1.0.2 source). It differs from `99bffdab...`, the build of the v13 corpus, v6 import, transition and authored-delta runs, only in the `weightramp` QC name and one error message. v1.0.0's runs used `53760802...`.
+Independent reader (mdl54.py) SHA-256 prefix: `23e3d2ba` (v1.0.1: `cb9eca45`; only the weight-ramp docstring changed).
 
 ## Automated checks
 
@@ -943,8 +943,8 @@ no S3 rig or model lists it and its grunt rig is not in S3.
 
 All 92 regressions pass on Python 3.10 and uv/Python 3.14.7; both CTest groups pass.
 
-Not established in game here: the meaning of flag 0x40 and the 0xC8 table (kept as
-stored). Node transitions and authored `subtract` clips are covered below.
+Flag 0x40 and the 0xC8 table are covered in "Flag 0x40 and the 0xC8 sequence table"
+below. Node transitions and authored `subtract` clips are covered below.
 
 ## Node transitions and authored additive clips in game (v1.0.1, 20 November 2026)
 
@@ -1028,4 +1028,4 @@ from the code; the in-game effect in that context is not measured.
   arbitrary sequence metadata, procedural or collision equivalence. Compact retail
   animation decoding still needs broader external-rig validation.
 - Historical TF2 corpus reports/tests are reference material, not Apex evidence.
-  S3 v1 is released as v1.0.0, with the authored-delta fix in v1.0.1.
+  S3 v1 is released as v1.0.0, with the authored-delta fix in v1.0.1 and the weight-ramp and flag 0x40 findings in v1.0.2.

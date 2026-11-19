@@ -1,6 +1,6 @@
 [project]
 name = "r5-model-compiler-tools"
-version = "1.0.1"
+version = "1.0.2"
 description = "Early-season Apex v54 compiler validation and source export tools"
 readme = "README.md"
 license = "MIT"
