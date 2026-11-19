@@ -569,8 +569,17 @@ asset structure; live rig resolution and streaming still require a runtime test.
   0x100 = 0 in all 62 S3 rigs that have nodes; their transitions are at 0x10C (see
   "Standalone rigs and sequences"). Sequences keep entry/exit nodes (0x70/0x74,
   1-based); three have only an exit node.
-- 0xC8 (offset) / 0xCC (count): 24-byte records of a float, a bone index (-1 for
-  none) and four floats, in 181 menu and banner sequences. Meaning unknown.
+- 0xC8 (offset) / 0xCC (count): weight ramps (QC `weightramp`), in 185 menu and banner
+  sequences. 24-byte records: weight, bone index (-1: the whole sequence), start, peak,
+  tail, end. R5R's sequence blend routine (r5apex.exe+0x1D9F80, which r5sdk names only
+  `unkseqdata_t`) reads them: while the cycle is in [start, end] it multiplies the
+  sequence's weight (or the bone's) by lerp(1, weight, t), t = (cycle-start)/(peak-start)
+  before peak, 1 to tail, (end-cycle)/(end-tail) after; a bone record maps the bone
+  through the rig's remap and scales that bone's weight. Retail patterns: a banner
+  intro fades in over its first 10% (`0, -1, 0, 0, 0, 0.1`) and out at its end; its idle
+  holds `0, -1, nan, nan, inf, inf`; menu poses hold 0.1 throughout. In game they did not
+  change a prop's played sequence or its autolayers (the routine's ramp path needs a
+  context those do not reach), so their effect is in the menu and banner blending.
 - Unused blend axes store start 0, end 1 (in-model descriptors store 0, 0). Eleven
   axes keep a stale range (e.g. -90..90). Pose keys (0xA0) are optional: 38 of 62 2x1
   blends have none.
@@ -578,7 +587,14 @@ asset structure; live rig resolution and streaming still require a runtime test.
   such assets; no other sequence has either. R5R plays a sequence without them as a
   whole pose: an authored `subtract` clip layered on a base pose replaced it.
 - Sequence flag 0x20000 does not follow the clips' 0x20000 (set on 217 sequences).
-  Flag 0x40 is set on 206 clips and on their sequences.
+  Flag 0x40 is set on 206 clips and on their sequences (executions, loot poses and
+  legends' ability pull-outs and throws; r5sdk: "STUDIO_ANIM_UNK3, clearly not a frame
+  anim in v54"). R5R does not appear to read it: no instruction in r5apex.exe tests bit
+  0x40 of a +0xC flags field (directly, or within 40 instructions of loading one; the
+  bits it does test there are 0x1-0x10, 0x200, 0x800-0x80000), and the B3 Wingman's
+  execution clip, imported with and without
+  it, gave identical poses (90 samples), duration and root motion. It is kept as
+  stored, probably a marker from Respawn's tools.
 - Animation flag 0x20 (all-zeros): a delta clip that is zero throughout, with no
   0x20000, no tracks and its data offset at the next 16-byte boundary (231 clips, the
   centre blends of aim grids). Delta scale is additive: a delta clip stores 0 for an

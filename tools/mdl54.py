@@ -176,8 +176,11 @@ class Model(Reader):
         return mode,total,words
 
     def unk_cc(self, seq):
-        """The seqdesc 0xC8 (offset) / 0xCC (count) table: 24-byte records of a float, a
-        bone index (-1 for none) and four floats (meaning unknown)."""
+        """The seqdesc 0xC8 (offset) / 0xCC (count) table of weight ramps: 24-byte records
+        of a weight, a bone index (-1: the whole sequence) and start/peak/tail/end cycles.
+        In that cycle range R5R's sequence blend routine scales the sequence's (or the
+        bone's) weight by lerp(1, weight, t), t ramping up to 1 at peak and back down
+        after tail; it does not act on a prop's played sequence or autolayers."""
         p=seq['offset']; out=[]
         for q in self.array(self.get('i',p+0xCC),p+self.get('i',p+0xC8),24):
             value,bone,*ramp=self.get('fi4f',q)

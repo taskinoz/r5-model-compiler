@@ -979,6 +979,36 @@ repeat v1.0.0's results exactly: full mode S0 359 / 1, S1 419 / 1, S2 427 / 1, S
 0; render + PHY 228 / 1, 271 / 1, 272 / 1, 354 / 0; headerdiff pose-to-bone rounding
 only; 4,248 sequences pass, 0 differ; 100 rigs pass.
 
+## Flag 0x40 and the 0xC8 sequence table (20 November 2026)
+
+Both were kept as stored without a known meaning. `test-output/ingame-s3v1-final`.
+
+**Flag 0x40** (206 clips and their sequences: executions, loot poses, ability
+pull-outs and throws). No instruction in r5apex.exe tests bit 0x40 of a +0xC flags
+field, directly or within 40 instructions of loading one; the bits tested there are
+0x1, 0x2, 0x4, 0x8, 0x10, 0x200, 0x800, 0x1000-0x80000. In game,
+`build_r5r_import_test.py --case b3wing` imports the B3 Wingman world model's sequences,
+including `bangalore_revolver_execution` (flag 0x40), and `--clear-flag40` the same
+without the flag. Against the installed retail model both pass with identical results:
+90 attachment samples identical to the last digit (largest difference from retail
+0.0022 in, 0.0071 deg, against 34 in of motion), and the same duration, cycle timing
+and root motion. Conclusion: R5R does not use it; it is most likely a marker from
+Respawn's tools. It stays in the data because retail has it.
+
+**The 0xC8/0xCC table** (185 menu and banner sequences): weight ramps, now QC
+`weightramp` (`unk_cc` is still accepted). Found by locating its reader: the sequence
+blend routine at r5apex.exe+0x1D9F80 (called when a sequence is accumulated, after its
+autolayers) resolves the offset, walks the 24-byte records and, while the cycle is in
+[start, end], multiplies the sequence's weight (bone -1) or one bone's weight by
+lerp(1, weight, t), with t rising from 0 at start to 1 at peak and falling from 1 at
+tail to 0 at end. Retail banner intros fade in over their first 10% and out at their
+end; menu poses hold 0.1. In game (`build_r5r_delta_test.py`), a weight-0 ramp over
+the whole cycle changed neither an autolayer (`ramp0` poses as `full`, 0.0035 in) nor a
+directly played clip (`main_ramp0` as `main_plain`, 0.0 in): the routine's ramp path
+is not reached for a prop's sequence and layers, so the effect belongs to the menu
+and banner blending, which the harness does not drive. The format and formula come
+from the code; the in-game effect in that context is not measured.
+
 ## Remaining limitations
 
 - Measuring client-side ragdoll motion in game (not reachable from R5R scripts),

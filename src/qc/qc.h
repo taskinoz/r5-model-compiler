@@ -310,9 +310,12 @@ struct QcSequence {
     std::vector<ActivityModifier> activityModifiers;
     int ikResetMask = 0;
     int unkC4 = 0;  // unidentified seqdesc field at 0xC4 (r2c extension "unk_c4")
-    // "unk_cc <bone|""> <value> <a> <b> <c> <d>" (r5): one 24-byte record of the table at
-    // seqdesc 0xC8 (offset) / 0xCC (count): float, bone index (-1 for ""), four floats.
-    // 181 S3 menu and banner sequences have them (bones are often hair); meaning unknown.
+    // "weightramp <bone|""> <weight> <start> <peak> <tail> <end>" (r5; also "unk_cc"): one
+    // 24-byte record of the table at seqdesc 0xC8 (offset) / 0xCC (count). R5R's sequence
+    // blend routine (r5apex.exe+0x1D9F80) multiplies the sequence's weight (bone "") or
+    // that bone's weight by lerp(1, weight, t) while the cycle is in [start, end], t rising
+    // from start to peak, 1 to tail, falling to end. It does not act on a prop's played
+    // sequence or autolayers; 185 S3 menu and banner sequences have ramps.
     struct UnkCC { std::string bone; float value = 0; float ramp[4] = {}; };
     std::vector<UnkCC> unkCC;
     bool bboxSet = false;  // "bbox" (r2c extension): the stored box instead of a computed one

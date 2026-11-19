@@ -250,7 +250,7 @@ class Compiler54(unittest.TestCase):
         write_smd(self.work/'still.smd',self.bones,self.frames*3)
         qc=self.qc.replace('$sequence idle "mesh.smd"',
             '$poseparameter "aim" -60 60\n$sequence idle "mesh.smd"\n$sequence zero { "still.smd" subtract idle 0 }\n'
-            '$sequence marked { "mesh.smd" animflags 0x40 seqflags 64 unk_cc "arm" .05 0 0 937.25 937.25 unk_cc "" .5 .125 .25 .5 .75 }\n'
+            '$sequence marked { "mesh.smd" animflags 0x40 seqflags 64 unk_cc "arm" .05 0 0 937.25 937.25 weightramp "" .5 .125 .25 .5 .75 }\n'
             '$sequence bare { "still.smd" subtract idle 0 notracks }\n$sequence wide { "mesh.smd" "mesh.smd" blend "aim" -90 90 }\n')
         out,_=self.run_compiler(qc,target='s3',name='zeroflags',extra=['--external-assets'])
         rig=Model(out.with_suffix('.rrig'),'s3')
@@ -274,6 +274,9 @@ class Compiler54(unittest.TestCase):
         self.assertAlmostEqual(records[0]['value'],.05,places=6)
         sequences=[out.with_suffix(f'.seq{i}.rseq') for i in range(6)]
         qci=import_animations(out.with_suffix('.rrig'),sequences,self.work/'zeroflags-import','s3')
+        # the weight ramps are written by their name; the old unk_cc spelling is still read
+        self.assertIn('weightramp "arm" 0.0500000007 0 0 937.25 937.25',qci.read_text())
+        self.assertNotIn('unk_cc',qci.read_text())
         host=self.qc[:self.qc.index('$sequence')]+'$include "'+str(qci).replace(chr(92),'/')+'"\n'
         rebuilt,_=self.run_compiler(host,target='s3',name='zeroflags-rebuilt',extra=['--external-assets','-path',str(qci.parent)])
         new_rig=Model(rebuilt.with_suffix('.rrig'),'s3')

@@ -474,7 +474,7 @@ def export_sequences(m, out, *, namespace="", asset_paths=()):
             lines+=[text]
         for record in m.unk_cc(seq):
             bone=m.bones[record['bone']]['name'] if record['bone']>=0 else ''
-            lines+=['  unk_cc '+qc_quote(bone)+' '+' '.join(format(x,'.9g') for x in (record['value'],*record['ramp']))]
+            lines+=['  weightramp '+qc_quote(bone)+' '+' '.join(format(x,'.9g') for x in (record['value'],*record['ramp']))]
         if meta['activity']: lines+=['  activity '+qc_quote(meta['activity'])+' '+str(meta['activity_weight'])]
         poses=m.pose_parameters()
         for axis,index in enumerate(meta['params']):

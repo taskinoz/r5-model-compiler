@@ -512,7 +512,7 @@ void BuildContext::BuildSequences() {
             o.value = r.value;
             if (!r.bone.empty()) {
                 o.bone = FindBone(r.bone);
-                if (o.bone < 0) Fatal("sequence %s: unk_cc bone \"%s\" is not defined", qs.name.c_str(), r.bone.c_str());
+                if (o.bone < 0) Fatal("sequence %s: weightramp bone \"%s\" is not defined", qs.name.c_str(), r.bone.c_str());
             }
             for (int k = 0; k < 4; ++k) o.ramp[k] = r.ramp[k];
             s.unkCC.push_back(o);

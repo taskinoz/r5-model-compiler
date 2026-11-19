@@ -1248,7 +1248,7 @@ void Parser::CmdSequence(bool declare) {
             seq.ikResetMask = I("mask");
             return true;
         }
-        if (Is("unk_cc")) {
+        if (Is("weightramp") || Is("unk_cc")) {  // unk_cc: its name before its meaning was known
             QcSequence::UnkCC r;
             r.bone = S("bone");
             r.value = F("value");

@@ -10,6 +10,11 @@ combo: the report asks `ingame54.py --pose` to compare their attachments at fixe
 cycles. That checks the authored additive encoding (delta scale, rotation and position
 deltas) and its playback through an autolayer in game; retail clips were checked
 separately (build_r5r_import_test.py).
+- ramp0 and main_ramp0 record where weight ramps (`weightramp`, the sequence table at
+  0xC8/0xCC) do not act in R5R: a weight-0 ramp over the whole cycle on the layered
+  delta (ramp0, against full) or on a directly played clip (main_ramp0, against
+  main_plain) leaves the pose unchanged. The blend routine that reads the table
+  (r5apex.exe+0x1D9F80) applies it only in another context, not reached here.
 
 usage: python tools/build_r5r_delta_test.py --repak <repak.exe>
 """
@@ -70,6 +75,16 @@ qcs = {
                '$animation lean_d "lean.smd" subtract base_a 0\n'
                '$sequence "animseq/r5c_delta/layered/lean_delta.rseq" lean_d\n'
                '$sequence "animseq/r5c_delta/layered/combo.rseq" { base_a autolayer "animseq/r5c_delta/layered/lean_delta.rseq" }\n',
+    # weight ramps (the sequence table at 0xC8/0xCC): weight 0 over the whole cycle, on
+    # the layered delta and on a directly played clip; R5R leaves both poses unchanged
+    'ramp0': '$modelname "r5c_delta/ramp0.rmdl"\n' + common +
+             '$animation lean_d "lean.smd" subtract base_a 0\n'
+             '$sequence "animseq/r5c_delta/ramp0/lean_delta.rseq" { lean_d weightramp "" 0 0 0 1 1 }\n'
+             '$sequence "animseq/r5c_delta/ramp0/combo.rseq" { base_a autolayer "animseq/r5c_delta/ramp0/lean_delta.rseq" }\n',
+    'main_plain': '$modelname "r5c_delta/main_plain.rmdl"\n' + common +
+                  '$sequence "animseq/r5c_delta/main_plain/combo.rseq" "lean.smd"\n',
+    'main_ramp0': '$modelname "r5c_delta/main_ramp0.rmdl"\n' + common +
+                  '$sequence "animseq/r5c_delta/main_ramp0/combo.rseq" { "lean.smd" weightramp "" 0 0 0 1 1 }\n',
 }
 skin = Model(next((root / 'test-output/s3-raw').rglob('pilot_light_wraith.rmdl')), 's3').materials[0]
 skin_name = skin['name'].replace(chr(92), '/')
@@ -88,7 +103,10 @@ for name, text in qcs.items():
 report = package(models, out / 'pak', 'r5c_delta', args.repak, 's3')
 report['runtime_exclusions'] = []
 spec = dict(group='delta', sequences=['combo'], attachments=ATTACHMENTS, cycles=[0, .25, .5, .75, 1])
-report['models'][0]['pose_compare'] = dict(spec, reference=True)  # full
-report['models'][1]['pose_compare'] = dict(spec)  # layered
+for k, (name, group, reference) in enumerate([('full', 'delta', True), ('layered', 'delta', False),
+                                               ('ramp0', 'delta', False),
+                                               ('main_plain', 'main', True), ('main_ramp0', 'main', False)]):
+    assert report['models'][k]['path'] == 'mdl/r5c_delta/%s.rmdl' % name, report['models'][k]['path']
+    report['models'][k]['pose_compare'] = dict(spec, group=group, reference=reference)
 (out / 'pak/r5c_delta.report.json').write_text(json.dumps(report, indent=2))
 print(json.dumps([m['path'] for m in report['models']]), report['outputs'])

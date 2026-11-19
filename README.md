@@ -396,15 +396,23 @@ r5 commands carry what retail stores:
   `--retail-paths` instead keeps each imported label as its asset path (replacing the
   installed assets).
 - `$node "<name>"` declares the rig's transition nodes in order; `node`, `transition`,
-  `rtransition`, `entrynode` and `exitnode` set a sequence's. v54 stores no transition
-  table.
+  `rtransition`, `entrynode` and `exitnode` set a sequence's. The rig's transition table
+  (which sequence leads from one node to another) is built from them.
 - `blendaxis <0|1> "<param>" start end` blends on a given axis (some retail sequences
   blend only on axis 1); `noposekeys` stores a blend without pose keys; `axisrange
   <axis> start end` keeps the stored range of an axis without a parameter.
 - `animflags 0x40` and `seqflags` keep flag bits the compiler does not derive (0x40,
   and the sequence's 0x20000, which retail sets independently of its clips).
-- `unk_cc "<bone>" value a b c d` keeps a record of the sequence table at 0xC8/0xCC
-  (menu and banner sequences; meaning unknown).
+- `weightramp "<bone>" weight start peak tail end` (formerly `unk_cc`, still accepted)
+  keeps a weight ramp, a record of the sequence table at 0xC8/0xCC. R5R's sequence
+  blend routine scales the sequence's weight (bone `""`) or one bone's weight by
+  `lerp(1, weight, t)` while the cycle is between start and end, t rising from 0 at
+  start to 1 at peak, holding to tail and falling to 0 at end. Retail uses them only in
+  menu and banner sequences (e.g. a fade-in `weightramp "" 0 0 0 0 0.1`); they do not
+  change a prop's played sequence or its autolayers (VALIDATION.md).
+- `animflags 0x40`: R5R never reads it (no test of the bit in r5apex.exe, and an
+  imported execution clip poses, times and moves identically with and without it);
+  it is kept because retail stores it.
 
 Derived without commands: a delta clip that is zero throughout is stored as all-zeros
 (flag 0x20, no data); delta scale is additive (0 for an unchanged bone); positions on

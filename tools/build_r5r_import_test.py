@@ -29,7 +29,9 @@ import sys
 root = Path(__file__).resolve().parent.parent
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 parser.add_argument('--repak', required=True)
-parser.add_argument('--case', choices=('drone', 'mastiff'), default='drone')
+parser.add_argument('--case', choices=('drone', 'mastiff', 'b3wing'), default='drone')
+parser.add_argument('--clear-flag40', action='store_true',
+                    help='remove flag 0x40 from every imported clip and sequence (to test what it does in game)')
 args = parser.parse_args()
 sys.path.insert(0, str(root / 'tools'))
 from decompile54 import decompile  # noqa: E402
@@ -48,6 +50,17 @@ if args.case == 'drone':
     ATTACHMENTS = ['LENS', 'arm_l_fx', 'arm_r_fx', 'handle_t_fx', 'frame_b_fx']
     spec_extra = dict(cycles=[0, .2, .4, .6, .8, 1])
     group = 'drone'
+elif args.case == 'b3wing':
+    # the B3 Wingman world model's rig: five sequences, among them the execution clip
+    # with flag 0x40 (206 retail S3 sequences carry it; the engine's use is unknown)
+    out = root / 'test-output/r5r-import-b3wing'
+    retail = corpus / 'mdl/w_b3wing/w_b3wing.rmdl'
+    rig = root / 'test-output/retail-rigs/animrig/w_b3wing/w_b3wing.rrig'
+    asset_dir = 'animseq/weapons/b3wing/w_b3wing'
+    LABELS = None
+    ATTACHMENTS = ['muzzle_flash', 'shell', 'l_hand_ik', 'r_hand_ik', 'flashlight']
+    spec_extra = dict(cycles=[0, .2, .4, .6, .8, 1])
+    group = 'b3wing'
 else:
     out = root / 'test-output/r5r-import-mastiff'
     retail = corpus / 'mdl/ptpov_mastiff/ptpov_mastiff.rmdl'
@@ -58,6 +71,8 @@ else:
     spec_extra = dict(cycles=[0, .25, .5, .75, 1], pose_sets=[{}, {'sprintfrac': 1.0}])
     group = 'mastiff'
 model = Model(retail, 's3')
+if args.clear_flag40:
+    out = out.with_name(out.name + '-no40')
 
 
 def label_of(path):
@@ -90,6 +105,14 @@ else:
         sequences.append(path)
     asset_names = ['%s/%s.rseq' % (asset_dir, l) for l in LABELS]
 include = import_animations(rig, sequences, out / 'animations', 's3', namespace=group)
+if args.clear_flag40:
+    def clear40(m):
+        word, value = m.group(1), int(m.group(2), 0)
+        return '%s %s' % (word, hex(value & ~0x40) if m.group(2).startswith('0x') else value & ~0x40)
+    text = include.read_text()
+    cleared = re.sub(r'\b(animflags|seqflags) (0x[0-9a-fA-F]+|\d+)', clear40, text)
+    assert cleared != text, 'no flag 0x40 to clear'
+    include.write_text(cleared)
 
 # the retail mesh, attachments and collision; skeleton and sequences from the include
 qc = decompile(retail, out / 'sources', 's3')
